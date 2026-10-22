@@ -24,6 +24,7 @@ mod altserver;
 mod apple;
 mod dnssd;
 mod env;
+mod fsperm;
 mod phone;
 mod profile;
 mod web;
@@ -296,8 +297,6 @@ async fn cmd_renew(
 /// `profili-salvati/` (si rimette con `profile-restore`). Serve a capire se iOS accetta i
 /// profili nuovi per un'app installata con quello originale.
 async fn cmd_profile_remove(addr: Option<SocketAddr>, uuid: Option<String>) -> Result<(), String> {
-    use std::os::unix::fs::PermissionsExt;
-
     let uuid = uuid.ok_or("uso: altkeeper profile-remove <uuid>")?;
     let mut link = open_phone(addr, &mut |s| println!("{s}")).await?;
     let raw = link.misagent.copy_all().await.map_err(dbg)?;
@@ -311,14 +310,13 @@ async fn cmd_profile_remove(addr: Option<SocketAddr>, uuid: Option<String>) -> R
         .ok_or("profilo non trovato sul telefono")?;
 
     std::fs::create_dir_all(SAVED_DIR).map_err(dbg)?;
-    std::fs::set_permissions(SAVED_DIR, std::fs::Permissions::from_mode(0o700)).map_err(dbg)?;
-    let path = format!("{SAVED_DIR}/{}.mobileprovision", parsed.uuid);
-    std::fs::write(&path, found).map_err(dbg)?;
-    std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o600)).map_err(dbg)?;
+    fsperm::restrict_dir(Path::new(SAVED_DIR)).map_err(dbg)?;
+    let path = Path::new(SAVED_DIR).join(format!("{}.mobileprovision", parsed.uuid));
+    fsperm::write_private(&path, found).map_err(dbg)?;
     if std::fs::read(&path).map_err(dbg)? != *found {
-        return Err(format!("la copia in {path} non coincide: non tolgo niente"));
+        return Err(format!("la copia in {} non coincide: non tolgo niente", path.display()));
     }
-    println!("Copia salvata in {path}");
+    println!("Copia salvata in {}", path.display());
 
     link.misagent.remove(&parsed.uuid).await.map_err(dbg)?;
     println!("Tolto dal telefono: {}  [{}]", parsed.name, parsed.uuid);
@@ -334,6 +332,36 @@ async fn cmd_profile_restore(addr: Option<SocketAddr>, file: Option<String>) -> 
     link.misagent.install(bytes).await.map_err(dbg)?;
     println!("Rimesso sul telefono: {}  [{}]", parsed.name, parsed.uuid);
     Ok(())
+}
+
+/// Aspetta la richiesta di chiusura del sistema: SIGTERM su Unix (`docker stop`, systemd),
+/// chiusura della finestra o spegnimento su Windows. Ctrl-C è gestito a parte.
+#[cfg(unix)]
+async fn terminated() {
+    use tokio::signal::unix::{signal, SignalKind};
+    match signal(SignalKind::terminate()) {
+        Ok(mut term) => {
+            term.recv().await;
+        }
+        Err(_) => std::future::pending::<()>().await,
+    }
+}
+
+#[cfg(windows)]
+async fn terminated() {
+    use tokio::signal::windows::{ctrl_close, ctrl_shutdown};
+    let (Ok(mut close), Ok(mut shutdown)) = (ctrl_close(), ctrl_shutdown()) else {
+        return std::future::pending::<()>().await;
+    };
+    tokio::select! {
+        _ = close.recv() => {}
+        _ = shutdown.recv() => {}
+    }
+}
+
+#[cfg(not(any(unix, windows)))]
+async fn terminated() {
+    std::future::pending::<()>().await
 }
 
 #[tokio::main]
@@ -420,11 +448,9 @@ async fn main() -> Result<(), String> {
             let port = altserver::start(altserver_port(opt("--port"))?, phone_addr(opt("--phone"))?)?;
             start_dnssd(&opt, port)?;
             println!("AltServer attivo. Ctrl-C per fermarlo.");
-            let mut term = tokio::signal::unix::signal(tokio::signal::unix::SignalKind::terminate())
-                .map_err(dbg)?;
             tokio::select! {
                 r = tokio::signal::ctrl_c() => r.map_err(dbg)?,
-                _ = term.recv() => {}
+                _ = terminated() => {}
             }
             altserver::stop();
             Ok(())

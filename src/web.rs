@@ -740,11 +740,27 @@ fn parse_history(text: &str, max: usize) -> Vec<Value> {
         .collect()
 }
 
-/// Ora locale come la scrive `date` (per allinearsi al log del cron).
+/// Ora locale come la scrive `date` (per allinearsi al log del cron). Su Windows `date` non è
+/// un programma ma un comando interno di cmd: si chiede a PowerShell, con lo stesso formato.
 fn local_time() -> String {
-    std::process::Command::new("date")
-        .arg("+%F %T")
-        .output()
+    #[cfg(windows)]
+    let mut cmd = {
+        let mut c = std::process::Command::new("powershell");
+        c.args([
+            "-NoProfile",
+            "-NonInteractive",
+            "-Command",
+            "Get-Date -Format 'yyyy-MM-dd HH:mm:ss'",
+        ]);
+        c
+    };
+    #[cfg(not(windows))]
+    let mut cmd = {
+        let mut c = std::process::Command::new("date");
+        c.arg("+%F %T");
+        c
+    };
+    cmd.output()
         .ok()
         .filter(|o| o.status.success())
         .and_then(|o| String::from_utf8(o.stdout).ok())

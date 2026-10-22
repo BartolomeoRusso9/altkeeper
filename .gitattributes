@@ -1,0 +1,8 @@
+# Normalizza i fine riga: su Windows git non deve trasformare gli script che girano in Docker/Linux.
+* text=auto
+*.sh text eol=lf
+*.cron text eol=lf
+Dockerfile text eol=lf
+*.ps1 text eol=crlf
+*.png binary
+*.der binary
