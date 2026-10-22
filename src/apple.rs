@@ -4,7 +4,6 @@
 //! Non crea né revoca certificati: legge soltanto e scarica profili.
 
 use std::io::Write as _;
-use std::os::unix::fs::{OpenOptionsExt, PermissionsExt};
 use std::path::Path;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
@@ -59,15 +58,7 @@ pub fn load_account(dir: &Path) -> Result<Account, String> {
 pub fn save_account(dir: &Path, acc: &Account) -> Result<(), String> {
     let path = dir.join(ACCOUNT_FILE);
     let data = serde_json::to_vec_pretty(acc).map_err(dbg)?;
-    let mut f = std::fs::OpenOptions::new()
-        .write(true)
-        .create(true)
-        .truncate(true)
-        .mode(0o600)
-        .open(&path)
-        .map_err(dbg)?;
-    f.write_all(&data).map_err(dbg)?;
-    std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o600)).map_err(dbg)
+    crate::fsperm::write_private(&path, &data).map_err(dbg)
 }
 
 /// Legge l'account salvato senza pretendere la password (serve a mostrarne lo stato).
@@ -118,7 +109,7 @@ pub fn anisette_url(value: Option<&str>) -> Result<Option<String>, String> {
 fn anisette_provider(dir: &Path) -> Result<RemoteV3AnisetteProvider, String> {
     let state = dir.join(STATE_DIR);
     std::fs::create_dir_all(&state).map_err(dbg)?;
-    std::fs::set_permissions(&state, std::fs::Permissions::from_mode(0o700)).map_err(dbg)?;
+    crate::fsperm::restrict_dir(&state).map_err(dbg)?;
     let mut provider = RemoteV3AnisetteProvider::default().map_err(|e| e.to_string())?;
     if let Some(url) = anisette_url(crate::env::var("ANISETTE_URL").as_deref())? {
         provider = provider.set_url(&url);

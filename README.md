@@ -49,7 +49,8 @@ There is also a small **web page** to see the state of your apps and renew them:
 ## What you need
 
 - An iPhone on **iOS 17 or later**, with Developer Mode on, on the same Wi-Fi as the server.
-- A machine that is always on in your home network. Tested: Debian 13 (x86-64). A Mac works too.
+- A machine that is always on in your home network. Tested: Debian 13 (x86-64). A Mac works too. Windows 10/11 also works natively
+  (see [Windows](#10-windows-native-no-docker)); that port has not been tried on a real PC yet.
 - For AltServer mode: **AltStore Classic** on the iPhone, with the *Local Network* permission.
 - For the unattended renewal: a **free Apple ID** whose team already signed the apps.
 - For the **first pairing only**: the iPhone plugged in by USB to a computer (a Mac is easiest).
@@ -212,6 +213,76 @@ ports 8787 (web) and 49500 (AltServer) must be free.
 A GitHub Actions workflow (`.github/workflows/docker.yml`) runs the tests and publishes the image
 to `ghcr.io/<user>/altkeeper` on pushes to `main` (amd64) and on `vX.Y.Z` tags (amd64 and
 arm64). It has not been run on GitHub yet. If the repository is private the package is private too.
+
+### 10. Windows (native, no Docker)
+
+Docker Desktop on Windows cannot use the host network that AltKeeper needs for Bonjour, so on
+Windows run the program directly. **This port has not been built or run on a real Windows
+machine yet**: if something breaks, please open an issue.
+
+1. Install [Rust](https://rustup.rs) (the default MSVC toolchain) and the *Build Tools for Visual
+   Studio* with the **Desktop development with C++** workload. Then, in PowerShell:
+
+   ```powershell
+   git clone https://github.com/BartolomeoRusso9/altkeeper
+   cd altkeeper
+   cargo build --release
+   ```
+
+   The binary is `target\release\altkeeper.exe`. Make a folder (for example `C:\altkeeper`) and
+   copy there the `.exe` and, from `examples\`, `renew.ps1`.
+
+2. **Pair (once, over USB).** If iTunes or the *Apple Devices* app is installed, Windows already
+   has a usbmuxd listening on `127.0.0.1:27015`: no bridge needed (`usbmux-bridge.py` is for the
+   Mac). With the iPhone plugged in, unlocked and trusted:
+
+   ```powershell
+   $env:USBMUXD_SOCKET_ADDRESS = "127.0.0.1:27015"
+   .\altkeeper.exe pair-usb
+   ```
+
+   Then `.\altkeeper.exe phone` should list the profiles on the phone.
+
+3. **Run it.** From the folder you made:
+
+   ```powershell
+   .\altkeeper.exe serve --altserver      # web page on http://127.0.0.1:8787 + AltServer
+   # or only AltServer:
+   .\altkeeper.exe altserver
+   ```
+
+   The first time, Windows asks to allow the program through the firewall: allow it on **Private**
+   networks (your Wi-Fi must be set as *Private*, not *Public*). By hand, for AltServer (TCP
+   49500) and Bonjour (UDP 5353), from an administrator PowerShell:
+
+   ```powershell
+   New-NetFirewallRule -DisplayName "AltKeeper" -Direction Inbound -Action Allow  -Program "C:\altkeeper\altkeeper.exe" -Profile Private
+   ```
+
+   If another Bonjour service already uses UDP 5353 on that PC (Apple's *Bonjour Service*, which
+   comes with iTunes, is fine), see "If something goes wrong". Stop with Ctrl-C.
+
+4. **Sign in and automatic renewal.** `.\altkeeper.exe login you@example.com` works as on the
+   other systems. `account.json`, `state\` and `profili-salvati\` are restricted to your Windows
+   user (the equivalent of `chmod 600/700`). For the nightly renewal use the Task Scheduler with
+   `renew.ps1` instead of cron:
+
+   ```powershell
+   schtasks /Create /TN "AltKeeper renew" /SC DAILY /ST 21:17  /TR "powershell -NoProfile -ExecutionPolicy Bypass -File C:\altkeeper\renew.ps1"
+   ```
+
+   To start AltServer when you log in:
+
+   ```powershell
+   schtasks /Create /TN "AltKeeper" /SC ONLOGON  /TR "C:\altkeeper\altkeeper.exe altserver --dir C:\altkeeper"
+   ```
+
+   `renew.ps1` keeps the same `renew.log`, the same optional `notify.conf` (ntfy) and the same
+   once-a-day error notification as `renew.sh`. It needs the PC to be on and awake at that time.
+
+Everything else in this guide (commands, environment variables, outside-the-home setup) is the
+same; only the paths use `\`, and `cron` and `renew.sh` are replaced by the Task Scheduler and
+`renew.ps1`.
 
 ## Using it from outside your home network
 

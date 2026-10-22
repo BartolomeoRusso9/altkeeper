@@ -54,7 +54,9 @@ C'è anche una piccola **pagina web** per vedere lo stato delle app e rinnovarle
 
 - Un iPhone con **iOS 17 o successivo**, con la modalità sviluppatore attiva, sullo stesso Wi-Fi
   del server.
-- Una macchina sempre accesa nella rete di casa. Provato: Debian 13 (x86-64). Va bene anche un Mac.
+- Una macchina sempre accesa nella rete di casa. Provato: Debian 13 (x86-64). Va bene anche un Mac. Funziona anche su
+  Windows 10/11, senza Docker (vedi [Windows](#10-windows-nativo-senza-docker)); questa versione
+  non è ancora stata provata su un PC vero.
 - Per la modalità AltServer: **AltStore Classic** sull'iPhone, con il permesso *Rete locale*.
 - Per il rinnovo senza controllo: un **Apple ID gratuito** il cui team ha già firmato le app.
 - Solo per il **primo pairing**: l'iPhone collegato via USB a un computer (il più facile è un Mac).
@@ -219,6 +221,77 @@ porte 8787 (web) e 49500 (AltServer) devono essere libere.
 Un workflow di GitHub Actions (`.github/workflows/docker.yml`) lancia i test e pubblica l'immagine su
 `ghcr.io/<utente>/altkeeper` a ogni push su `main` (amd64) e sui tag `vX.Y.Z` (amd64 e arm64).
 Non è ancora stato eseguito su GitHub. Se il repository è privato lo è anche il pacchetto.
+
+### 10. Windows (nativo, senza Docker)
+
+Docker Desktop su Windows non può usare la rete dell'host, che AltKeeper richiede per Bonjour:
+su Windows si lancia quindi il programma direttamente. **Questa versione non è ancora stata
+compilata né provata su un Windows vero**: se qualcosa non funziona, apri una segnalazione.
+
+1. Installa [Rust](https://rustup.rs) (la toolchain MSVC predefinita) e i *Build Tools per Visual
+   Studio* con il carico di lavoro **Sviluppo di applicazioni desktop con C++**. Poi, in PowerShell:
+
+   ```powershell
+   git clone https://github.com/BartolomeoRusso9/altkeeper
+   cd altkeeper
+   cargo build --release
+   ```
+
+   Il programma è `target\release\altkeeper.exe`. Crea una cartella (per esempio `C:\altkeeper`) e
+   copiaci l'`.exe` e, da `examples\`, `renew.ps1`.
+
+2. **Pairing (una volta sola, via USB).** Se hai iTunes o l'app *Dispositivi Apple*, Windows ha già
+   un usbmuxd in ascolto su `127.0.0.1:27015`: non serve nessun ponte (`usbmux-bridge.py` è per il
+   Mac). Con l'iPhone collegato, sbloccato e autorizzato:
+
+   ```powershell
+   $env:USBMUXD_SOCKET_ADDRESS = "127.0.0.1:27015"
+   .\altkeeper.exe pair-usb
+   ```
+
+   Poi `.\altkeeper.exe phone` deve elencare i profili sul telefono.
+
+3. **Avvio.** Dalla cartella che hai creato:
+
+   ```powershell
+   .\altkeeper.exe serve --altserver      # pagina web su http://127.0.0.1:8787 + AltServer
+   # oppure solo AltServer:
+   .\altkeeper.exe altserver
+   ```
+
+   La prima volta Windows chiede di consentire il programma nel firewall: consentilo sulle reti
+   **Private** (il tuo Wi-Fi deve essere impostato come *Privato*, non *Pubblico*). A mano, per
+   AltServer (TCP 49500) e Bonjour (UDP 5353), da PowerShell come amministratore:
+
+   ```powershell
+   New-NetFirewallRule -DisplayName "AltKeeper" -Direction Inbound -Action Allow  -Program "C:\altkeeper\altkeeper.exe" -Profile Private
+   ```
+
+   Se su quel PC un altro servizio Bonjour usa già la UDP 5353 (il *Bonjour Service* di Apple,
+   che arriva con iTunes, va bene), guarda "Se qualcosa va storto". Si ferma con Ctrl-C.
+
+4. **Accesso e rinnovo automatico.** `.\altkeeper.exe login tu@esempio.it` funziona come sugli altri
+   sistemi. `account.json`, `state\` e `profili-salvati\` restano riservati al tuo utente Windows
+   (l'equivalente di `chmod 600/700`). Per il rinnovo serale usa l'Utilità di pianificazione con
+   `renew.ps1` al posto di cron:
+
+   ```powershell
+   schtasks /Create /TN "AltKeeper renew" /SC DAILY /ST 21:17  /TR "powershell -NoProfile -ExecutionPolicy Bypass -File C:\altkeeper\renew.ps1"
+   ```
+
+   Per avviare AltServer quando accedi a Windows:
+
+   ```powershell
+   schtasks /Create /TN "AltKeeper" /SC ONLOGON  /TR "C:\altkeeper\altkeeper.exe altserver --dir C:\altkeeper"
+   ```
+
+   `renew.ps1` usa lo stesso `renew.log`, lo stesso `notify.conf` facoltativo (ntfy) e la stessa
+   notifica d'errore al massimo una volta al giorno di `renew.sh`. Il PC deve essere acceso e non in
+   sospensione a quell'ora.
+
+Tutto il resto di questa guida (comandi, variabili d'ambiente, uso da fuori casa) vale uguale; cambia
+solo che i percorsi usano `\`, e che `cron` e `renew.sh` si sostituiscono con l'Utilità di
+pianificazione e `renew.ps1`.
 
 ## Usarlo da fuori casa
 

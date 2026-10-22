@@ -3,6 +3,15 @@
 ## Unreleased
 
 ### Added
+- **Windows support (native, no Docker).** `cargo build --release` on Windows 10/11 produces
+  `altkeeper.exe`. Everything that was Unix-only is now portable: private files get an `icacls`
+  ACL instead of `chmod 600`/`700`, random numbers come from the OS through the `rustls` provider
+  (no more `/dev/urandom`), the local time in the web page's log comes from PowerShell, and
+  `altserver` also stops on console close / shutdown, not only Ctrl-C. New
+  `examples/renew.ps1` (the Windows counterpart of `renew.sh`, with the same ntfy notifications)
+  and `.gitattributes` so the shell scripts keep LF endings in a Windows checkout. See the
+  README, section "Windows". **Not yet built or run on a real Windows machine**: please report
+  anything that breaks.
 - **Works from outside your home network.** `--dns-domain` publishes the AltServer service as
   ordinary DNS records (unicast DNS-SD), so AltStore discovers it through a VPN. iOS never sends
   Bonjour multicast over a VPN interface, but it does send plain DNS queries, and AltStore browses

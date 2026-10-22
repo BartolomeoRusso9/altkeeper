@@ -20,7 +20,6 @@
 //! Ogni connessione gira in un thread con un runtime suo (il collegamento al telefono non è
 //! `Send`) e una richiesta alla volta.
 
-use std::io::Read as _;
 use std::net::{SocketAddr, TcpListener};
 use std::path::Path;
 use std::rc::Rc;
@@ -119,9 +118,12 @@ fn server_id() -> Result<String, String> {
         }
     }
     let mut bytes = [0u8; 16];
-    std::fs::File::open("/dev/urandom")
-        .and_then(|mut f| f.read_exact(&mut bytes))
-        .map_err(|e| format!("non riesco a generare il serverID: {e}"))?;
+    // Generatore del sistema operativo, uguale su Linux, macOS e Windows (rustls è già una
+    // dipendenza: nessun crate in più).
+    rustls::crypto::ring::default_provider()
+        .secure_random
+        .fill(&mut bytes)
+        .map_err(|_| "non riesco a generare il serverID: numeri casuali non disponibili".to_string())?;
     let id: String = bytes.iter().map(|b| format!("{b:02x}")).collect();
     let _ = std::fs::create_dir_all("state");
     std::fs::write(&path, &id).map_err(|e| format!("non riesco a salvare il serverID: {e}"))?;
@@ -134,6 +136,8 @@ fn hostname() -> String {
         .ok()
         .filter(|o| o.status.success())
         .and_then(|o| String::from_utf8(o.stdout).ok())
+        // Su Windows, se `hostname` non risponde, c'è sempre COMPUTERNAME.
+        .or_else(|| std::env::var("COMPUTERNAME").ok())
         .map(|s| s.trim().split('.').next().unwrap_or("").to_string())
         // Un nome fatto solo di cifre (a volte è un pezzo di IP) non dice niente.
         .filter(|s| !s.is_empty() && !s.chars().all(|c| c.is_ascii_digit()))
