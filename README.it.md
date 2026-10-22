@@ -393,7 +393,7 @@ solo (vedi il passo 2). `ALTKEEPER_NO_MDNS=1` spegne Bonjour (reti che bloccano 
 provare la scansione). `ALTKEEPER_DEBUG=1` stampa cosa risponde Apple a ogni richiesta del login (stato,
 intestazioni, corpo degli errori; mai il corpo delle richieste né le risposte riuscite).
 `ALTKEEPER_ANISETTE_URL=https://...` usa un server anisette tuo (per esempio `anisette-v3-server`) al
-posto di quello predefinito; deve iniziare con `http://` o `https://`.
+posto di quello predefinito; deve iniziare con `http://` o `https://`. Se quello predefinito smette di funzionare, vedi "Se qualcosa va storto".
 
 Il progetto si chiamava altrefresh: i vecchi nomi `ALTREFRESH_*` funzionano ancora (se ci sono
 entrambi vince `ALTKEEPER_*`). `altkeeper --version` stampa la versione.
@@ -411,6 +411,20 @@ entrambi vince `ALTKEEPER_*`). `altkeeper --version` stampa la versione.
   iOS), poi dai all'iPhone un IP fisso nel router.
 - **AltStore dice "AltServer could not be found"**: vedi il passo 4. Controlla che il server sia
   acceso, sulla stessa rete, che AltStore abbia il permesso Rete locale, e leggi l'output del server.
+- **AltStore mostra un errore e nel log compare `not provisioned for this server (-45061)` o
+  `reprovision required`**: il server anisette pubblico predefinito non accetta l'identità salvata in
+  `state/anisette_state` (il server è cambiato o ha problemi). Metti da parte il file
+  (`mv state/anisette_state state/anisette_state.old`) e avvia con un altro server, per esempio
+  `ALTKEEPER_ANISETTE_URL=https://ani3.stikstore.app altkeeper altserver`. Si segnala che funziona
+  anche `https://mac-ani.jkcoxson.com`. Lascia la variabile impostata in modo permanente (profilo
+  della shell, `.env` del compose, oppure `Environment=` in un'unità systemd), altrimenti al prossimo
+  avvio si torna al server predefinito. Dopo la creazione della nuova identità Apple può chiedere di
+  nuovo un codice di verifica. I server pubblici vanno e vengono: se fallisce ancora, prova un altro,
+  oppure usane uno tuo (`anisette-v3-server`).
+- **Un refresh da AltStore sembra bloccato subito dopo `PrepareAppRequest`**: AltStore manda prima
+  l'app al server, e può pesare ben più di 100 MB. Con un Wi-Fi debole ci vogliono minuti; il server
+  scrive `app in arrivo: X di Y byte` ogni pochi secondi mentre arriva, e rinuncia dopo 10 minuti in
+  totale. Tieni AltStore aperto con lo schermo acceso e l'iPhone vicino al router.
 - **Errori 429 o 503 al login**: Apple sta limitando le richieste. Non riprovare a ripetizione.
   Lancia con `ALTKEEPER_DEBUG=1` e, se persiste, apri una issue con le righe che iniziano con
   `[gs #` (non contengono segreti).

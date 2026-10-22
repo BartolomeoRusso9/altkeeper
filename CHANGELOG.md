@@ -9,6 +9,11 @@
   the device's search domains. Includes a small built-in DNS responder (UDP, answers only for its
   own names); put it behind the resolver you already run. See the README for the full setup.
 
+### Documentation
+- "If something goes wrong" now covers the anisette error `not provisioned for this server
+  (-45061)` (switch server with `ALTKEEPER_ANISETTE_URL`) and a refresh that looks stuck while
+  AltStore sends the app to the server.
+
 ## 0.2.0
 
 ### Added

@@ -452,12 +452,32 @@ async fn receive_and_install(
         log(&format!("dimensione dell'app non valida: {size}"));
         return Err(ERR_INVALID_REQUEST);
     }
+    log(&format!("attendo l'app da AltStore: {size} byte"));
     let mut ipa = vec![0u8; size as usize];
-    match tokio::time::timeout(IPA_TIMEOUT, rd.read_exact(&mut ipa)).await {
-        Ok(Ok(_)) => {}
-        _ => {
-            log("app non ricevuta per intero");
-            return Err(ERR_INVALID_REQUEST);
+    let mut got = 0usize;
+    let mut last_log = std::time::Instant::now();
+    let deadline = tokio::time::Instant::now() + IPA_TIMEOUT;
+    while got < ipa.len() {
+        match tokio::time::timeout_at(deadline, rd.read(&mut ipa[got..])).await {
+            Ok(Ok(0)) => {
+                log(&format!("AltStore ha chiuso la connessione dopo {got} di {size} byte"));
+                return Err(ERR_INVALID_REQUEST);
+            }
+            Ok(Ok(n)) => {
+                got += n;
+                if last_log.elapsed() >= Duration::from_secs(5) {
+                    log(&format!("app in arrivo: {got} di {size} byte"));
+                    last_log = std::time::Instant::now();
+                }
+            }
+            Ok(Err(e)) => {
+                log(&format!("errore leggendo l'app dopo {got} di {size} byte: {e}"));
+                return Err(ERR_INVALID_REQUEST);
+            }
+            Err(_) => {
+                log(&format!("app non ricevuta per intero: {got} di {size} byte"));
+                return Err(ERR_INVALID_REQUEST);
+            }
         }
     }
     log(&format!("app ricevuta: {} MB", size / 1_048_576));

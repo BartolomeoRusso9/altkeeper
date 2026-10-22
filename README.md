@@ -382,7 +382,7 @@ step 2). `ALTKEEPER_NO_MDNS=1` turns Bonjour off (networks that block multicast,
 `ALTKEEPER_DEBUG=1` prints what Apple answers to each sign-in request (status, headers, error
 bodies; never request bodies or successful responses).
 `ALTKEEPER_ANISETTE_URL=https://...` uses your own anisette server (for example `anisette-v3-server`)
-instead of the default one; it must start with `http://` or `https://`.
+instead of the default one; it must start with `http://` or `https://`. If the default one stops working, see "If something goes wrong".
 
 The project used to be called altrefresh: the old `ALTREFRESH_*` variable names still work (the
 `ALTKEEPER_*` one wins if both are set). `altkeeper --version` prints the version.
@@ -399,6 +399,20 @@ The project used to be called altrefresh: the old `ALTREFRESH_*` variable names 
   version), then give the iPhone a fixed IP in your router.
 - **AltStore says "AltServer could not be found"**: see step 4. Check that the server is running, on
   the same network, that AltStore has the Local Network permission, and read the server's output.
+- **AltStore shows an error and the log says `not provisioned for this server (-45061)` or
+  `reprovision required`**: the default public anisette server does not accept the identity saved
+  in `state/anisette_state` (the server changed or is having trouble). Move the file aside
+  (`mv state/anisette_state state/anisette_state.old`) and start with another server, for example
+  `ALTKEEPER_ANISETTE_URL=https://ani3.stikstore.app altkeeper altserver`. People also report
+  `https://mac-ani.jkcoxson.com` working. Keep the variable set for good (shell profile, the `.env`
+  of the compose file, or `Environment=` in a systemd unit), otherwise the next start goes back to
+  the default server. Apple may ask for a verification code again after the new identity is
+  created. Public servers come and go: if it fails again, try another, or run your own
+  (`anisette-v3-server`).
+- **A refresh from AltStore seems stuck right after `PrepareAppRequest`**: AltStore first sends the
+  app to the server, and it can be well over 100 MB. On a weak Wi‑Fi that takes minutes; the server
+  prints `app in arrivo: X di Y byte` every few seconds while it arrives, and gives up after 10
+  minutes in total. Keep AltStore open on screen and the iPhone close to the router.
 - **Sign-in errors 429 or 503**: Apple is limiting requests. Do not retry in a loop. Run with
   `ALTKEEPER_DEBUG=1` and, if it persists, open an issue with the lines starting with `[gs #`
   (they contain no secrets).
