@@ -1,4 +1,4 @@
-//! Collegamento in Wi-Fi all'iPhone: pairing remoto (RPPairing), tunnel
+//! Collegamento all'iPhone, via USB se è collegato a questa macchina, altrimenti in Wi-Fi: pairing remoto (RPPairing), tunnel
 //! TLS-PSK, RSD e client misagent per i profili di provisioning.
 
 use std::any::Any;
@@ -8,6 +8,7 @@ use std::time::{Duration, Instant};
 
 use idevice::{
     IdeviceService, ReadWrite, RsdService,
+    core_device_proxy::CoreDeviceProxy,
     misagent::MisagentClient,
     remote_pairing::{
         RemotePairingClient, RemotePairingLockdownService, RpPairingFile, RpPairingSocket,
@@ -33,6 +34,22 @@ pub struct PhoneLink {
     pub adapter: idevice::tcp::handle::AdapterHandle,
     pub hs: RsdHandshake,
     _keep: Vec<Box<dyn Any>>,
+}
+
+/// Come si è arrivati al telefono: cavo USB (usbmuxd locale) o rete.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Via {
+    Usb,
+    Wifi(SocketAddr),
+}
+
+impl std::fmt::Display for Via {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Via::Usb => write!(f, "USB"),
+            Via::Wifi(addr) => write!(f, "{addr}"),
+        }
+    }
 }
 
 /// Aspetta il PIN mostrato sull'iPhone in `pin.txt` (max 2 minuti).
@@ -104,6 +121,53 @@ pub async fn connect(addr: SocketAddr, pairing_path: &str) -> Result<PhoneLink, 
         hs,
         _keep: vec![Box::new(client)],
     })
+}
+
+/// Si collega via USB, se un iPhone è collegato alla macchina su cui gira AltKeeper (o a un
+/// usbmuxd raggiungibile con `USBMUXD_SOCKET_ADDRESS`). Usa il tunnel CoreDeviceProxy: serve
+/// solo che il telefono si fidi già del computer ("Registra"), non il pairing remoto.
+/// `Ok(None)` = nessun telefono su USB (o usbmuxd non c'è): si prosegue in Wi-Fi.
+pub async fn connect_usb(say: &mut impl FnMut(&str)) -> Result<Option<PhoneLink>, String> {
+    if crate::env::is_set("NO_USB") {
+        return Ok(None);
+    }
+    let addr = UsbmuxdAddr::from_env_var().map_err(dbg)?;
+    let Ok(Ok(mut mux)) = tokio::time::timeout(Duration::from_secs(2), addr.connect(1)).await
+    else {
+        return Ok(None);
+    };
+    let Ok(Ok(devs)) = tokio::time::timeout(Duration::from_secs(3), mux.get_devices()).await
+    else {
+        return Ok(None);
+    };
+    let Some(dev) = devs.iter().find(|d| d.connection_type == Connection::Usb) else {
+        return Ok(None);
+    };
+    say("iPhone trovato via USB, mi collego col cavo...");
+    let provider = dev.to_provider(addr, "altkeeper");
+
+    let open = async {
+        let proxy = CoreDeviceProxy::connect(&provider).await.map_err(dbg)?;
+        let rsd_port = proxy.tunnel_info().server_rsd_port;
+        let adapter = proxy.create_software_tunnel().map_err(dbg)?;
+        let mut adapter = adapter.to_async_handle();
+        let rsd_stream = adapter.connect(rsd_port).await.map_err(dbg)?;
+        let mut hs = RsdHandshake::new(rsd_stream).await.map_err(dbg)?;
+        let misagent = MisagentClient::connect_rsd(&mut adapter, &mut hs)
+            .await
+            .map_err(dbg)?;
+        Ok::<_, String>(PhoneLink {
+            misagent,
+            adapter,
+            hs,
+            _keep: Vec::new(),
+        })
+    };
+    match tokio::time::timeout(Duration::from_secs(15), open).await {
+        Ok(Ok(link)) => Ok(Some(link)),
+        Ok(Err(e)) => Err(e),
+        Err(_) => Err("il telefono non risponde via USB".into()),
+    }
 }
 
 /// L'unico demone mDNS del processo: ricerca dell'iPhone e annuncio di AltServer lo condividono
@@ -219,7 +283,15 @@ pub async fn connect_auto(
     preferred: Option<SocketAddr>,
     pairing_path: &str,
     mut say: impl FnMut(&str),
-) -> Result<(SocketAddr, PhoneLink), String> {
+) -> Result<(Via, PhoneLink), String> {
+    // Un indirizzo indicato a mano vale più del cavo; altrimenti si prova prima l'USB.
+    if preferred.is_none() {
+        match connect_usb(&mut say).await {
+            Ok(Some(link)) => return Ok((Via::Usb, link)),
+            Ok(None) => {}
+            Err(e) => say(&format!("USB non riuscita ({e}), provo in Wi-Fi...")),
+        }
+    }
     if !Path::new(pairing_path).exists() {
         return Err(format!(
             "manca il pairing remoto {pairing_path}: crealo con `altkeeper pair-usb`"
@@ -242,7 +314,7 @@ pub async fn connect_auto(
         match tokio::time::timeout(PER_TRY, connect(addr, pairing_path)).await {
             Ok(Ok(link)) => {
                 write_last_addr(cache, addr);
-                return Ok((addr, link));
+                return Ok((Via::Wifi(addr), link));
             }
             Ok(Err(e)) => last_err = e,
             Err(_) => last_err = format!("{addr} non risponde"),
@@ -272,7 +344,7 @@ pub async fn connect_auto(
             match tokio::time::timeout(PER_TRY, connect(addr, pairing_path)).await {
                 Ok(Ok(link)) => {
                     write_last_addr(cache, addr);
-                    return Ok((addr, link));
+                    return Ok((Via::Wifi(addr), link));
                 }
                 Ok(Err(e)) => last_err = e,
                 Err(_) => last_err = format!("{addr} non risponde"),

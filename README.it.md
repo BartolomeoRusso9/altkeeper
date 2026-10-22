@@ -30,17 +30,19 @@ C'è anche una piccola **pagina web** per vedere lo stato delle app e rinnovarle
 > il profilo nuovo sull'iPhone e l'installazione di un'app da AltStore funziona. Confermato prima con
 > il server sul Mac: lo stesso, con un'app di circa 126 MB, più login, `apps`,
 > `renew`, e che un'app si apre anche con i soli profili *nuovi* installati (anche dopo il riavvio
-> dell'iPhone). Non ancora confermato: cosa succede il giorno in cui scade il profilo *originale*, e
-> AltServer su un server per un periodo lungo.
+> dell'iPhone). Non ancora confermato: cosa succede il giorno in cui scade il profilo *originale*,
+> AltServer su un server per un periodo lungo, né l'installazione di un IPA caricato dalla pagina web
+> con Apple e un iPhone reale.
 
 ## Cosa fa e cosa non fa
 
 - Rinnova i profili di provisioning delle tue app (e, in modalità AltServer, installa le app che
-  AltStore gli manda). Non rifirma le app e **non crea né revoca certificati**.
+  AltStore gli manda). Il rinnovo non rifirma le app e non crea né revoca certificati. L'installazione
+  di un IPA caricato dalla pagina web invece lo rifirma e può creare un certificato di sviluppo.
 - **La modalità AltServer non ha bisogno dell'Apple ID sul server.** AltStore fa il login
   sull'iPhone; questo programma gli dà solo i dati anisette e installa quello che AltStore manda. Il
-  rinnovo senza controllo (`renew`, cron, il tasto "Rinnova" della pagina web) invece ha bisogno
-  dell'Apple ID e della sua password sul server.
+  rinnovo senza controllo (`renew`, cron, il tasto "Rinnova" della pagina web) e la firma di un IPA
+  caricato dalla pagina web hanno invece bisogno dell'Apple ID e della sua password sul server.
 - I due non si pestano i piedi: `renew` guarda il profilo più recente sul telefono. Se AltStore ha
   rinnovato da poco, `renew` non fa niente e non accede nemmeno ad Apple.
 - Dopo un rinnovo i profili vecchi restano sul telefono (iOS non li toglie), quindi per ogni app
@@ -144,7 +146,7 @@ Lascialo acceso (come servizio o in Docker). Sull'iPhone, in AltStore, apri **My
 - La prima richiesta crea l'identità anisette in `state/` se non c'è ancora. L'abbiamo usato con
   un'identità creata da `login`; una cartella pulita non è stata provata.
 
-### 5. Accesso (solo per il rinnovo senza controllo e il "Rinnova" della pagina web)
+### 5. Accesso (per il rinnovo automatico e l'installazione di IPA dal PC)
 
 ```sh
 ./altkeeper login tuo.apple.id@example.com
@@ -204,6 +206,13 @@ loopback, ascolta solo sulla macchina stessa e non chiede il PIN; su qualsiasi a
 **rifiuta di partire senza PIN** (almeno 4 caratteri). Usa la variabile d'ambiente e non `--pin`, che
 si vede con `ps`. La pagina è in italiano e non c'è HTTPS: tienila dentro la rete di casa. L'accesso
 e il rinnovo dalla pagina web non sono ancora stati provati con Apple.
+
+Da un PC puoi anche caricare un file `.ipa` nella sezione **Install an app from this PC**: AltKeeper
+lo firma con l'Apple ID configurato e lo installa sull'iPhone via Wi-Fi. Per farlo, l'account deve
+avere la password salvata in `account.json`; il codice 2FA, se richiesto, si inserisce nella pagina.
+La firma può registrare l'iPhone e creare identificativi e certificati di sviluppo sul team Apple.
+L'upload è limitato a 1 GiB. Proteggi la pagina con PIN quando la esponi in rete e non inoltrare la
+porta su Internet.
 
 ### 9. Docker
 

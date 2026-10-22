@@ -7,13 +7,14 @@ license = "MIT"
 readme = "README.md"
 
 [dependencies]
-axum = { version = "0.8.9", default-features = false, features = ["http1", "tokio", "json"] }
+axum = { version = "0.8.9", default-features = false, features = ["http1", "tokio", "json", "multipart"] }
 idevice = { version = "0.1.68", default-features = false, features = [
   "ring",
   "remote_pairing",
   "rsd",
   "tcp",
   "tunnel_tcp_stack",
+  "core_device_proxy",
   "misagent",
   "installation_proxy",
   "afc",

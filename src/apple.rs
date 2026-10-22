@@ -1,10 +1,8 @@
-//! Login Apple ID (anisette e 2FA) e chiamate ai servizi sviluppatori:
-//! elenco di team e App ID, download dei profili di provisioning.
-//!
-//! Non crea né revoca certificati: legge soltanto e scarica profili.
+//! Login Apple ID (anisette e 2FA), chiamate ai servizi sviluppatori e firma IPA.
+//! Il rinnovo scarica profili; la firma può registrare il dispositivo e creare certificati.
 
 use std::io::Write as _;
-use std::path::Path;
+use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
@@ -14,10 +12,12 @@ use isideload::{
     auth::apple_account::{AppleAccount, TwoFactorCallbackParams, TwoFactorCallbackResponse},
     dev::{
         app_ids::{AppId, AppIdsApi, Profile},
+        devices::DevicesApi,
         developer_session::DeveloperSession,
         device_type::DeveloperDeviceType,
         teams::{DeveloperTeam, TeamsApi},
     },
+    sideload::{SideloaderBuilder, builder::MaxCertsBehavior},
     util::fs_storage::FsStorage,
 };
 use serde::{Deserialize, Serialize};
@@ -219,7 +219,8 @@ async fn anisette_for_altstore_once(dir: &Path) -> Result<serde_json::Value, Str
 
 #[cfg(test)]
 mod tests {
-    use super::{anisette_url, iso8601_utc, needs_reprovision};
+    use super::{anisette_url, is_max_certs_error, iso8601_utc, max_certs_behavior, needs_reprovision};
+    use isideload::sideload::builder::MaxCertsBehavior;
 
     #[test]
     fn riconosce_la_richiesta_di_riprovisioning() {
@@ -253,6 +254,14 @@ mod tests {
         assert_eq!(iso8601_utc(1_700_000_000), "2023-11-14T22:13:20Z");
         assert_eq!(iso8601_utc(951_782_400), "2000-02-29T00:00:00Z"); // anno bisestile
         assert_eq!(iso8601_utc(1_782_432_000 + 86_399), "2026-06-26T23:59:59Z");
+    }
+
+    #[test]
+    fn revoca_certificati_solo_se_richiesta() {
+        assert!(matches!(max_certs_behavior(None), MaxCertsBehavior::Error));
+        assert!(matches!(max_certs_behavior(Some("0")), MaxCertsBehavior::Error));
+        assert!(matches!(max_certs_behavior(Some("1")), MaxCertsBehavior::Revoke));
+        assert!(is_max_certs_error("error code 7460: You already have"));
     }
 }
 
@@ -418,4 +427,85 @@ pub async fn download_profile(
     sess.download_team_provisioning_profile(team, app, DeveloperDeviceType::Ios)
         .await
         .map_err(|e| e.to_string())
+}
+
+pub struct SignedApp {
+    pub path: PathBuf,
+    cleanup_dir: PathBuf,
+}
+
+impl Drop for SignedApp {
+    fn drop(&mut self) {
+        let _ = std::fs::remove_dir_all(&self.cleanup_dir);
+    }
+}
+
+/// `ALTKEEPER_REVOKE_CERTS=1` autorizza a revocare i certificati di sviluppo già presenti quando
+/// Apple ha raggiunto il limite (errore 7460). Di default si ferma con un errore, perché la
+/// revoca invalida le app firmate con quei certificati.
+pub fn max_certs_behavior(value: Option<&str>) -> MaxCertsBehavior {
+    match value.map(|v| v.trim().to_ascii_lowercase()).as_deref() {
+        Some("1" | "true" | "yes" | "si" | "sì" | "on") => MaxCertsBehavior::Revoke,
+        _ => MaxCertsBehavior::Error,
+    }
+}
+
+fn is_max_certs_error(detail: &str) -> bool {
+    detail.contains("7460") || detail.contains("Maximum number of certificates")
+}
+
+/// Firma un IPA per il team configurato, registrando l'iPhone se necessario.
+pub async fn sign_ipa(
+    mut sess: DeveloperSession,
+    account: &Account,
+    team: DeveloperTeam,
+    device_name: &str,
+    udid: &str,
+    ipa: &Path,
+) -> Result<SignedApp, String> {
+    let filename = ipa
+        .file_name()
+        .ok_or("nome del file IPA mancante")?
+        .to_string_lossy();
+    let cleanup_dir = std::env::temp_dir().join(format!("{filename}_extracted"));
+    let storage_path = Path::new(STATE_DIR).join("sideload");
+    std::fs::create_dir_all(&storage_path).map_err(dbg)?;
+    crate::fsperm::restrict_dir(&storage_path).map_err(dbg)?;
+
+    sess.ensure_device_registered(&team, device_name, udid, DeveloperDeviceType::Ios)
+        .await
+        .map_err(|e| format!("registrazione iPhone non riuscita: {e}"))?;
+
+    let mut sideloader = SideloaderBuilder::new(sess, account.apple_id.clone())
+        .storage(Box::new(FsStorage::new(storage_path)))
+        .machine_name("AltKeeper".into())
+        .max_certs_behavior(max_certs_behavior(
+            crate::env::var("REVOKE_CERTS").as_deref(),
+        ))
+        .build();
+    let signed = sideloader
+        .sign_app::<_, std::future::Ready<()>>(
+            ipa.to_path_buf(),
+            Some(team),
+            false,
+            None::<fn(f32) -> std::future::Ready<()>>,
+        )
+        .await
+        .map_err(|e| {
+            let _ = std::fs::remove_dir_all(&cleanup_dir);
+            let detail = format!("{e:?}");
+            if is_max_certs_error(&detail) {
+                format!(
+                    "firma dell'app non riuscita: l'Apple ID ha già un certificato (AltStore/SideStore). \
+                     Per sostituirlo imposta ALTKEEPER_REVOKE_CERTS=1 e riprova; le altre app \
+                     vanno poi rinnovate con un Refresh."
+                )
+            } else {
+                format!("firma dell'app non riuscita: {e}")
+            }
+        })?;
+    Ok(SignedApp {
+        path: signed.0,
+        cleanup_dir,
+    })
 }
