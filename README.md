@@ -460,6 +460,15 @@ If it says it cannot find the server, watch the DNS with
 
 `ALTKEEPER_PHONE=ip:port` can replace `--phone`; without either the phone is found by itself (see
 step 2). `ALTKEEPER_NO_MDNS=1` turns Bonjour off (networks that block multicast, or to test the scan).
+
+**USB.** If the iPhone is plugged into the same computer that runs AltKeeper, it is used instead of
+Wi-Fi (faster, especially for installing IPAs). AltKeeper looks for it through the local `usbmuxd`
+(installed with iTunes / Apple Devices on Windows, built in on macOS, the `usbmuxd` package on
+Linux) or through `USBMUXD_SOCKET_ADDRESS`; the phone must already trust the computer. If there is
+no phone on USB, or it fails, Wi-Fi is used as before. `--phone` / `ALTKEEPER_PHONE` force Wi-Fi,
+and `ALTKEEPER_NO_USB=1` turns USB off. In Docker, mount `/var/run/usbmuxd` into the container.
+
+**USB.** If the iPhone is plugged into the same computer that runs AltKeeper, it is used instead of Wi-Fi (faster, especially for installing IPAs): AltKeeper looks for it through the local `usbmuxd` (on Windows/macOS it is installed with iTunes/Apple Devices or is built in; on Linux install `usbmuxd`), or through `USBMUXD_SOCKET_ADDRESS`. The phone must already trust the computer. Passing `--phone ip:port` forces Wi-Fi, and `ALTKEEPER_NO_USB=1` turns USB off. In Docker, mount `/var/run/usbmuxd` into the container.
 `ALTKEEPER_DEBUG=1` prints what Apple answers to each sign-in request (status, headers, error
 bodies; never request bodies or successful responses).
 `ALTKEEPER_ANISETTE_URL=https://...` uses your own anisette server (for example `anisette-v3-server`)

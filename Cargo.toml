@@ -14,6 +14,7 @@ idevice = { version = "0.1.68", default-features = false, features = [
   "rsd",
   "tcp",
   "tunnel_tcp_stack",
+  "core_device_proxy",
   "misagent",
   "installation_proxy",
   "afc",

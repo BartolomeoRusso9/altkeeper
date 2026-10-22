@@ -116,7 +116,9 @@ async fn open_phone(
     say: &mut dyn FnMut(&str),
 ) -> Result<phone::PhoneLink, String> {
     let (found, link) = phone::connect_auto(addr, PAIRING_FILE, &mut *say).await?;
-    if addr != Some(found) {
+    if found == phone::Via::Usb {
+        say("Collegato via USB");
+    } else if addr.map(phone::Via::Wifi) != Some(found) {
         say(&format!("Telefono trovato a {found}"));
     }
     Ok(link)
