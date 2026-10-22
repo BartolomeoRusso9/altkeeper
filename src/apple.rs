@@ -153,10 +153,49 @@ pub fn iso8601_utc(epoch_secs: u64) -> String {
     )
 }
 
+/// Il server anisette risponde -45061 ("reprovision required") quando l'identità salvata in
+/// `state/anisette_state` non vale più per lui: server cambiato, backend rifatto, `adi.pb`
+/// perso. Riprovare con la stessa identità non serve a niente, bisogna provisionarne una nuova.
+fn needs_reprovision(err: &str) -> bool {
+    err.contains("-45061") || err.contains("reprovision required")
+}
+
+/// Mette da parte l'identità anisette scaduta (`anisette_state` -> `anisette_state.stale`):
+/// al prossimo uso `isideload` ne crea e ne provisiona una nuova. `false` se non c'era niente.
+fn retire_anisette_state(dir: &Path) -> Result<bool, String> {
+    let file = dir.join(STATE_DIR).join("anisette_state");
+    if !file.exists() {
+        return Ok(false);
+    }
+    std::fs::rename(&file, file.with_extension("stale")).map_err(dbg)?;
+    Ok(true)
+}
+
 /// I dati anisette che AltStore chiede al suo AltServer (`AnisetteDataRequest`): stesso
 /// "dispositivo" del login (`state/`), formato `ALTAnisetteData.json()` di AltSign, tutte
 /// stringhe. `deviceDescription` porta l'identità `akd` che Apple accetta.
+///
+/// Se il server dice "reprovision required" (-45061) l'identità salvata viene messa da parte
+/// e si riprova una volta sola con una nuova, invece di restare bloccati finché qualcuno
+/// non cancella `state/anisette_state` a mano.
 pub async fn anisette_for_altstore(dir: &Path) -> Result<serde_json::Value, String> {
+    match anisette_for_altstore_once(dir).await {
+        Err(e) if needs_reprovision(&e) => {
+            if retire_anisette_state(dir)? {
+                println!(
+                    "[anisette] il server non riconosce l'identità salvata ({e}); \
+                     la metto da parte in state/anisette_state.stale e ne creo una nuova"
+                );
+                anisette_for_altstore_once(dir).await
+            } else {
+                Err(e)
+            }
+        }
+        other => other,
+    }
+}
+
+async fn anisette_for_altstore_once(dir: &Path) -> Result<serde_json::Value, String> {
     use isideload::{anisette::AnisetteDataGenerator, auth::grandslam::GrandSlam};
 
     let provider = anisette_provider(dir)?;
@@ -189,7 +228,16 @@ pub async fn anisette_for_altstore(dir: &Path) -> Result<serde_json::Value, Stri
 
 #[cfg(test)]
 mod tests {
-    use super::{anisette_url, iso8601_utc};
+    use super::{anisette_url, iso8601_utc, needs_reprovision};
+
+    #[test]
+    fn riconosce_la_richiesta_di_riprovisioning() {
+        assert!(needs_reprovision(
+            "not provisioned for this server (-45061); reprovision required: no usable account"
+        ));
+        assert!(needs_reprovision("reprovision required"));
+        assert!(!needs_reprovision("unknown session (-45025)"));
+    }
 
     #[test]
     fn server_anisette_proprio_dalla_variabile() {
