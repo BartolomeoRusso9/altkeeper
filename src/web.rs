@@ -142,9 +142,14 @@ where
             g.snapshot.checking = false;
             g.job.running = false;
             g.job.ok = Some(false);
-            g.job.lines.push("Errore interno: l'operazione si è interrotta.".into());
+            g.job
+                .lines
+                .push("Internal error: the operation was interrupted.".into());
             if g.login.phase == "working" {
-                g.login = LoginView { phase: "failed", message: "Errore interno.".into() };
+                g.login = LoginView {
+                    phase: "failed",
+                    message: "Internal error.".into(),
+                };
             }
         }
     });
@@ -695,7 +700,7 @@ async fn run_check(app: Arc<App>) {
 }
 
 async fn run_renew(app: Arc<App>, force: bool) {
-    let mut say = |s: &str| app.push_line(s);
+    let mut say = |s: &str| app.push_line(&english_job_line(s));
     let result = crate::cmd_renew(app.phone, false, force, 3, &mut say).await;
 
     let ok = result.is_ok();
@@ -905,8 +910,91 @@ fn friendly_error(err: &str) -> String {
 }
 
 fn short_error(err: &str) -> String {
-    let one_line = err.lines().map(str::trim).find(|l| !l.is_empty()).unwrap_or(err);
-    one_line.chars().take(400).collect()
+    let one_line = err
+        .lines()
+        .map(str::trim)
+        .find(|l| !l.is_empty())
+        .unwrap_or(err);
+    let translated = if let Some(detail) = one_line.strip_prefix("login Apple ID non riuscito: ") {
+        format!("Apple ID sign-in failed: {detail}")
+    } else if let Some(detail) = one_line.strip_prefix("sessione sviluppatore non riuscita: ") {
+        format!("Developer session failed: {detail}")
+    } else if let Some(detail) = one_line.strip_prefix("registrazione iPhone non riuscita: ") {
+        format!("iPhone registration failed: {detail}")
+    } else if one_line.starts_with("pairing con l'iPhone non riuscito") {
+        "iPhone pairing failed. Set it up again over USB.".to_string()
+    } else if one_line.starts_with("manca account.json: ") {
+        "account.json is missing: first run `altkeeper login <apple-id>`.".to_string()
+    } else if let Some((path, _)) = one_line
+        .strip_prefix("manca il pairing remoto ")
+        .and_then(|s| s.split_once(": crealo con "))
+    {
+        format!("Remote pairing file {path} is missing. Create it with `altkeeper pair-usb`.")
+    } else {
+        if let Some(team) = one_line
+            .strip_prefix("il team ")
+            .and_then(|s| s.strip_suffix(" non esiste su questo Apple ID"))
+        {
+            format!("Team {team} does not exist for this Apple ID.")
+        } else {
+            match one_line {
+                "nessun team sviluppatore su questo Apple ID" => {
+                    "No developer team is available for this Apple ID.".to_string()
+                }
+                "password non salvata: rifai `altkeeper login` e scegli di salvarla" => {
+                    "Password not saved: run `altkeeper login` again and choose to save it."
+                        .to_string()
+                }
+                "il telefono non risponde via USB" => {
+                    "The iPhone is not responding over USB.".to_string()
+                }
+                "non trovo l'iPhone in rete: è acceso e sul Wi-Fi di casa?" => {
+                    "Cannot find the iPhone on the network. Is it on and connected to your home Wi-Fi?"
+                        .to_string()
+                }
+                _ => one_line.to_string(),
+            }
+        }
+    };
+    translated.chars().take(400).collect()
+}
+
+fn english_job_line(line: &str) -> String {
+    if line == "Collegato via USB" {
+        return "Connected via USB".into();
+    }
+    if line == "Cerco il telefono in rete..." {
+        return "Searching the network for the iPhone...".into();
+    }
+    if line == "Bonjour non risponde: cerco sulla rete locale..." {
+        return "Bonjour did not respond; scanning the local network...".into();
+    }
+    if let Some(address) = line.strip_prefix("Telefono trovato a ") {
+        return format!("Found iPhone at {address}");
+    }
+    if let Some(address) = line
+        .strip_prefix("Trovato un telefono a ")
+        .and_then(|s| s.strip_suffix(", provo..."))
+    {
+        return format!("Found an iPhone at {address}; trying to connect...");
+    }
+    if let Some(address) = line
+        .split_once(" non risponde, cerco il telefono in rete...")
+        .map(|(address, _)| address)
+    {
+        return format!("{address} did not respond; searching the network...");
+    }
+    if let Some(detail) = line
+        .strip_prefix("USB non riuscita (")
+        .and_then(|s| s.strip_suffix("), provo in Wi-Fi..."))
+    {
+        return format!("USB connection failed ({}); trying Wi-Fi...", short_error(detail));
+    }
+    if let Some(date) = line.strip_prefix("      nuovo profilo valido fino al ") {
+        return format!("      New profile valid until {date}");
+    }
+    line.replace(" scade ", " expires ")
+        .replace(" giorni)", " days)")
 }
 
 /// Dall'errore lungo del login prende la frase utile, e traduce i casi più comuni.
@@ -1145,6 +1233,27 @@ mod tests {
             .contains("cannot find the iPhone"));
         assert!(friendly_error("non trovo l'iPhone in rete: è acceso").contains("cannot find"));
         assert_eq!(friendly_error("boh"), "boh");
+    }
+
+    #[test]
+    fn messaggi_web_in_inglese() {
+        assert_eq!(english_job_line("Collegato via USB"), "Connected via USB");
+        assert_eq!(
+            english_job_line("192.168.1.2 non risponde, cerco il telefono in rete..."),
+            "192.168.1.2 did not respond; searching the network..."
+        );
+        assert_eq!(
+            english_job_line("      nuovo profilo valido fino al 2026-12-01"),
+            "      New profile valid until 2026-12-01"
+        );
+        assert_eq!(
+            short_error("nessun team sviluppatore su questo Apple ID"),
+            "No developer team is available for this Apple ID."
+        );
+        assert_eq!(
+            short_error("login Apple ID non riuscito: temporary failure"),
+            "Apple ID sign-in failed: temporary failure"
+        );
     }
 
     #[test]
