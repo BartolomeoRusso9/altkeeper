@@ -28,15 +28,18 @@ There is also a small **web page** to see the state of your apps and renew them:
 > Confirmed earlier with the server on a Mac: the same, with an app of about 126 MB, plus sign-in,
 > `apps`, `renew`, and that an app still opens with only the *newer* profiles installed (also after
 > rebooting the iPhone). Not confirmed yet: what happens on the day the *original* profile
-> expires, and running AltServer on a server for a longer time.
+> expires, running AltServer on a server for a longer time, or installing an IPA uploaded from the
+> web page against Apple and a real iPhone.
 
 ## What it does, and what it does not
 
 - Renews the provisioning profiles of your apps (and, in AltServer mode, installs the apps AltStore
-  sends it). It does not re-sign apps and **never creates or revokes certificates**.
+  sends it). The renewal flow does not re-sign apps or create/revoke certificates. Installing an
+  IPA uploaded from the web page does sign it and may create a development certificate.
 - **AltServer mode does not need your Apple ID on the server.** AltStore signs in on the iPhone;
   this program only gives it anisette data and installs what AltStore sends. The unattended renewal
-  (`renew`, cron, and the web page's renew action) does need the Apple ID and its password on the server.
+  (`renew`, cron, and the web page's renew action) and signing an IPA from the web page do need the
+  Apple ID and its password on the server.
 - The two do not clash: `renew` looks at the newest profile on the phone. If AltStore renewed
   recently, `renew` does nothing and does not even sign in to Apple.
 - Old profiles stay on the phone after a renewal (iOS does not remove them), so you will see
@@ -137,7 +140,7 @@ Leave it running (as a service or in Docker). On the iPhone, in AltStore, open *
 - The first request creates the anisette identity in `state/` if it does not exist yet. We have
   used it with an identity created by `login`; a clean folder has not been tried.
 
-### 5. Sign in (only for the unattended renewal and the web page's renew)
+### 5. Sign in (for unattended renewal and PC IPA installation)
 
 ```sh
 ./altkeeper login your.apple.id@example.com
@@ -196,6 +199,13 @@ on the machine itself and needs no PIN; on any other address it **refuses to sta
 (at least 4 characters). Use the environment variable rather than `--pin`, which is visible in `ps`.
 The web page has no HTTPS: keep it inside your home network. The web page's own sign-in and renew
 were not run against Apple yet.
+
+From a PC, you can also upload an `.ipa` in **Install an app from this PC**. AltKeeper signs it with
+the configured Apple ID and installs it on the iPhone over Wi-Fi. This requires the Apple ID
+password to be saved in `account.json`; enter the 2FA code in the page if Apple asks for it. Signing
+may register the iPhone and create development app IDs and certificates on the Apple team. Uploads
+are limited to 1 GiB. Protect the page with a PIN when exposing it on your network, and never
+forward its port to the internet.
 
 ### 9. Docker
 

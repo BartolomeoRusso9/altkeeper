@@ -56,7 +56,7 @@ const ERR_APP_DELETION_FAILED: i32 = 16;
 /// la connessione fa scadere la seconda (e AltStore mostra "AltServer could not be found").
 static WORK: Mutex<()> = Mutex::new(());
 
-fn phone_lock() -> std::sync::MutexGuard<'static, ()> {
+pub(crate) fn phone_lock() -> std::sync::MutexGuard<'static, ()> {
     WORK.lock().unwrap_or_else(|e| e.into_inner())
 }
 /// Nome completo del servizio annunciato, per toglierlo alla chiusura.

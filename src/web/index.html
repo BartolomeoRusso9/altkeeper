@@ -117,6 +117,20 @@
   </section>
 
   <section class="card">
+    <h2>Install an app from this PC</h2>
+    <p class="muted">Choose an IPA. AltKeeper signs it with the configured Apple ID and installs it over Wi-Fi. The Apple ID password must be saved on the server.</p>
+    <form id="install-form">
+      <label for="ipa-file">IPA file</label>
+      <input id="ipa-file" type="file" accept=".ipa,application/octet-stream">
+      <div class="row" style="margin-top:10px">
+        <button class="primary" id="btn-install" type="submit">Sign and install</button>
+        <span class="muted" id="install-hint"></span>
+      </div>
+    </form>
+    <div class="banner bad" id="install-error" hidden></div>
+  </section>
+
+  <section class="card">
     <h2>Apple ID</h2>
     <div id="account-info" hidden>
       <div class="row">
@@ -161,7 +175,7 @@
 <script>
 "use strict";
 const $ = (id) => document.getElementById(id);
-let state = null, showForm = false, timer = null, sending = false;
+let state = null, showForm = false, timer = null, sending = false, uploading = false;
 
 async function api(path, body) {
   const opt = body === undefined ? {} : {
@@ -251,13 +265,27 @@ function render(s) {
     : !s.account.password_saved ? "The password must be saved to renew: sign in again and leave the checkbox selected."
     : s.busy ? "Working…" : "";
 
+  const canInstall = s.account.present && s.account.password_saved && s.account.team &&
+                     p.reachable === true && !s.busy;
+  $("btn-install").disabled = !canInstall || uploading;
+  $("btn-install").textContent = uploading ? "Uploading…" : "Sign and install";
+  $("install-hint").textContent = !s.account.present ? "Sign in with your Apple ID first."
+    : !s.account.password_saved ? "Save the Apple ID password on the server to sign and install."
+    : p.reachable !== true ? "The iPhone must be reachable on Wi-Fi."
+    : s.busy ? "Another operation is in progress." : "The Apple ID is used to sign the app.";
+
   // Lavoro in corso o appena finito
   const job = s.job;
   show("job", !!job.kind);
   if (job.kind) {
     const st = $("job-status");
-    if (job.running) { st.className = "banner"; st.textContent = "Renewal in progress. Keep this page open until it finishes…"; }
-    else if (job.ok) { st.className = "banner good"; st.textContent = "Done."; }
+    if (job.running) {
+      st.className = "banner";
+      st.textContent = job.kind === "install"
+        ? "Signing and installing the app. Keep this page open until it finishes…"
+        : "Renewal in progress. Keep this page open until it finishes…";
+    }
+    else if (job.ok) { st.className = "banner good"; st.textContent = job.kind === "install" ? "App installed." : "Done."; }
     else { st.className = "banner bad"; st.textContent = "It did not complete successfully. Check the last line."; }
     const log = $("job-log");
     const atEnd = log.scrollTop + log.clientHeight >= log.scrollHeight - 8;
@@ -315,6 +343,32 @@ $("btn-due").onclick = () => act(() => api("/api/renew", { mode: "due" }));
 $("btn-all").onclick = () => {
   if (confirm("Renew all apps now? This takes about a minute and usually does not need to be done often.")) {
     act(() => api("/api/renew", { mode: "now" }));
+  }
+};
+$("install-form").onsubmit = async (ev) => {
+  ev.preventDefault();
+  const file = $("ipa-file").files[0];
+  if (!file) { banner("install-error", "Choose an IPA file first.", "bad"); return; }
+  uploading = true;
+  if (state) render(state);
+  try {
+    const form = new FormData();
+    form.append("ipa", file);
+    const r = await fetch("/api/install", {
+      method: "POST",
+      headers: { "X-Requested-With": "altkeeper" },
+      body: form,
+    });
+    let j = {};
+    try { j = await r.json(); } catch (_) {}
+    if (!r.ok) throw new Error(j.error || ("Error " + r.status));
+    $("ipa-file").value = "";
+    $("install-error").hidden = true;
+  } catch (e) {
+    banner("install-error", e.message, "bad");
+  } finally {
+    uploading = false;
+    refresh();
   }
 };
 $("btn-change").onclick = () => { showForm = true; if (state) render(state); $("apple-id").focus(); };

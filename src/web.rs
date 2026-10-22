@@ -11,19 +11,20 @@
 
 use std::io::Write as _;
 use std::net::SocketAddr;
-use std::path::Path;
+use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex, MutexGuard};
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 use axum::{
     Json, Router,
-    extract::{Request, State},
+    extract::{DefaultBodyLimit, Multipart, Request, State},
     http::{HeaderMap, HeaderValue, Method, StatusCode, header},
     middleware::{self, Next},
     response::{Html, IntoResponse, Response},
     routing::{get, post},
 };
+use idevice::{RsdService, services::lockdown::LockdownClient};
 use serde::Deserialize;
 use serde_json::{Value, json};
 
@@ -32,6 +33,7 @@ use crate::{PAIRING_FILE, apple, phone, profile};
 const INDEX_HTML: &str = include_str!("web/index.html");
 const RENEW_LOG: &str = "renew.log";
 const MAX_JOB_LINES: usize = 300;
+const MAX_IPA_BYTES: usize = 1024 * 1024 * 1024;
 
 // ---------------------------------------------------------------------------------------------
 // Stato condiviso
@@ -187,6 +189,10 @@ pub async fn serve(
         .route("/api/state", get(state))
         .route("/api/check", post(check))
         .route("/api/renew", post(renew))
+        .route(
+            "/api/install",
+            post(install).layer(DefaultBodyLimit::max(MAX_IPA_BYTES + 1024 * 1024)),
+        )
         .route("/api/login", post(login))
         .route("/api/login/code", post(login_code))
         .route("/api/login/resend", post(login_resend))
@@ -442,6 +448,152 @@ async fn renew(
     json_ok()
 }
 
+struct UploadedIpa(PathBuf);
+
+impl Drop for UploadedIpa {
+    fn drop(&mut self) {
+        let _ = std::fs::remove_file(&self.0);
+    }
+}
+
+struct UploadInProgress {
+    path: PathBuf,
+    file: Option<std::fs::File>,
+    size: usize,
+    keep: bool,
+}
+
+impl UploadInProgress {
+    fn finish(mut self) -> UploadedIpa {
+        drop(self.file.take());
+        self.keep = true;
+        UploadedIpa(self.path.clone())
+    }
+}
+
+impl Drop for UploadInProgress {
+    fn drop(&mut self) {
+        drop(self.file.take());
+        if !self.keep {
+            let _ = std::fs::remove_file(&self.path);
+        }
+    }
+}
+
+fn new_upload_file() -> Result<(PathBuf, std::fs::File), String> {
+    let dir = Path::new("state").join("uploads");
+    std::fs::create_dir_all(&dir).map_err(|e| format!("Cannot create upload directory: {e}"))?;
+    crate::fsperm::restrict_dir(&dir).map_err(|e| format!("Cannot protect upload directory: {e}"))?;
+
+    let mut random = [0u8; 16];
+    rustls::crypto::ring::default_provider()
+        .secure_random
+        .fill(&mut random)
+        .map_err(|_| "Cannot generate a temporary upload name.".to_string())?;
+    let name: String = random.iter().map(|b| format!("{b:02x}")).collect();
+    let path = dir.join(format!("install-{name}.ipa"));
+    let mut options = std::fs::OpenOptions::new();
+    options.write(true).create_new(true);
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::OpenOptionsExt as _;
+        options.mode(0o600);
+    }
+    let file = options
+        .open(&path)
+        .map_err(|e| format!("Cannot create temporary upload: {e}"))?;
+    if let Err(e) = crate::fsperm::restrict_file(&path) {
+        let _ = std::fs::remove_file(&path);
+        return Err(format!("Cannot protect upload: {e}"));
+    }
+    Ok((path, file))
+}
+
+async fn receive_ipa(multipart: &mut Multipart) -> Result<UploadedIpa, (StatusCode, String)> {
+    use std::io::Write as _;
+
+    let mut upload: Option<UploadInProgress> = None;
+    while let Some(mut field) = multipart
+        .next_field()
+        .await
+        .map_err(|e| (StatusCode::BAD_REQUEST, format!("Invalid upload: {e}")))?
+    {
+        if field.name() != Some("ipa") || upload.is_some() {
+            return Err((StatusCode::BAD_REQUEST, "Send one IPA file in the 'ipa' field.".into()));
+        }
+        let filename = field.file_name().unwrap_or("");
+        if !filename.to_ascii_lowercase().ends_with(".ipa") {
+            return Err((StatusCode::BAD_REQUEST, "Choose a file with the .ipa extension.".into()));
+        }
+        let (path, file) = new_upload_file()
+            .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e))?;
+        upload = Some(UploadInProgress {
+            path,
+            file: Some(file),
+            size: 0,
+            keep: false,
+        });
+        while let Some(chunk) = field
+            .chunk()
+            .await
+            .map_err(|e| (StatusCode::BAD_REQUEST, format!("Upload failed: {e}")))?
+        {
+            let Some(upload) = upload.as_mut() else {
+                return Err((StatusCode::INTERNAL_SERVER_ERROR, "Upload state was lost.".into()));
+            };
+            let next_size = upload.size.saturating_add(chunk.len());
+            if next_size > MAX_IPA_BYTES {
+                return Err((StatusCode::PAYLOAD_TOO_LARGE, "IPA exceeds the 1 GiB limit.".into()));
+            }
+            upload.file.as_mut().ok_or_else(|| {
+                (StatusCode::INTERNAL_SERVER_ERROR, "Upload file was closed unexpectedly.".into())
+            })?.write_all(&chunk)
+                .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, format!("Cannot save upload: {e}")))?;
+            upload.size = next_size;
+        }
+    }
+
+    let upload = upload
+        .ok_or_else(|| (StatusCode::BAD_REQUEST, "Choose an IPA file to install.".into()))?;
+    if upload.size == 0 {
+        return Err((StatusCode::BAD_REQUEST, "The IPA file is empty.".into()));
+    }
+    Ok(upload.finish())
+}
+
+async fn install(
+    State(app): State<Arc<App>>,
+    mut multipart: Multipart,
+) -> (StatusCode, Json<Value>) {
+    match apple::read_account(Path::new(".")) {
+        Some(a) if !a.password.is_empty() && a.team_id.is_some() => {}
+        _ => {
+            return json_err(
+                StatusCode::BAD_REQUEST,
+                "Sign in and save the Apple ID password before installing from a PC.",
+            );
+        }
+    }
+    let Some(guard) = try_busy(&app) else {
+        return json_err(StatusCode::CONFLICT, BUSY_MSG);
+    };
+    let uploaded = match receive_ipa(&mut multipart).await {
+        Ok(file) => file,
+        Err((status, message)) => return json_err(status, &message),
+    };
+    {
+        let mut g = app.lock();
+        g.job = JobView {
+            kind: "install".into(),
+            running: true,
+            lines: vec!["IPA uploaded. Signing and installing on the iPhone…".into()],
+            ok: None,
+        };
+    }
+    spawn_job(guard, move |app| run_install(app, uploaded));
+    json_ok()
+}
+
 #[derive(Deserialize)]
 struct LoginReq {
     apple_id: String,
@@ -561,6 +713,101 @@ async fn run_renew(app: Arc<App>, force: bool) {
     run_check(app).await;
 }
 
+async fn run_install(app: Arc<App>, upload: UploadedIpa) {
+    let result = install_ipa(&app, &upload).await;
+    let ok = result.is_ok();
+    if let Err(e) = result {
+        app.push_line(&format!("Error: {}", short_error(&e)));
+    } else {
+        app.push_line("Installation completed.");
+    }
+    {
+        let mut g = app.lock();
+        g.job.running = false;
+        g.job.ok = Some(ok);
+    }
+    run_check(app).await;
+}
+
+async fn install_ipa(app: &Arc<App>, upload: &UploadedIpa) -> Result<(), String> {
+    let account = apple::load_account(Path::new("."))?;
+    let mut session = apple::open_session_web(
+        Path::new("."),
+        &account.apple_id,
+        &account.password,
+        app.tfa.clone(),
+    )
+    .await?;
+    let team = apple::pick_team(&mut session, account.team_id.as_deref(), false).await?;
+
+    app.push_line("Connecting to the iPhone to read its device identity…");
+    let (device_name, udid) = {
+        let _work = crate::altserver::phone_lock();
+        let (_, mut link) = phone::connect_auto(app.phone, PAIRING_FILE, |_: &str| {}).await?;
+        let mut lockdown = LockdownClient::connect_rsd(&mut link.adapter, &mut link.hs)
+            .await
+            .map_err(|e| format!("Cannot query iPhone identity through trusted lockdown: {e}"))?;
+        let name = lockdown
+            .get_value(Some("DeviceName"), None)
+            .await
+            .map_err(|e| format!("Cannot read the iPhone device name: {e}"))?
+            .as_string()
+            .ok_or("The iPhone returned an invalid device name.")?
+            .to_string();
+        let udid = lockdown
+            .get_value(Some("UniqueDeviceID"), None)
+            .await
+            .map_err(|e| format!("Cannot read the iPhone UDID: {e}"))?
+            .as_string()
+            .ok_or("The iPhone returned an invalid UDID.")?
+            .to_string();
+        (name, udid)
+    };
+
+    app.push_line("Signing the IPA with the configured Apple ID…");
+    let signed_app = apple::sign_ipa(
+        session,
+        &account,
+        team,
+        &device_name,
+        &udid,
+        &upload.0,
+    )
+    .await?;
+
+    app.push_line("Installing the signed app over Wi-Fi…");
+    let _work = crate::altserver::phone_lock();
+    let (_, mut link) = phone::connect_auto(app.phone, PAIRING_FILE, |_: &str| {}).await?;
+    // Il telefono manda decine di notifiche con la stessa percentuale: una riga ogni 10%.
+    let last_logged = std::sync::atomic::AtomicI64::new(-1);
+    let started = std::time::Instant::now();
+    isideload::sideload::install::install_app_rsd(
+        &mut link.adapter,
+        &mut link.hs,
+        &signed_app.path,
+        |percent| {
+            if let Some(step) = progress_step(percent, last_logged.load(Ordering::Relaxed)) {
+                last_logged.store(step, Ordering::Relaxed);
+                app.push_line(&format!(
+                    "Installation progress: {step}% ({}s)",
+                    started.elapsed().as_secs()
+                ));
+            }
+        },
+    )
+    .await
+    .map_err(|e| format!("Installation failed: {e}"))?;
+    Ok(())
+}
+
+/// La percentuale da scrivere nel log, o `None` se non è ancora cambiata di 10 punti
+/// dall'ultima scritta (`last`, -1 se nessuna). Il 100% si scrive sempre, una volta sola.
+fn progress_step(percent: u64, last: i64) -> Option<i64> {
+    let p = percent.min(100) as i64;
+    let step = if p >= 100 { 100 } else { p / 10 * 10 };
+    (step > last).then_some(step)
+}
+
 async fn run_login(app: Arc<App>, apple_id: String, password: String, save: bool) {
     let dir = Path::new(".");
     let outcome: Result<String, String> = async {
@@ -659,7 +906,7 @@ fn friendly_error(err: &str) -> String {
 
 fn short_error(err: &str) -> String {
     let one_line = err.lines().map(str::trim).find(|l| !l.is_empty()).unwrap_or(err);
-    one_line.chars().take(240).collect()
+    one_line.chars().take(400).collect()
 }
 
 /// Dall'errore lungo del login prende la frase utile, e traduce i casi più comuni.
@@ -785,6 +1032,19 @@ fn append_log(lines: &[String], ok: bool) {
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn il_progresso_si_scrive_ogni_dieci_punti() {
+        let mut last = -1;
+        let mut out = vec![];
+        for p in [0, 0, 5, 9, 10, 10, 68, 68, 69, 70, 71, 74, 99, 100, 100] {
+            if let Some(s) = super::progress_step(p, last) {
+                last = s;
+                out.push(s);
+            }
+        }
+        assert_eq!(out, vec![0, 10, 60, 70, 90, 100]);
+    }
+
     use super::*;
     use std::time::Duration;
 
