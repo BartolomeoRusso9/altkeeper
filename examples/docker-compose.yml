@@ -3,6 +3,8 @@
 # web in /srv/altkeeper/.env, una riga: ALTKEEPER_WEB_PIN=... (almeno 4 caratteri, permessi 600).
 # Rete dell'host: serve per trovare l'iPhone e per farsi trovare da AltStore via Bonjour.
 # Nessuna etichetta Watchtower: l'immagine si compila in locale, non si scarica da un registro.
+# Per i log CLI in inglese togli il commento da ALTKEEPER_LANG=en sotto.
+# La pagina web rimane in inglese indipendentemente dalla lingua della CLI.
 services:
   altkeeper:
     image: altkeeper:latest
@@ -14,6 +16,7 @@ services:
       - /srv/altkeeper:/data
     environment:
       - TZ=Europe/Rome
+      # - ALTKEEPER_LANG=en
       - ALTKEEPER_WEB_PIN=${ALTKEEPER_WEB_PIN:?imposta ALTKEEPER_WEB_PIN in .env}
     command: ["serve", "--bind", "0.0.0.0:8787", "--altserver"]
     logging:

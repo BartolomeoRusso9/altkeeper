@@ -31,6 +31,34 @@ jobs:
       - uses: dtolnay/rust-toolchain@stable
       - uses: Swatinem/rust-cache@v2
       - run: cargo test --locked
+      - name: Check English CLI help
+        run: |
+          ALTKEEPER_LANG=en cargo run --locked -- --help | grep '^usage: altkeeper'
+      - name: Check Italian CLI help
+        run: |
+          ALTKEEPER_LANG=it cargo run --locked -- --help | grep '^uso: altkeeper'
+
+  test-windows:
+    runs-on: windows-latest
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@v7
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+      - run: cargo test --locked
+      - name: Check English CLI help
+        shell: pwsh
+        run: |
+          $env:ALTKEEPER_LANG = "en"
+          $output = cargo run --locked -- --help
+          if ($LASTEXITCODE -ne 0 -or -not ($output -match '^usage: altkeeper')) { throw "English CLI help failed: $output" }
+      - name: Check Italian CLI help
+        shell: pwsh
+        run: |
+          $env:ALTKEEPER_LANG = "it"
+          $output = cargo run --locked -- --help
+          if ($LASTEXITCODE -ne 0 -or -not ($output -match '^uso: altkeeper')) { throw "Italian CLI help failed: $output" }
 
   image:
     needs: test

@@ -167,10 +167,12 @@ fn now() -> u64 {
 /// compreso), così una configurazione sbagliata non lascia annunci Bonjour orfani.
 pub fn check_options(bind: SocketAddr, pin: &Option<String>) -> Result<(), String> {
     match pin {
-        None if !bind.ip().is_loopback() => Err("per ascoltare fuori da questo computer serve un \
-                                                 PIN: imposta ALTKEEPER_WEB_PIN (o usa --pin)"
+        None if !bind.ip().is_loopback() => Err(crate::tr!(
+            "per ascoltare fuori da questo computer serve un PIN: imposta ALTKEEPER_WEB_PIN (o usa --pin)",
+            "listening outside this computer requires a PIN: set ALTKEEPER_WEB_PIN (or use --pin)"
+        )
             .into()),
-        Some(p) if p.chars().count() < 4 => Err("il PIN deve avere almeno 4 caratteri".into()),
+        Some(p) if p.chars().count() < 4 => Err(crate::tr!("il PIN deve avere almeno 4 caratteri", "the PIN must contain at least 4 characters").into()),
         _ => Ok(()),
     }
 }
@@ -206,15 +208,15 @@ pub async fn serve(
 
     let listener = tokio::net::TcpListener::bind(bind)
         .await
-        .map_err(|e| format!("non riesco ad ascoltare su {bind}: {e}"))?;
-    println!(
-        "Interfaccia web su http://{bind} ({})",
-        if app.pin.is_some() {
+        .map_err(|e| crate::tr!(format!("non riesco ad ascoltare su {bind}: {e}"), format!("cannot listen on {bind}: {e}")))?;
+    println!("{}", crate::tr!(
+        format!("Interfaccia web su http://{bind} ({})", if app.pin.is_some() {
             "protetta da PIN: il nome utente può essere qualsiasi"
-        } else {
-            "raggiungibile solo da questo computer"
-        }
-    );
+        } else { "raggiungibile solo da questo computer" }),
+        format!("Web interface at http://{bind} ({})", if app.pin.is_some() {
+            "PIN-protected: any username is accepted"
+        } else { "only accessible from this computer" })
+    ));
     axum::serve(listener, router).await.map_err(|e| format!("{e:?}"))
 }
 
