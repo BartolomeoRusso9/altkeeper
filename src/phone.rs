@@ -2,6 +2,7 @@
 //! TLS-PSK, RSD e client misagent per i profili di provisioning.
 
 use std::any::Any;
+use std::collections::HashSet;
 use std::net::{IpAddr, SocketAddr};
 use std::path::Path;
 use std::time::{Duration, Instant};
@@ -135,6 +136,31 @@ impl PhoneLink {
         };
 
         misagent.copy_all().await.map_err(dbg)
+    }
+
+    /// Installed user-app bundle IDs, not Apple Developer App IDs or provisioning profiles.
+    /// Fail closed on a lookup error: unattended renewal must never guess.
+    pub async fn installed_app_ids(&mut self) -> Result<HashSet<String>, String> {
+        let apps = match self {
+            Self::Legacy { provider, .. }
+            | Self::Rsd {
+                usb: Some(provider),
+                ..
+            } => {
+                let mut client = InstallationProxyClient::connect(provider).await.map_err(dbg)?;
+                client.get_apps(Some("User"), None).await.map_err(dbg)?
+            }
+            Self::Rsd {
+                adapter,
+                hs,
+                usb: None,
+                ..
+            } => {
+                let mut client = InstallationProxyClient::connect_rsd(adapter, hs).await.map_err(dbg)?;
+                client.get_apps(Some("User"), None).await.map_err(dbg)?
+            }
+        };
+        Ok(apps.into_keys().collect())
     }
 
     pub async fn install_profile(&mut self, profile: Vec<u8>) -> Result<(), String> {
