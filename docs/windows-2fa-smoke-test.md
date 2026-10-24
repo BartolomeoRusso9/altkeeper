@@ -28,11 +28,15 @@ challenge or prove correct PowerShell console behavior.
 
 ## Steps
 
-1. Build the current main branch (or the feature branch if testing a future PR):
+1. **Stay on the branch under test.** To verify an unmerged PR, check out that PR's
+   head branch before starting this procedure. Do not switch to `main`, as that would
+   test an older build instead of the proposed changes. To verify a merged release,
+   you may run `git switch main` and `git pull --ff-only` beforehand.
+   Check the current branch and commit, then build and test:
 
    ```powershell
-   git switch main
-   git pull --ff-only
+   git branch --show-current
+   git rev-parse --short HEAD
    cargo test --locked
    cargo build --release --locked
    $env:ALTKEEPER_ANISETTE_URL = "https://mac-ani.jkcoxson.com"
