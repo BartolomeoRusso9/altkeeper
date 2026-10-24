@@ -32,9 +32,11 @@ jobs:
       - uses: Swatinem/rust-cache@v2
       - run: cargo test --locked
       - name: Check English CLI help
-        run: ALTKEEPER_LANG=en cargo run --locked -- --help | grep '^usage: altkeeper'
+        run: |
+          ALTKEEPER_LANG=en cargo run --locked -- --help | grep '^usage: altkeeper'
       - name: Check Italian CLI help
-        run: ALTKEEPER_LANG=it cargo run --locked -- --help | grep '^uso: altkeeper'
+        run: |
+          ALTKEEPER_LANG=it cargo run --locked -- --help | grep '^uso: altkeeper'
 
   test-windows:
     runs-on: windows-latest
