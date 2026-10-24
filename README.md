@@ -31,6 +31,40 @@ There is also a small **web page** to see the state of your apps and renew them:
 > expires, running AltServer on a server for a longer time, or installing an IPA uploaded from the
 > web page against Apple and a real iPhone.
 
+## CLI language (English / Italian)
+
+AltKeeper's command-line prompts, errors, and service logs default to Italian for backwards
+compatibility. Set `ALTKEEPER_LANG=en` to use English, or `ALTKEEPER_LANG=it` for Italian.
+Language is read for each invocation (no rebuild necessary). Values such as `en-US`,
+`en_GB`, and `it-IT` are accepted case-insensitively; unknown languages fall back to Italian.
+The legacy `ALTREFRESH_LANG` variable is also accepted when `ALTKEEPER_LANG` is unset.
+This changes human-readable CLI output, **not** protocol messages, machine-readable data,
+or the web application's language.
+
+PowerShell:
+
+```powershell
+$env:ALTKEEPER_LANG = "en"
+.\target\release\altkeeper.exe phone
+.\target\release\altkeeper.exe --help
+```
+
+Command Prompt (cmd.exe):
+
+```cmd
+set ALTKEEPER_LANG=en
+target\release\altkeeper.exe phone
+```
+
+Linux, macOS, or a container environment:
+
+```sh
+ALTKEEPER_LANG=en ./altkeeper phone
+```
+
+When running under Docker Compose, add `ALTKEEPER_LANG: en` to the service's
+`environment:` section.
+
 ## What it does, and what it does not
 
 - Renews the provisioning profiles of your apps (and, in AltServer mode, installs the apps AltStore
@@ -273,7 +307,11 @@ machine yet**: if something breaks, please open an issue.
    comes with iTunes, is fine), see "If something goes wrong". Stop with Ctrl-C.
 
 4. **Sign in and automatic renewal.** `.\altkeeper.exe login you@example.com` works as on the
-   other systems. `account.json`, `state\` and `profili-salvati\` are restricted to your Windows
+   other systems. In PowerShell and cmd.exe, type the six-digit 2FA code and press Enter;
+   the `d`, `r`, and `p<id>` options also work. Interactive prompts are read directly
+   from the Windows console, so switching from PowerShell to cmd.exe is unnecessary.
+   Run `login` in an interactive console rather than a background task.
+   `account.json`, `state\` and `profili-salvati\` are restricted to your Windows
    user (the equivalent of `chmod 600/700`). For the nightly renewal use the Task Scheduler with
    `renew.ps1` instead of cron:
 
