@@ -49,6 +49,25 @@ fn select_transport(version: &str, force_legacy: bool) -> Result<TransportKind, 
     })
 }
 
+/// Trasporto da usare quando la versione di iOS non è stata determinata: RSD, il percorso che
+/// esisteva prima della rilevazione, a meno che `ALTKEEPER_LEGACY` non imponga quello classico.
+fn fallback_transport(force_legacy: bool) -> TransportKind {
+    if force_legacy {
+        TransportKind::Legacy
+    } else {
+        TransportKind::Rsd
+    }
+}
+
+/// Il Wi-Fi passa dal pairing remoto (RPPairing), che esiste solo da iOS 17: chi ha un iPhone
+/// più vecchio deve saperlo, invece di leggere un errore di pairing generico.
+const WIFI_IOS17_HINT: &str = "Nota: il Wi-Fi funziona solo con iOS 17 o successivo; \
+     iOS 12 (e 13-16) è supportato solo via cavo USB";
+
+fn with_wifi_hint(msg: impl std::fmt::Display) -> String {
+    format!("{msg} ({WIFI_IOS17_HINT})")
+}
+
 /// Il client misagent, più il tunnel (`adapter`) e la stretta di mano RSD (`hs`) con cui aprire
 /// gli altri servizi del telefono (installazione e rimozione di app), più gli oggetti che devono
 /// restare vivi finché serve.
@@ -135,12 +154,36 @@ impl PhoneLink {
     }
 
     pub async fn device_identity(&mut self) -> Result<(String, String, String), String> {
+        const USB_LOCKDOWN_TIMEOUT: Duration = Duration::from_secs(10);
+
         match self {
-            Self::Legacy { provider, .. } => identity_via_provider(provider).await,
+            Self::Legacy { provider, .. } => {
+                with_timeout(
+                    "Lettura dell'identità via lockdown",
+                    USB_LOCKDOWN_TIMEOUT,
+                    identity_via_provider(provider),
+                )
+                .await
+            }
+            // Su USB si prova prima il lockdown classico (start_session); se non riesce resta il
+            // tunnel RSD, che su iOS 17+ era l'unica strada prima di questa modifica.
             Self::Rsd {
+                adapter,
+                hs,
                 usb: Some(provider),
                 ..
-            } => identity_via_provider(provider).await,
+            } => match with_timeout(
+                "Lettura dell'identità via lockdown",
+                USB_LOCKDOWN_TIMEOUT,
+                identity_via_provider(provider),
+            )
+            .await
+            {
+                Ok(identity) => Ok(identity),
+                Err(usb_err) => identity_via_rsd(adapter, hs)
+                    .await
+                    .map_err(|rsd_err| format!("{rsd_err} (lockdown via USB: {usb_err})")),
+            },
             Self::Rsd {
                 adapter,
                 hs,
@@ -162,7 +205,7 @@ impl PhoneLink {
                 ..
             } => isideload::sideload::install::install_app(provider, app_path, progress)
                 .await
-                .map_err(dbg),
+                .map_err(|e| format!("Installation failed: {e}")),
             Self::Rsd {
                 adapter,
                 hs,
@@ -170,7 +213,7 @@ impl PhoneLink {
                 ..
             } => isideload::sideload::install::install_app_rsd(adapter, hs, app_path, progress)
                 .await
-                .map_err(dbg),
+                .map_err(|e| format!("Installation failed: {e}")),
         }
     }
 
@@ -368,12 +411,28 @@ pub async fn connect_usb(say: &mut impl FnMut(&str)) -> Result<Option<PhoneLink>
             .ok_or_else(|| "ProductVersion non restituita come stringa".to_string())
     })
     .await
-    .map_err(|_| "timeout leggendo ProductVersion via lockdown".to_string())??;
+    .map_err(|_| "timeout leggendo ProductVersion via lockdown".to_string())
+    .and_then(|read| read);
 
-    let transport = select_transport(&version, crate::env::is_set("LEGACY"))?;
-    say(&format!(
-        "iOS rilevato: {version} (trasporto {transport:?})"
-    ));
+    // Se la versione non si legge (o non si capisce) non si rinuncia al cavo: si prosegue sul
+    // percorso RSD, come prima che esistesse la rilevazione, salvo ALTKEEPER_LEGACY.
+    let force_legacy = crate::env::is_set("LEGACY");
+    let detected = version.and_then(|v| select_transport(&v, force_legacy).map(|t| (v, t)));
+    let transport = match detected {
+        Ok((version, transport)) => {
+            say(&format!(
+                "iOS rilevato: {version} (trasporto {transport:?})"
+            ));
+            transport
+        }
+        Err(e) => {
+            let transport = fallback_transport(force_legacy);
+            say(&format!(
+                "Versione iOS non determinata ({e}): provo il trasporto {transport:?}"
+            ));
+            transport
+        }
+    };
     if transport == TransportKind::Legacy {
         let legacy_connect = async {
             let pairing = provider.get_pairing_file().await.map_err(dbg)?;
@@ -572,9 +631,9 @@ pub async fn connect_auto(
         }
     }
     if !Path::new(pairing_path).exists() {
-        return Err(format!(
+        return Err(with_wifi_hint(format!(
             "manca il pairing remoto {pairing_path}: crealo con `altkeeper pair-usb`"
-        ));
+        )));
     }
     const PER_TRY: Duration = Duration::from_secs(12);
     let cache = Path::new(LAST_ADDR_FILE);
@@ -632,9 +691,11 @@ pub async fn connect_auto(
     }
 
     if tried.is_empty() || last_err.is_empty() {
-        Err("non trovo l'iPhone in rete: è acceso e sul Wi-Fi di casa?".into())
+        Err(with_wifi_hint(
+            "non trovo l'iPhone in rete: è acceso e sul Wi-Fi di casa?",
+        ))
     } else {
-        Err(last_err)
+        Err(with_wifi_hint(last_err))
     }
 }
 
@@ -693,6 +754,20 @@ mod tests {
         assert_eq!(select_transport("27.0.1", false), Ok(TransportKind::Rsd));
         assert_eq!(select_transport("27.0.1", true), Ok(TransportKind::Legacy));
         assert!(select_transport("unknown", false).is_err());
+    }
+
+    #[test]
+    fn senza_versione_si_prova_rsd_salvo_legacy_forzato() {
+        assert_eq!(fallback_transport(false), TransportKind::Rsd);
+        assert_eq!(fallback_transport(true), TransportKind::Legacy);
+    }
+
+    #[test]
+    fn il_wifi_spiega_che_ios_12_vuole_il_cavo() {
+        let e = with_wifi_hint("non trovo l'iPhone in rete");
+        assert!(e.starts_with("non trovo l'iPhone in rete"));
+        assert!(e.contains("iOS 12"));
+        assert!(e.contains("USB"));
     }
 
     fn temp_file(name: &str) -> std::path::PathBuf {
