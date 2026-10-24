@@ -64,6 +64,7 @@ struct Snapshot {
     detail: Option<String>,
     profiles_total: usize,
     apps: Vec<AppView>,
+    profiles: Vec<ProfileView>,
 }
 
 #[derive(Clone, PartialEq, Debug)]
@@ -73,6 +74,15 @@ struct AppView {
     days: i64,
     expires: String,
     level: &'static str,
+}
+
+#[derive(Clone, PartialEq, Debug)]
+struct ProfileView {
+    uuid: String,
+    bundle: String,
+    label: String,
+    days: i64,
+    expires: String,
 }
 
 #[derive(Default, Clone)]
@@ -195,6 +205,7 @@ pub async fn serve(
         .route("/api/state", get(state))
         .route("/api/check", post(check))
         .route("/api/renew", post(renew))
+        .route("/api/profile/remove", post(remove_profile))
         .route(
             "/api/install",
             post(install).layer(DefaultBodyLimit::max(MAX_IPA_BYTES + 1024 * 1024)),
@@ -392,6 +403,10 @@ async fn state(State(app): State<Arc<App>>) -> Json<Value> {
             "bundle": a.bundle, "label": a.label, "days": a.days,
             "expires": a.expires, "level": a.level,
         })).collect::<Vec<_>>(),
+        "profiles": g.snapshot.profiles.iter().map(|p| json!({
+            "uuid": p.uuid, "bundle": p.bundle, "label": p.label,
+            "days": p.days, "expires": p.expires,
+        })).collect::<Vec<_>>(),
         "job": {
             "kind": g.job.kind, "running": g.job.running,
             "lines": g.job.lines, "ok": g.job.ok,
@@ -416,17 +431,27 @@ async fn check(State(app): State<Arc<App>>) -> (StatusCode, Json<Value>) {
 
 #[derive(Deserialize)]
 struct RenewReq {
-    /// "due" rinnova solo le app in scadenza, "now" le rinnova tutte.
+    /// "due" renews expiring installed apps; "now" all profiles; "single" one bundle.
     mode: String,
+    bundle: Option<String>,
 }
 
 async fn renew(
     State(app): State<Arc<App>>,
     Json(req): Json<RenewReq>,
 ) -> (StatusCode, Json<Value>) {
-    let force = match req.mode.as_str() {
-        "now" => true,
-        "due" => false,
+    let (force, installed_only, bundle) = match req.mode.as_str() {
+        "now" => (true, false, None),
+        "due" => (false, true, None),
+        "single" => {
+            let Some(b) = req.bundle.filter(|b| !b.is_empty() && b.len() <= 255) else {
+                return json_err(StatusCode::BAD_REQUEST, "Select an app to renew.");
+            };
+            if !app.lock().snapshot.apps.iter().any(|a| a.bundle == b) {
+                return json_err(StatusCode::NOT_FOUND, "App is not in the current profile list.");
+            }
+            (true, false, Some(b))
+        }
         _ => return json_err(StatusCode::BAD_REQUEST, "Invalid mode"),
     };
     match apple::read_account(Path::new(".")) {
@@ -444,13 +469,42 @@ async fn renew(
     {
         let mut g = app.lock();
         g.job = JobView {
-            kind: if force { "renew_all".into() } else { "renew_due".into() },
+            kind: if bundle.is_some() { "renew_one".into() }
+                  else if force { "renew_all".into() } else { "renew_due".into() },
             running: true,
             lines: Vec::new(),
             ok: None,
         };
     }
-    spawn_job(guard, move |app| run_renew(app, force));
+    spawn_job(guard, move |app| run_renew(app, force, bundle, installed_only));
+    json_ok()
+}
+
+#[derive(Deserialize)]
+struct RemoveProfileReq {
+    uuid: String,
+}
+
+async fn remove_profile(
+    State(app): State<Arc<App>>,
+    Json(req): Json<RemoveProfileReq>,
+) -> (StatusCode, Json<Value>) {
+    if !app.lock().snapshot.profiles.iter().any(|p| p.uuid.eq_ignore_ascii_case(&req.uuid)) {
+        return json_err(StatusCode::NOT_FOUND, "Profile is not in your team's current list. Check again.");
+    }
+    let Some(guard) = try_busy(&app) else {
+        return json_err(StatusCode::CONFLICT, BUSY_MSG);
+    };
+    {
+        let mut g = app.lock();
+        g.job = JobView {
+            kind: "remove_profile".into(),
+            running: true,
+            lines: Vec::new(),
+            ok: None,
+        };
+    }
+    spawn_job(guard, move |app| run_remove_profile(app, req.uuid));
     json_ok()
 }
 
@@ -686,13 +740,18 @@ async fn run_check(app: Arc<App>) {
             g.snapshot.detail = None;
             g.snapshot.profiles_total = profiles.len();
             g.snapshot.apps = team.as_deref().map(|t| app_views(&profiles, t)).unwrap_or_default();
+            g.snapshot.profiles = team.as_deref().map(|t| profile_views(&profiles, t)).unwrap_or_default();
         }
         Ok(Err(e)) => {
+            g.snapshot.apps.clear();
+            g.snapshot.profiles.clear();
             g.snapshot.reachable = Some(false);
             g.snapshot.error = Some(friendly_error(&e));
             g.snapshot.detail = Some(e.chars().take(400).collect());
         }
         Err(_) => {
+            g.snapshot.apps.clear();
+            g.snapshot.profiles.clear();
             g.snapshot.reachable = Some(false);
             g.snapshot.error = Some(friendly_error("non risponde"));
             g.snapshot.detail = Some("nessuna risposta entro 45 secondi".into());
@@ -700,9 +759,9 @@ async fn run_check(app: Arc<App>) {
     }
 }
 
-async fn run_renew(app: Arc<App>, force: bool) {
+async fn run_renew(app: Arc<App>, force: bool, bundle: Option<String>, installed_only: bool) {
     let mut say = |s: &str| app.push_line(&english_job_line(s));
-    let result = crate::cmd_renew(app.phone, false, force, 3, &mut say).await;
+    let result = crate::cmd_renew(app.phone, false, force, 3, bundle.as_deref(), installed_only, &mut say).await;
 
     let ok = result.is_ok();
     if let Err(e) = &result {
@@ -716,6 +775,29 @@ async fn run_renew(app: Arc<App>, force: bool) {
     };
     append_log(&lines, ok);
     // Poi si aggiorna lo stato mostrato in pagina.
+    run_check(app).await;
+}
+
+async fn run_remove_profile(app: Arc<App>, uuid: String) {
+    let result: Result<(), String> = async {
+        let team = apple::read_account(Path::new("."))
+            .and_then(|a| a.team_id)
+            .ok_or("Sign in to select a team before removing profiles.")?;
+        let (_, mut link) = phone::connect_auto(app.phone, PAIRING_FILE, |_: &str| {}).await?;
+        let p = crate::remove_profile_with_backup(&mut link, &uuid, Some(&team)).await?;
+        app.push_line(&format!("Removed profile for {} [{}]. Backup saved in {}.",
+            p.bundle_id.as_deref().unwrap_or("?"), p.uuid, crate::SAVED_DIR));
+        Ok(())
+    }.await;
+    let ok = result.is_ok();
+    if let Err(e) = result {
+        app.push_line(&format!("Error: {}", short_error(&e)));
+    }
+    {
+        let mut g = app.lock();
+        g.job.running = false;
+        g.job.ok = Some(ok);
+    }
     run_check(app).await;
 }
 
@@ -876,6 +958,24 @@ fn app_views(profiles: &[profile::PhoneProfile], team: &str) -> Vec<AppView> {
         })
         .collect();
     views.sort_by(|a, b| a.days.cmp(&b.days).then_with(|| a.label.cmp(&b.label)));
+    views
+}
+
+fn profile_views(profiles: &[profile::PhoneProfile], team: &str) -> Vec<ProfileView> {
+    let mut views: Vec<_> = profiles.iter()
+        .filter(|p| p.team_id.as_deref() == Some(team))
+        .filter_map(|p| {
+            let bundle = p.bundle_id.clone()?;
+            Some(ProfileView {
+                uuid: p.uuid.clone(),
+                label: label_of(&bundle, team),
+                bundle,
+                days: p.days_left().unwrap_or(-1),
+                expires: p.expires_text(),
+            })
+        })
+        .collect();
+    views.sort_by(|a, b| a.label.cmp(&b.label).then_with(|| b.expires.cmp(&a.expires)));
     views
 }
 
