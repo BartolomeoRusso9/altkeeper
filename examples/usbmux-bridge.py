@@ -1,5 +1,6 @@
 #!/usr/bin/env python3
 """Espone l'usbmuxd del Mac (socket Unix) su 127.0.0.1:27015 per `altkeeper pair-usb`."""
+
 import asyncio
 
 SOCK = "/var/run/usbmuxd"
