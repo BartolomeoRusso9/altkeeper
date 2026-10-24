@@ -62,7 +62,7 @@ cargo run --locked -- --help
 ```
 
 English output should start with `usage: altkeeper`, Italian with `uso: altkeeper`.
-The GitHub workflow defines Windows and Linux tests, but **no Actions runs were available**
-when the Windows 10 results were recorded. Local success does not imply CI success.
+The workflow includes Windows and Linux checks. Check the CI results on the contribution PR;
+the user's successful Windows 10 tests alone do not prove CI passes.
 
 Report only operating system, terminal version, pass/fail, and sanitized error messages.
