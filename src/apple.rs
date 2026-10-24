@@ -147,8 +147,15 @@ pub fn iso8601_utc(epoch_secs: u64) -> String {
 /// Il server anisette risponde -45061 ("reprovision required") quando l'identità salvata in
 /// `state/anisette_state` non vale più per lui: server cambiato, backend rifatto, `adi.pb`
 /// perso. Riprovare con la stessa identità non serve a niente, bisogna provisionarne una nuova.
+///
+/// Con isideload 0.4.x `get_anisette_data` riprova da sé fino a 3 volte (`get_data_or_provision`)
+/// e quando li esaurisce restituisce "Max anisette provisioning attempts reached": anche quella
+/// va trattata come identità da rimpiazzare, altrimenti la messa da parte di `anisette_state`
+/// viene saltata proprio nel caso in cui serve.
 fn needs_reprovision(err: &str) -> bool {
-    err.contains("-45061") || err.contains("reprovision required")
+    err.contains("-45061")
+        || err.contains("reprovision required")
+        || err.contains("Max anisette provisioning attempts reached")
 }
 
 /// Mette da parte l'identità anisette scaduta (`anisette_state` -> `anisette_state.stale`):
