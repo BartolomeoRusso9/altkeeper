@@ -71,6 +71,9 @@ apple-codesign-quick = "0.1.0"
 [target.'cfg(windows)'.dependencies]
 reqwest = { version = "0.13.2", default-features = false, features = ["json", "gzip", "native-tls", "http2", "charset", "system-proxy"] }
 
+[target.'cfg(target_os = "macos")'.dependencies]
+reqwest = { version = "0.13.2", default-features = false, features = ["json", "gzip", "native-tls", "http2", "charset", "system-proxy"] }
+
 [target.'cfg(target_arch = "wasm32")'.dependencies]
 getrandom_02 = { package = "getrandom", version = "0.2", default-features = false, features = [
   "js",
