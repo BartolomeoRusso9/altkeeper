@@ -12,12 +12,12 @@ use isideload::{
     auth::apple_account::{AppleAccount, TwoFactorCallbackParams, TwoFactorCallbackResponse},
     dev::{
         app_ids::{AppId, AppIdsApi, Profile},
-        devices::DevicesApi,
         developer_session::DeveloperSession,
         device_type::DeveloperDeviceType,
+        devices::DevicesApi,
         teams::{DeveloperTeam, TeamsApi},
     },
-    sideload::{SideloaderBuilder, builder::MaxCertsBehavior},
+    sideload::{builder::MaxCertsBehavior, SideloaderBuilder},
     util::{callbacks::MaxCertsCallbackBox, fs_storage::FsStorage},
 };
 use serde::{Deserialize, Serialize};
@@ -197,15 +197,20 @@ async fn anisette_for_altstore_once(dir: &Path) -> Result<serde_json::Value, Str
     use isideload::{anisette::AnisetteDataGenerator, auth::grandslam::GrandSlam};
 
     let provider = anisette_provider(dir)?;
-    let mut generator =
-        AnisetteDataGenerator::new(Arc::new(tokio::sync::RwLock::new(provider)));
-    let info = generator.get_client_info().await.map_err(|e| e.to_string())?;
+    let mut generator = AnisetteDataGenerator::new(Arc::new(tokio::sync::RwLock::new(provider)));
+    let info = generator
+        .get_client_info()
+        .await
+        .map_err(|e| e.to_string())?;
     let gs = Arc::new(
         GrandSlam::new(info.clone(), false, None)
             .await
             .map_err(|e| e.to_string())?,
     );
-    let data = generator.get_anisette_data(gs).await.map_err(|e| e.to_string())?;
+    let data = generator
+        .get_anisette_data(gs)
+        .await
+        .map_err(|e| e.to_string())?;
     let now = std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)
         .map(|d| d.as_secs())
@@ -226,7 +231,9 @@ async fn anisette_for_altstore_once(dir: &Path) -> Result<serde_json::Value, Str
 
 #[cfg(test)]
 mod tests {
-    use super::{anisette_url, is_max_certs_error, iso8601_utc, max_certs_behavior, needs_reprovision};
+    use super::{
+        anisette_url, is_max_certs_error, iso8601_utc, max_certs_behavior, needs_reprovision,
+    };
     use isideload::sideload::builder::MaxCertsBehavior;
 
     #[test]
@@ -266,8 +273,14 @@ mod tests {
     #[test]
     fn revoca_certificati_solo_se_richiesta() {
         assert!(matches!(max_certs_behavior(None), MaxCertsBehavior::Error));
-        assert!(matches!(max_certs_behavior(Some("0")), MaxCertsBehavior::Error));
-        assert!(matches!(max_certs_behavior(Some("1")), MaxCertsBehavior::Revoke));
+        assert!(matches!(
+            max_certs_behavior(Some("0")),
+            MaxCertsBehavior::Error
+        ));
+        assert!(matches!(
+            max_certs_behavior(Some("1")),
+            MaxCertsBehavior::Revoke
+        ));
         assert!(is_max_certs_error("error code 7460: You already have"));
     }
 }
@@ -409,7 +422,10 @@ pub async fn pick_team(
     let _ = std::io::stdout().flush();
     let mut s = String::new();
     let _ = std::io::stdin().read_line(&mut s);
-    let n: usize = s.trim().parse().map_err(|_| "scelta non valida".to_string())?;
+    let n: usize = s
+        .trim()
+        .parse()
+        .map_err(|_| "scelta non valida".to_string())?;
     teams
         .into_iter()
         .nth(n.wrapping_sub(1))

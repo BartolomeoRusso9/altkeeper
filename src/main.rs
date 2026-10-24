@@ -58,9 +58,12 @@ fn phone_addr(opt: Option<String>) -> Result<Option<SocketAddr>, String> {
 
 /// Porta su cui ascolta AltServer: `--altserver-port`/`--port`, altrimenti 49500.
 fn altserver_port(opt: Option<String>) -> Result<u16, String> {
-    opt.map(|v| v.parse::<u16>().map_err(|e| format!("porta non valida: {e}")))
-        .transpose()
-        .map(|p| p.unwrap_or(49500))
+    opt.map(|v| {
+        v.parse::<u16>()
+            .map_err(|e| format!("porta non valida: {e}"))
+    })
+    .transpose()
+    .map(|p| p.unwrap_or(49500))
 }
 
 /// Legge una rete nella forma `10.7.0.0/24`.
@@ -68,10 +71,16 @@ fn parse_cidr(s: &str) -> Result<(std::net::Ipv4Addr, u8), String> {
     let (ip, bits) = s
         .split_once('/')
         .ok_or_else(|| format!("--dns-clients {s}: manca la lunghezza, per esempio 10.7.0.0/24"))?;
-    let ip = ip.parse().map_err(|e| format!("--dns-clients: indirizzo non valido: {e}"))?;
-    let bits: u8 = bits.parse().map_err(|e| format!("--dns-clients: /{bits} non valido: {e}"))?;
+    let ip = ip
+        .parse()
+        .map_err(|e| format!("--dns-clients: indirizzo non valido: {e}"))?;
+    let bits: u8 = bits
+        .parse()
+        .map_err(|e| format!("--dns-clients: /{bits} non valido: {e}"))?;
     if bits > 32 {
-        return Err(format!("--dns-clients: /{bits} non esiste, il massimo è /32"));
+        return Err(format!(
+            "--dns-clients: /{bits} non esiste, il massimo è /32"
+        ));
     }
     Ok((ip, bits))
 }
@@ -80,7 +89,9 @@ fn parse_cidr(s: &str) -> Result<(std::net::Ipv4Addr, u8), String> {
 /// unicast). Serve per farsi trovare da AltStore quando il telefono non è sulla rete di casa:
 /// iOS non manda le richieste Bonjour multicast dentro le VPN, ma le query DNS sì.
 fn start_dnssd(opt: impl Fn(&str) -> Option<String>, altserver_port: u16) -> Result<(), String> {
-    let Some(domain) = opt("--dns-domain") else { return Ok(()) };
+    let Some(domain) = opt("--dns-domain") else {
+        return Ok(());
+    };
     let address: std::net::Ipv4Addr = opt("--dns-address")
         .ok_or(
             "--dns-domain vuole anche --dns-address <ip>: l'indirizzo a cui il telefono si \
@@ -89,7 +100,9 @@ fn start_dnssd(opt: impl Fn(&str) -> Option<String>, altserver_port: u16) -> Res
         .parse()
         .map_err(|e| format!("--dns-address non valido: {e}"))?;
     let port: u16 = match opt("--dns-port") {
-        Some(p) => p.parse().map_err(|e| format!("--dns-port non valido: {e}"))?,
+        Some(p) => p
+            .parse()
+            .map_err(|e| format!("--dns-port non valido: {e}"))?,
         None => 5533,
     };
     // Da dove arrivano i client: serve perché iOS scopre il dominio chiedendo del "rovescio"
@@ -125,9 +138,7 @@ async fn open_phone(
 }
 
 /// Legge e interpreta tutti i profili presenti sul telefono.
-async fn phone_profiles(
-    link: &mut phone::PhoneLink,
-) -> Result<Vec<profile::PhoneProfile>, String> {
+async fn phone_profiles(link: &mut phone::PhoneLink) -> Result<Vec<profile::PhoneProfile>, String> {
     let raw = link.misagent.copy_all().await.map_err(dbg)?;
     Ok(raw.iter().filter_map(|r| profile::parse(r)).collect())
 }
@@ -156,8 +167,7 @@ async fn cmd_phone(addr: Option<SocketAddr>) -> Result<(), String> {
 
 async fn cmd_login(apple_id: Option<String>) -> Result<(), String> {
     let apple_id = apple_id.ok_or("uso: altkeeper login <apple-id>")?;
-    let password = rpassword::prompt_password(format!("Password di {apple_id}: "))
-        .map_err(dbg)?;
+    let password = rpassword::prompt_password(format!("Password di {apple_id}: ")).map_err(dbg)?;
     let password = password.trim().to_string();
     if password.is_empty() {
         return Err("password vuota".into());
@@ -178,7 +188,10 @@ async fn cmd_login(apple_id: Option<String>) -> Result<(), String> {
     std::io::Write::flush(&mut std::io::stdout()).ok();
     let mut answer = String::new();
     std::io::stdin().read_line(&mut answer).ok();
-    let save = matches!(answer.trim().to_lowercase().as_str(), "s" | "si" | "sì" | "y");
+    let save = matches!(
+        answer.trim().to_lowercase().as_str(),
+        "s" | "si" | "sì" | "y"
+    );
 
     apple::save_account(
         Path::new("."),
@@ -245,12 +258,17 @@ async fn cmd_renew(
     let mut due: Vec<(&str, i64)> = Vec::new();
     for p in latest {
         let Some(bundle) = p.bundle_id.as_deref() else {
-            say(&format!("   {}: bundle ID cannot be read, skipping", p.name));
+            say(&format!(
+                "   {}: bundle ID cannot be read, skipping",
+                p.name
+            ));
             continue;
         };
         let days = p.days_left().unwrap_or(-1);
         if !force && days > min_days {
-            say(&format!("   {bundle}: expires in {days} days, no renewal needed"));
+            say(&format!(
+                "   {bundle}: expires in {days} days, no renewal needed"
+            ));
             continue;
         }
         due.push((bundle, days));
@@ -269,16 +287,25 @@ async fn cmd_renew(
     let mut done = 0;
     for (bundle, days) in due {
         let Some(app) = ids.iter().find(|a| a.identifier == bundle) else {
-            say(&format!("   {bundle}: no matching App ID on Apple, skipping"));
+            say(&format!(
+                "   {bundle}: no matching App ID on Apple, skipping"
+            ));
             continue;
         };
         if dry_run {
-            say(&format!("   {bundle}: expires in {days} days, WOULD RENEW (dry run)"));
+            say(&format!(
+                "   {bundle}: expires in {days} days, WOULD RENEW (dry run)"
+            ));
             continue;
         }
-        say(&format!("   {bundle}: expires in {days} days, downloading a new profile..."));
+        say(&format!(
+            "   {bundle}: expires in {days} days, downloading a new profile..."
+        ));
         let new = apple::download_profile(&mut sess, &team, app).await?;
-        say(&format!("      nuovo profilo valido fino al {}", new.date_expire.to_xml_format()));
+        say(&format!(
+            "      nuovo profilo valido fino al {}",
+            new.date_expire.to_xml_format()
+        ));
         let bytes: Vec<u8> = new.encoded_profile.into();
         phone::with_timeout(
             "Profile install",
@@ -293,7 +320,10 @@ async fn cmd_renew(
     if !dry_run && done > 0 {
         say("Final check on the phone:");
         let after = phone_profiles(&mut link).await?;
-        for p in after.iter().filter(|p| p.team_id.as_deref() == Some(team_id.as_str())) {
+        for p in after
+            .iter()
+            .filter(|p| p.team_id.as_deref() == Some(team_id.as_str()))
+        {
             say(&profile_line(p));
         }
     }
@@ -321,7 +351,10 @@ async fn cmd_profile_remove(addr: Option<SocketAddr>, uuid: Option<String>) -> R
     let path = Path::new(SAVED_DIR).join(format!("{}.mobileprovision", parsed.uuid));
     fsperm::write_private(&path, found).map_err(dbg)?;
     if std::fs::read(&path).map_err(dbg)? != *found {
-        return Err(format!("la copia in {} non coincide: non tolgo niente", path.display()));
+        return Err(format!(
+            "la copia in {} non coincide: non tolgo niente",
+            path.display()
+        ));
     }
     println!("Copia salvata in {}", path.display());
 
@@ -412,7 +445,10 @@ async fn main() -> Result<(), String> {
         "apps" => cmd_apps().await,
         "renew" => {
             let min_days = opt("--min-days")
-                .map(|v| v.parse::<i64>().map_err(|e| format!("--min-days non valido: {e}")))
+                .map(|v| {
+                    v.parse::<i64>()
+                        .map_err(|e| format!("--min-days non valido: {e}"))
+                })
                 .transpose()?
                 .unwrap_or(3);
             cmd_renew(
@@ -452,7 +488,8 @@ async fn main() -> Result<(), String> {
                 std::env::set_current_dir(&dir).map_err(|e| format!("--dir {dir}: {e}"))?;
             }
             apple::anisette_url(env::var("ANISETTE_URL").as_deref())?;
-            let port = altserver::start(altserver_port(opt("--port"))?, phone_addr(opt("--phone"))?)?;
+            let port =
+                altserver::start(altserver_port(opt("--port"))?, phone_addr(opt("--phone"))?)?;
             start_dnssd(&opt, port)?;
             println!("AltServer attivo. Ctrl-C per fermarlo.");
             tokio::select! {

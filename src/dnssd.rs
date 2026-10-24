@@ -91,12 +91,16 @@ impl Zone {
         // come dominio di ricerca. La seconda, più importante, è sul "rovescio" dell'indirizzo
         // che il client ha sulla rete: iOS la fa da solo, senza che sul telefono sia impostato
         // niente. Rispondendo anche a quella, il server si fa trovare senza configurazione.
-        if let Some(rest) = ["b", "db", "lb"].iter().find_map(|p| {
-            name.strip_prefix(&format!("{p}._dns-sd._udp."))
-        }) {
+        if let Some(rest) = ["b", "db", "lb"]
+            .iter()
+            .find_map(|p| name.strip_prefix(&format!("{p}._dns-sd._udp.")))
+        {
             if rest == self.domain || self.covers_reverse(rest) {
                 return Some(if want(TYPE_PTR) {
-                    vec![Record::Ptr { name: name.to_string(), target: self.domain.clone() }]
+                    vec![Record::Ptr {
+                        name: name.to_string(),
+                        target: self.domain.clone(),
+                    }]
                 } else {
                     vec![]
                 });
@@ -105,7 +109,10 @@ impl Zone {
 
         if name == self.browse {
             return Some(if want(TYPE_PTR) {
-                vec![Record::Ptr { name: name.to_string(), target: self.instance.clone() }]
+                vec![Record::Ptr {
+                    name: name.to_string(),
+                    target: self.instance.clone(),
+                }]
             } else {
                 vec![]
             });
@@ -131,7 +138,10 @@ impl Zone {
 
         if name == self.host {
             return Some(if want(TYPE_A) {
-                vec![Record::A { name: name.to_string(), address: self.address }]
+                vec![Record::A {
+                    name: name.to_string(),
+                    address: self.address,
+                }]
             } else {
                 vec![]
             });
@@ -145,7 +155,9 @@ impl Zone {
     /// Accetta sia l'indirizzo intero (`2.0.7.10.in-addr.arpa`, che è come lo chiede iOS) sia la
     /// sola parte di rete (`0.7.10.in-addr.arpa`): in quel caso gli ottetti mancanti valgono zero.
     fn covers_reverse(&self, name: &str) -> bool {
-        let Some(rev) = name.strip_suffix(".in-addr.arpa") else { return false };
+        let Some(rev) = name.strip_suffix(".in-addr.arpa") else {
+            return false;
+        };
         let mut octets = [0u8; 4];
         let mut quanti = 0;
         // Il nome inverso ha gli ottetti al contrario: 2.0.7.10 vuol dire 10.7.0.2.
@@ -153,7 +165,9 @@ impl Zone {
             if i >= 4 {
                 return false;
             }
-            let Ok(n) = part.parse::<u8>() else { return false };
+            let Ok(n) = part.parse::<u8>() else {
+                return false;
+            };
             octets[3 - i] = n;
             quanti += 1;
         }
@@ -178,10 +192,23 @@ impl Zone {
 }
 
 enum Record {
-    A { name: String, address: Ipv4Addr },
-    Ptr { name: String, target: String },
-    Txt { name: String, text: String },
-    Srv { name: String, port: u16, target: String },
+    A {
+        name: String,
+        address: Ipv4Addr,
+    },
+    Ptr {
+        name: String,
+        target: String,
+    },
+    Txt {
+        name: String,
+        text: String,
+    },
+    Srv {
+        name: String,
+        port: u16,
+        target: String,
+    },
 }
 
 // ---------------------------------------------------------------------------------------------
@@ -203,7 +230,9 @@ pub fn start(zone: Zone, bind: SocketAddr) -> Result<u16, String> {
     std::thread::spawn(move || {
         let mut buf = [0u8; 512];
         loop {
-            let Ok((len, from)) = socket.recv_from(&mut buf) else { continue };
+            let Ok((len, from)) = socket.recv_from(&mut buf) else {
+                continue;
+            };
             if let Some(reply) = handle(&zone, &buf[..len]) {
                 let _ = socket.send_to(&reply, from);
             }
@@ -218,7 +247,11 @@ fn handle(zone: &Zone, query: &[u8]) -> Option<Vec<u8>> {
     let q = parse_query(query)?;
     let answers = zone.answer(&q.name, q.qtype);
 
-    let rcode = if answers.is_none() { RCODE_NXDOMAIN } else { RCODE_OK };
+    let rcode = if answers.is_none() {
+        RCODE_NXDOMAIN
+    } else {
+        RCODE_OK
+    };
     let records = answers.unwrap_or_default();
 
     let mut out = build_reply(&q, rcode, &records);
@@ -298,7 +331,13 @@ fn parse_query(buf: &[u8]) -> Option<Query> {
         return None;
     }
 
-    Some(Query { id, recursion_desired: flags & 0x0100 != 0, name, qtype, qclass })
+    Some(Query {
+        id,
+        recursion_desired: flags & 0x0100 != 0,
+        name,
+        qtype,
+        qclass,
+    })
 }
 
 /// Legge un nome a etichette e torna anche dove finisce. I puntatori di compressione non sono
@@ -431,7 +470,10 @@ mod tests {
         assert_eq!(conta_risposte(&msg), 1);
         // Il nome dell'istanza compare nei dati della risposta.
         let testo = String::from_utf8_lossy(&msg);
-        assert!(testo.contains("altkeeper-casa2"), "istanza assente: {testo:?}");
+        assert!(
+            testo.contains("altkeeper-casa2"),
+            "istanza assente: {testo:?}"
+        );
     }
 
     #[test]
@@ -439,19 +481,28 @@ mod tests {
         let srv = risposta("altkeeper-casa2._altserver._tcp.casa.internal", TYPE_SRV);
         assert_eq!(conta_risposte(&srv), 1);
         // La porta 49500 sta nei dati come due byte.
-        assert!(srv.windows(2).any(|w| w == 49500u16.to_be_bytes()), "porta assente");
+        assert!(
+            srv.windows(2).any(|w| w == 49500u16.to_be_bytes()),
+            "porta assente"
+        );
 
         let txt = risposta("altkeeper-casa2._altserver._tcp.casa.internal", TYPE_TXT);
         assert_eq!(conta_risposte(&txt), 1);
         let testo = String::from_utf8_lossy(&txt);
-        assert!(testo.contains("serverID=8e68e3c9"), "serverID assente: {testo:?}");
+        assert!(
+            testo.contains("serverID=8e68e3c9"),
+            "serverID assente: {testo:?}"
+        );
     }
 
     #[test]
     fn il_nome_host_da_lindirizzo() {
         let msg = risposta("altkeeper-8e68e3c9.casa.internal", TYPE_A);
         assert_eq!(conta_risposte(&msg), 1);
-        assert!(msg.windows(4).any(|w| w == [10, 0, 0, 5]), "indirizzo assente");
+        assert!(
+            msg.windows(4).any(|w| w == [10, 0, 0, 5]),
+            "indirizzo assente"
+        );
     }
 
     #[test]
@@ -511,8 +562,11 @@ mod tests {
             (Ipv4Addr::new(10, 0, 0, 0), 24),
         );
         assert_eq!(z.instance, "altkeeper-casa2._altserver._tcp.casa.internal");
-        let msg = handle(&z, &domanda("altkeeper-casa2._altserver._tcp.casa.internal", TYPE_SRV))
-            .expect("nessuna risposta");
+        let msg = handle(
+            &z,
+            &domanda("altkeeper-casa2._altserver._tcp.casa.internal", TYPE_SRV),
+        )
+        .expect("nessuna risposta");
         assert_eq!(conta_risposte(&msg), 1);
     }
 
@@ -530,8 +584,11 @@ mod tests {
             .expect("nessuna risposta");
         assert_eq!(conta_risposte(&msg), 1);
         // Nel TXT il serverID deve restare come l'utente l'ha scritto.
-        let txt = handle(&z, &domanda("altkeeper-casa2._altserver._tcp.casa.internal", TYPE_TXT))
-            .expect("nessuna risposta");
+        let txt = handle(
+            &z,
+            &domanda("altkeeper-casa2._altserver._tcp.casa.internal", TYPE_TXT),
+        )
+        .expect("nessuna risposta");
         assert!(String::from_utf8_lossy(&txt).contains("serverID=8E68E3C9"));
     }
 
@@ -551,7 +608,11 @@ mod tests {
         let nome = format!("altkeeper-casa2._altserver._tcp.{lungo}");
         let msg = handle(&z, &domanda(&nome, TYPE_ANY)).expect("nessuna risposta");
         let flags = u16::from_be_bytes([msg[2], msg[3]]);
-        assert_ne!(flags & FLAG_TRUNCATED, 0, "manca la bandierina di troncamento");
+        assert_ne!(
+            flags & FLAG_TRUNCATED,
+            0,
+            "manca la bandierina di troncamento"
+        );
         assert_eq!(rcode(&msg), RCODE_OK);
         assert_eq!(conta_risposte(&msg), 0);
         assert!(msg.len() <= MAX_REPLY);

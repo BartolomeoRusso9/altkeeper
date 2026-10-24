@@ -7,17 +7,18 @@ use std::path::Path;
 use std::time::{Duration, Instant};
 
 use idevice::{
-    IdeviceService, ReadWrite, RsdService,
     core_device_proxy::CoreDeviceProxy,
     misagent::MisagentClient,
     provider::UsbmuxdProvider,
     remote_pairing::{
-        RemotePairingClient, RemotePairingLockdownService, RpPairingFile, RpPairingSocket,
-        tunnel::connect_tls_psk_tunnel_native,
+        tunnel::connect_tls_psk_tunnel_native, RemotePairingClient, RemotePairingLockdownService,
+        RpPairingFile, RpPairingSocket,
     },
     rsd::RsdHandshake,
+    services::lockdown::LockdownClient,
     tcp::adapter::Adapter,
     usbmuxd::{Connection, UsbmuxdAddr, UsbmuxdConnection},
+    IdeviceService, ReadWrite, RsdService,
 };
 use tokio::net::TcpStream;
 
@@ -25,6 +26,26 @@ pub const HOST_NAME: &str = "casa2";
 
 pub fn dbg<E: std::fmt::Debug>(e: E) -> String {
     format!("{e:?}")
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum TransportKind {
+    Legacy,
+    Rsd,
+}
+
+fn major_ios_version(version: &str) -> Option<u32> {
+    version.split('.').next()?.parse().ok()
+}
+
+fn select_transport(version: &str, force_legacy: bool) -> Result<TransportKind, String> {
+    let major = major_ios_version(version)
+        .ok_or_else(|| format!("Versione iOS non riconosciuta: {version}"))?;
+    Ok(if force_legacy || major < 17 {
+        TransportKind::Legacy
+    } else {
+        TransportKind::Rsd
+    })
 }
 
 /// Il client misagent, più il tunnel (`adapter`) e la stretta di mano RSD (`hs`) con cui aprire
@@ -142,8 +163,7 @@ pub async fn connect_usb(say: &mut impl FnMut(&str)) -> Result<Option<PhoneLink>
     else {
         return Ok(None);
     };
-    let Ok(Ok(devs)) = tokio::time::timeout(Duration::from_secs(3), mux.get_devices()).await
-    else {
+    let Ok(Ok(devs)) = tokio::time::timeout(Duration::from_secs(3), mux.get_devices()).await else {
         return Ok(None);
     };
     let Some(dev) = devs.iter().find(|d| d.connection_type == Connection::Usb) else {
@@ -151,6 +171,33 @@ pub async fn connect_usb(say: &mut impl FnMut(&str)) -> Result<Option<PhoneLink>
     };
     say("iPhone trovato via USB, mi collego col cavo...");
     let provider = dev.to_provider(addr, "altkeeper");
+
+    // Rileva iOS prima di provare CoreDeviceProxy/RSD. Il probe dedicato verifica anche
+    // start_session e Misagent; questa fase cambia solo il rilevamento della versione.
+    let version = tokio::time::timeout(Duration::from_secs(10), async {
+        let mut lockdown = LockdownClient::connect(&provider).await.map_err(dbg)?;
+        let value = lockdown
+            .get_value(Some("ProductVersion"), None)
+            .await
+            .map_err(dbg)?;
+        value
+            .as_string()
+            .map(str::to_owned)
+            .ok_or_else(|| "ProductVersion non restituita come stringa".to_string())
+    })
+    .await
+    .map_err(|_| "timeout leggendo ProductVersion via lockdown".to_string())??;
+
+    let transport = select_transport(&version, crate::env::is_set("LEGACY"))?;
+    say(&format!(
+        "iOS rilevato: {version} (trasporto {transport:?})"
+    ));
+    if transport == TransportKind::Legacy {
+        return Err(format!(
+            "iOS {version} richiede il trasporto USB legacy, che non è ancora implementato; \
+             questa build non tenterà CoreDeviceProxy/RSD"
+        ));
+    }
 
     let open = async {
         let proxy = CoreDeviceProxy::connect(&provider).await.map_err(dbg)?;
@@ -205,7 +252,9 @@ pub async fn with_timeout<T>(
 /// (due demoni nello stesso processo si contendono la porta 5353 e le risposte si perdono).
 pub fn mdns() -> Option<&'static mdns_sd::ServiceDaemon> {
     static DAEMON: std::sync::OnceLock<Option<mdns_sd::ServiceDaemon>> = std::sync::OnceLock::new();
-    DAEMON.get_or_init(|| mdns_sd::ServiceDaemon::new().ok()).as_ref()
+    DAEMON
+        .get_or_init(|| mdns_sd::ServiceDaemon::new().ok())
+        .as_ref()
 }
 
 /// Cerca via Bonjour gli iPhone in rete (servizio `_remotepairing._tcp`): indirizzi IPv4 e porta.
@@ -251,7 +300,10 @@ pub async fn discover(wait: Duration) -> Vec<SocketAddr> {
 /// Gli altri indirizzi della stessa rete /24 (senza il proprio, né rete né broadcast).
 fn subnet_hosts(own: std::net::Ipv4Addr) -> Vec<std::net::Ipv4Addr> {
     let [a, b, c, d] = own.octets();
-    (1..=254u8).filter(|h| *h != d).map(|h| std::net::Ipv4Addr::new(a, b, c, h)).collect()
+    (1..=254u8)
+        .filter(|h| *h != d)
+        .map(|h| std::net::Ipv4Addr::new(a, b, c, h))
+        .collect()
 }
 
 /// Cerca il telefono senza Bonjour: prova la porta del servizio (di solito 49152) su tutta la
@@ -350,7 +402,9 @@ pub async fn connect_auto(
             Ok(Err(e)) => last_err = e,
             Err(_) => last_err = format!("{addr} non risponde"),
         }
-        say(&format!("{addr} non risponde, cerco il telefono in rete..."));
+        say(&format!(
+            "{addr} non risponde, cerco il telefono in rete..."
+        ));
     }
     if tried.is_empty() {
         say("Cerco il telefono in rete...");
@@ -423,6 +477,29 @@ pub async fn pair_usb(out: &str) -> Result<(), String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn legge_la_versione_ios() {
+        assert_eq!(major_ios_version("12.5.8"), Some(12));
+        assert_eq!(major_ios_version("16.7.12"), Some(16));
+        assert_eq!(major_ios_version("17.0"), Some(17));
+        assert_eq!(major_ios_version("27.0.1"), Some(27));
+        assert_eq!(major_ios_version("unknown"), None);
+        assert_eq!(major_ios_version(""), None);
+    }
+
+    #[test]
+    fn seleziona_il_trasporto_per_versione() {
+        assert_eq!(select_transport("12.5.8", false), Ok(TransportKind::Legacy));
+        assert_eq!(
+            select_transport("16.7.12", false),
+            Ok(TransportKind::Legacy)
+        );
+        assert_eq!(select_transport("17.0", false), Ok(TransportKind::Rsd));
+        assert_eq!(select_transport("27.0.1", false), Ok(TransportKind::Rsd));
+        assert_eq!(select_transport("27.0.1", true), Ok(TransportKind::Legacy));
+        assert!(select_transport("unknown", false).is_err());
+    }
 
     fn temp_file(name: &str) -> std::path::PathBuf {
         std::env::temp_dir().join(format!("altkeeper-test-{}-{name}", std::process::id()))

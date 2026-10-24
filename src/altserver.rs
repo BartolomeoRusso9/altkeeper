@@ -26,13 +26,13 @@ use std::rc::Rc;
 use std::sync::Mutex;
 use std::time::Duration;
 
-use idevice::{RsdService, installation_proxy::InstallationProxyClient};
-use serde_json::{Value, json};
+use idevice::{installation_proxy::InstallationProxyClient, RsdService};
+use serde_json::{json, Value};
 use tokio::io::{AsyncRead, AsyncReadExt, AsyncWrite, AsyncWriteExt};
-use tokio::net::TcpStream;
 use tokio::net::tcp::OwnedWriteHalf;
+use tokio::net::TcpStream;
 
-use crate::{PAIRING_FILE, apple, phone, profile};
+use crate::{apple, phone, profile, PAIRING_FILE};
 
 const SERVICE_TYPE: &str = "_altserver._tcp.local.";
 const MAX_JSON: usize = 4 * 1024 * 1024;
@@ -83,26 +83,38 @@ pub fn start(port: u16, phone: Option<SocketAddr>) -> Result<u16, String> {
     let port = listener.local_addr().map_err(|e| e.to_string())?.port();
     let id = server_id()?;
     register_bonjour(port, &id)?;
-    log(&format!("in ascolto sulla porta {port}, serverID {}...", &id[..8]));
+    log(&format!(
+        "in ascolto sulla porta {port}, serverID {}...",
+        &id[..8]
+    ));
 
     std::thread::spawn(move || {
         for stream in listener.incoming() {
             let Ok(stream) = stream else { continue };
             let ctx = Ctx { phone };
-            let _ = std::thread::Builder::new().stack_size(16 * 1024 * 1024).spawn(move || {
-                let peer = stream.peer_addr().map(|a| a.to_string()).unwrap_or_default();
-                let Ok(rt) = tokio::runtime::Builder::new_current_thread().enable_all().build()
-                else {
-                    return;
-                };
-                rt.block_on(async move {
-                    if stream.set_nonblocking(true).is_err() {
+            let _ = std::thread::Builder::new()
+                .stack_size(16 * 1024 * 1024)
+                .spawn(move || {
+                    let peer = stream
+                        .peer_addr()
+                        .map(|a| a.to_string())
+                        .unwrap_or_default();
+                    let Ok(rt) = tokio::runtime::Builder::new_current_thread()
+                        .enable_all()
+                        .build()
+                    else {
                         return;
-                    }
-                    let Ok(stream) = TcpStream::from_std(stream) else { return };
-                    handle_connection(stream, ctx, &peer).await;
+                    };
+                    rt.block_on(async move {
+                        if stream.set_nonblocking(true).is_err() {
+                            return;
+                        }
+                        let Ok(stream) = TcpStream::from_std(stream) else {
+                            return;
+                        };
+                        handle_connection(stream, ctx, &peer).await;
+                    });
                 });
-            });
         }
     });
     Ok(port)
@@ -123,7 +135,9 @@ fn server_id() -> Result<String, String> {
     rustls::crypto::ring::default_provider()
         .secure_random
         .fill(&mut bytes)
-        .map_err(|_| "non riesco a generare il serverID: numeri casuali non disponibili".to_string())?;
+        .map_err(|_| {
+            "non riesco a generare il serverID: numeri casuali non disponibili".to_string()
+        })?;
     let id: String = bytes.iter().map(|b| format!("{b:02x}")).collect();
     let _ = std::fs::create_dir_all("state");
     std::fs::write(&path, &id).map_err(|e| format!("non riesco a salvare il serverID: {e}"))?;
@@ -278,10 +292,12 @@ async fn handle_connection(stream: TcpStream, ctx: Ctx, peer: &str) {
                 log("JIT (EnableUnsignedCodeExecution) non supportato");
                 error(ERR_UNSUPPORTED_IOS)
             }
-            "PrepareAppRequest" => match Box::pin(receive_and_install(&mut rd, &wr, &ctx, &req)).await {
-                Ok(()) => progress(1.0),
-                Err(code) => error(code),
-            },
+            "PrepareAppRequest" => {
+                match Box::pin(receive_and_install(&mut rd, &wr, &ctx, &req)).await {
+                    Ok(()) => progress(1.0),
+                    Err(code) => error(code),
+                }
+            }
             _ => error(ERR_UNKNOWN_REQUEST),
         };
         let what = match reply["errorCode"].as_i64() {
@@ -331,7 +347,10 @@ async fn anisette() -> Value {
     let started = std::time::Instant::now();
     match apple::anisette_for_altstore(Path::new(".")).await {
         Ok(v) => {
-            log(&format!("dati anisette pronti in {:.1} s", started.elapsed().as_secs_f32()));
+            log(&format!(
+                "dati anisette pronti in {:.1} s",
+                started.elapsed().as_secs_f32()
+            ));
             *cache = Some((std::time::Instant::now(), v.clone()));
             json!({ "version": 1, "identifier": "AnisetteDataResponse", "anisetteData": v })
         }
@@ -384,7 +403,11 @@ async fn install_profiles(ctx: &Ctx, req: &Value) -> Value {
 async fn remove_profiles(ctx: &Ctx, req: &Value) -> Value {
     let wanted: Vec<String> = req["bundleIdentifiers"]
         .as_array()
-        .map(|a| a.iter().filter_map(|v| v.as_str().map(str::to_lowercase)).collect())
+        .map(|a| {
+            a.iter()
+                .filter_map(|v| v.as_str().map(str::to_lowercase))
+                .collect()
+        })
         .unwrap_or_default();
     if !wanted.is_empty() {
         let _work = phone_lock();
@@ -406,7 +429,10 @@ async fn remove_profiles(ctx: &Ctx, req: &Value) -> Value {
                 .is_some_and(|b| wanted.contains(&b.to_lowercase()));
             if matches {
                 match link.misagent.remove(&p.uuid).await {
-                    Ok(()) => log(&format!("profilo tolto: {}", p.bundle_id.unwrap_or_default())),
+                    Ok(()) => log(&format!(
+                        "profilo tolto: {}",
+                        p.bundle_id.unwrap_or_default()
+                    )),
                     Err(e) => log(&format!("profilo {} non tolto: {e:?}", p.uuid)),
                 }
             }
@@ -428,7 +454,9 @@ async fn remove_app(ctx: &Ctx, req: &Value) -> Value {
         let mut inst = InstallationProxyClient::connect_rsd(&mut link.adapter, &mut link.hs)
             .await
             .map_err(|e| format!("{e:?}"))?;
-        inst.uninstall(bundle, None).await.map_err(|e| format!("{e:?}"))
+        inst.uninstall(bundle, None)
+            .await
+            .map_err(|e| format!("{e:?}"))
     })
     .await;
     match result {
@@ -464,7 +492,9 @@ async fn receive_and_install(
     while got < ipa.len() {
         match tokio::time::timeout_at(deadline, rd.read(&mut ipa[got..])).await {
             Ok(Ok(0)) => {
-                log(&format!("AltStore ha chiuso la connessione dopo {got} di {size} byte"));
+                log(&format!(
+                    "AltStore ha chiuso la connessione dopo {got} di {size} byte"
+                ));
                 return Err(ERR_INVALID_REQUEST);
             }
             Ok(Ok(n)) => {
@@ -475,11 +505,15 @@ async fn receive_and_install(
                 }
             }
             Ok(Err(e)) => {
-                log(&format!("errore leggendo l'app dopo {got} di {size} byte: {e}"));
+                log(&format!(
+                    "errore leggendo l'app dopo {got} di {size} byte: {e}"
+                ));
                 return Err(ERR_INVALID_REQUEST);
             }
             Err(_) => {
-                log(&format!("app non ricevuta per intero: {got} di {size} byte"));
+                log(&format!(
+                    "app non ricevuta per intero: {got} di {size} byte"
+                ));
                 return Err(ERR_INVALID_REQUEST);
             }
         }
@@ -516,14 +550,16 @@ async fn receive_and_install(
             let _ = send(&wr, &progress(pct.min(99) as f64 / 100.0)).await;
         }
     };
-    Box::pin(idevice::utils::installation::install_bytes_with_callback_rsd(
-        &mut link.adapter,
-        &mut link.hs,
-        ipa,
-        None,
-        callback,
-        (),
-    ))
+    Box::pin(
+        idevice::utils::installation::install_bytes_with_callback_rsd(
+            &mut link.adapter,
+            &mut link.hs,
+            ipa,
+            None,
+            callback,
+            (),
+        ),
+    )
     .await
     .map_err(|e| {
         log(&format!("installazione non riuscita: {e:?}"));
@@ -545,7 +581,9 @@ mod tests {
     #[tokio::test]
     async fn messaggi_con_la_lunghezza_davanti_in_little_endian() {
         let (mut a, mut b) = duplex(1024);
-        write_frame(&mut a, &json!({"identifier": "X", "version": 1})).await.unwrap();
+        write_frame(&mut a, &json!({"identifier": "X", "version": 1}))
+            .await
+            .unwrap();
         // 4 byte di lunghezza + JSON
         let mut raw = [0u8; 4];
         b.read_exact(&mut raw).await.unwrap();
@@ -567,7 +605,9 @@ mod tests {
         a.write_all(&(-5i32).to_le_bytes()).await.unwrap();
         assert!(read_frame(&mut b).await.is_err());
         let (mut a, mut b) = duplex(64);
-        a.write_all(&((MAX_JSON as i32) + 1).to_le_bytes()).await.unwrap();
+        a.write_all(&((MAX_JSON as i32) + 1).to_le_bytes())
+            .await
+            .unwrap();
         assert!(read_frame(&mut b).await.is_err());
         let (a, mut b) = duplex(64);
         drop(a);
@@ -576,7 +616,10 @@ mod tests {
 
     #[test]
     fn forme_delle_risposte_come_le_decodifica_altstore() {
-        assert_eq!(error(11), json!({"version": 3, "identifier": "ErrorResponse", "errorCode": 11}));
+        assert_eq!(
+            error(11),
+            json!({"version": 3, "identifier": "ErrorResponse", "errorCode": 11})
+        );
         assert_eq!(
             simple("RemoveAppResponse"),
             json!({"version": 1, "identifier": "RemoveAppResponse"})
@@ -589,8 +632,16 @@ mod tests {
     fn profili_base64_dalla_richiesta() {
         // "abc" e "hello" in base64
         let req = json!({"provisioningProfiles": ["YWJj", "aGVsbG8="]});
-        assert_eq!(decode_profiles(&req).unwrap(), vec![b"abc".to_vec(), b"hello".to_vec()]);
-        assert_eq!(decode_profiles(&json!({"provisioningProfiles": []})).unwrap().len(), 0);
+        assert_eq!(
+            decode_profiles(&req).unwrap(),
+            vec![b"abc".to_vec(), b"hello".to_vec()]
+        );
+        assert_eq!(
+            decode_profiles(&json!({"provisioningProfiles": []}))
+                .unwrap()
+                .len(),
+            0
+        );
         assert!(decode_profiles(&json!({"provisioningProfiles": ["a$b"]})).is_none());
         assert!(decode_profiles(&json!({})).is_none());
     }
@@ -676,7 +727,9 @@ mod tests {
             json!({"version": 1, "identifier": "PrepareAppRequest", "udid": "x", "contentSize": 2}),
         )];
         frames.push(b"PK".to_vec());
-        frames.push(frame(json!({"version": 1, "identifier": "AnisetteDataRequest"})));
+        frames.push(frame(
+            json!({"version": 1, "identifier": "AnisetteDataRequest"}),
+        ));
         let out = dialogo(frames, 1).await;
         assert_eq!(out[0]["errorCode"], ERR_UNKNOWN_REQUEST);
     }
@@ -700,7 +753,9 @@ mod tests {
                 });
 
                 let mut a = TcpStream::connect(addr).await.unwrap();
-                a.write_all(&frame(json!({"version": 1, "identifier": "Boh"}))).await.unwrap();
+                a.write_all(&frame(json!({"version": 1, "identifier": "Boh"})))
+                    .await
+                    .unwrap();
                 let r = read_frame(&mut a).await.unwrap().unwrap();
                 assert_eq!(
                     serde_json::from_slice::<Value>(&r).unwrap()["errorCode"],
@@ -708,7 +763,9 @@ mod tests {
                 );
                 // `a` resta aperta: `b` deve avere risposta lo stesso.
                 let mut b = TcpStream::connect(addr).await.unwrap();
-                b.write_all(&frame(json!({"version": 1, "identifier": "Boh"}))).await.unwrap();
+                b.write_all(&frame(json!({"version": 1, "identifier": "Boh"})))
+                    .await
+                    .unwrap();
                 let r = tokio::time::timeout(Duration::from_secs(2), read_frame(&mut b))
                     .await
                     .expect("la seconda connessione non deve aspettare la prima")
