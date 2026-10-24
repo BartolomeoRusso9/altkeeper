@@ -280,7 +280,12 @@ async fn cmd_renew(
         let new = apple::download_profile(&mut sess, &team, app).await?;
         say(&format!("      nuovo profilo valido fino al {}", new.date_expire.to_xml_format()));
         let bytes: Vec<u8> = new.encoded_profile.into();
-        link.misagent.install(bytes).await.map_err(dbg)?;
+        phone::with_timeout(
+            "Profile install",
+            std::time::Duration::from_secs(60),
+            async { link.misagent.install(bytes).await.map_err(dbg) },
+        )
+        .await?;
         say("      installed on the phone");
         done += 1;
     }

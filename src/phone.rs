@@ -10,6 +10,7 @@ use idevice::{
     IdeviceService, ReadWrite, RsdService,
     core_device_proxy::CoreDeviceProxy,
     misagent::MisagentClient,
+    provider::UsbmuxdProvider,
     remote_pairing::{
         RemotePairingClient, RemotePairingLockdownService, RpPairingFile, RpPairingSocket,
         tunnel::connect_tls_psk_tunnel_native,
@@ -33,6 +34,10 @@ pub struct PhoneLink {
     pub misagent: MisagentClient,
     pub adapter: idevice::tcp::handle::AdapterHandle,
     pub hs: RsdHandshake,
+    /// Provider usbmuxd del telefono, presente solo se ci si è collegati via cavo. Serve per i
+    /// servizi "classici" (lockdown: AFC, installation_proxy, misagent) che su USB funzionano
+    /// anche quando il tunnel software CoreDeviceProxy si pianta (iOS 27).
+    pub usb: Option<UsbmuxdProvider>,
     _keep: Vec<Box<dyn Any>>,
 }
 
@@ -119,6 +124,7 @@ pub async fn connect(addr: SocketAddr, pairing_path: &str) -> Result<PhoneLink, 
         misagent,
         adapter,
         hs,
+        usb: None,
         _keep: vec![Box::new(client)],
     })
 }
@@ -153,20 +159,45 @@ pub async fn connect_usb(say: &mut impl FnMut(&str)) -> Result<Option<PhoneLink>
         let mut adapter = adapter.to_async_handle();
         let rsd_stream = adapter.connect(rsd_port).await.map_err(dbg)?;
         let mut hs = RsdHandshake::new(rsd_stream).await.map_err(dbg)?;
-        let misagent = MisagentClient::connect_rsd(&mut adapter, &mut hs)
-            .await
-            .map_err(dbg)?;
+        // misagent: prima il servizio lockdown via usbmuxd (come pymobiledevice3), che su USB è
+        // il più affidabile; se non parte, ripiego sul tunnel RSD.
+        let misagent = match MisagentClient::connect(&provider).await {
+            Ok(m) => m,
+            Err(_) => MisagentClient::connect_rsd(&mut adapter, &mut hs)
+                .await
+                .map_err(dbg)?,
+        };
         Ok::<_, String>(PhoneLink {
             misagent,
             adapter,
             hs,
+            usb: None,
             _keep: Vec::new(),
         })
     };
     match tokio::time::timeout(Duration::from_secs(15), open).await {
-        Ok(Ok(link)) => Ok(Some(link)),
+        Ok(Ok(mut link)) => {
+            link.usb = Some(provider);
+            Ok(Some(link))
+        }
         Ok(Err(e)) => Err(e),
         Err(_) => Err("il telefono non risponde via USB".into()),
+    }
+}
+
+/// Esegue `fut` con un tempo massimo: un telefono che smette di rispondere non deve bloccare
+/// il processo per sempre, deve dare un errore leggibile.
+pub async fn with_timeout<T>(
+    what: &str,
+    limit: Duration,
+    fut: impl std::future::Future<Output = Result<T, String>>,
+) -> Result<T, String> {
+    match tokio::time::timeout(limit, fut).await {
+        Ok(r) => r,
+        Err(_) => Err(format!(
+            "{what}: nessuna risposta dal telefono dopo {} s (operazione interrotta)",
+            limit.as_secs()
+        )),
     }
 }
 

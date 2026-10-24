@@ -780,30 +780,50 @@ async fn install_ipa(app: &Arc<App>, upload: &UploadedIpa) -> Result<(), String>
     )
     .await?;
 
-    app.push_line("Installing the signed app over Wi-Fi…");
     let _work = crate::altserver::phone_lock();
-    let (_, mut link) = phone::connect_auto(app.phone, PAIRING_FILE, |_: &str| {}).await?;
+    let (via, mut link) = phone::connect_auto(app.phone, PAIRING_FILE, |_: &str| {}).await?;
+    app.push_line(&if via == phone::Via::Usb {
+        "Installing the signed app over USB…".to_string()
+    } else {
+        "Installing the signed app over Wi-Fi…".to_string()
+    });
     // Il telefono manda decine di notifiche con la stessa percentuale: una riga ogni 10%.
     let last_logged = std::sync::atomic::AtomicI64::new(-1);
     let started = std::time::Instant::now();
-    isideload::sideload::install::install_app_rsd(
-        &mut link.adapter,
-        &mut link.hs,
-        &signed_app.path,
-        |percent| {
-            if let Some(step) = progress_step(percent, last_logged.load(Ordering::Relaxed)) {
-                last_logged.store(step, Ordering::Relaxed);
-                app.push_line(&format!(
-                    "Installation progress: {step}% ({}s)",
-                    started.elapsed().as_secs()
-                ));
+    let progress = |percent: u64| {
+        if let Some(step) = progress_step(percent, last_logged.load(Ordering::Relaxed)) {
+            last_logged.store(step, Ordering::Relaxed);
+            app.push_line(&format!(
+                "Installation progress: {step}% ({}s)",
+                started.elapsed().as_secs()
+            ));
+        }
+    };
+    // Su USB si usano AFC + installation_proxy via usbmuxd (come `pymobiledevice3 apps install`);
+    // il tunnel software RSD serve solo in Wi-Fi.
+    let install = async {
+        match link.usb.as_ref() {
+            Some(provider) => {
+                isideload::sideload::install::install_app(provider, &signed_app.path, &progress)
+                    .await
             }
-        },
-    )
-    .await
-    .map_err(|e| format!("Installation failed: {e}"))?;
-    Ok(())
+            None => {
+                isideload::sideload::install::install_app_rsd(
+                    &mut link.adapter,
+                    &mut link.hs,
+                    &signed_app.path,
+                    &progress,
+                )
+                .await
+            }
+        }
+        .map_err(|e| format!("Installation failed: {e}"))
+    };
+    phone::with_timeout("Installation", INSTALL_TIMEOUT, install).await
 }
+
+/// Tempo massimo per l'installazione di un'app (upload AFC + installazione).
+const INSTALL_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(15 * 60);
 
 /// La percentuale da scrivere nel log, o `None` se non è ancora cambiata di 10 punti
 /// dall'ultima scritta (`last`, -1 se nessuna). Il 100% si scrive sempre, una volta sola.

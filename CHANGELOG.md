@@ -2,6 +2,9 @@
 
 ## Unreleased
 
+### Fixed
+- **Install hung forever over USB on iOS 27.** On USB, installing an IPA now goes through AFC + installation_proxy via usbmuxd (same path as `pymobiledevice3 apps install`) instead of the CoreDeviceProxy software tunnel, and the profile client prefers the lockdown service too. App install and profile install now have timeouts, so a stuck phone produces an error instead of a silent hang. The status line says "over USB" or "over Wi-Fi" according to the real transport. Not compiled in this environment: please run `cargo build` and test.
+
 ### Changed
 - **Sign-in works again (Apple `-80045` since 2026-10-12).** The vendored `isideload` was updated to
   **0.4.6** (upstream `8ca39b62`), which takes the anisette `client_info` from the anisette server
