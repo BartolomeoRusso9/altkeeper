@@ -107,7 +107,7 @@ i JSON o la pagina web. I comandi del menu 2FA restano `d`, `r` (se disponibile)
 ### 1. Ottieni il programma
 
 ```sh
-git clone https://github.com/lgg/altkeeper
+git clone https://github.com/BartolomeoRusso9/altkeeper
 cd altkeeper
 docker run --rm -v "$PWD":/w -w /w rust:1-bookworm cargo build --release
 ```
@@ -190,7 +190,7 @@ Lascialo acceso (come servizio o in Docker). Sull'iPhone, in AltStore, apri **My
 ./altkeeper login tuo.apple.id@example.com
 ```
 
-Chiede la password (**si vede sullo schermo mentre scrivi**) e il codice 2FA a 6 cifre che arriva
+Chiede la password (**il terminale nasconde ciò che digiti**) e il codice 2FA a 6 cifre che arriva
 agli altri tuoi dispositivi. Rispondi `s` alla domanda sul salvare la password: è quello che permette
 al rinnovo di girare senza di te. Viene salvata **in chiaro** in `account.json` (permessi 600).
 Accedi una volta sola; se Apple risponde con errori, aspetta prima di riprovare invece di ripetere.
@@ -267,8 +267,8 @@ porte 8787 (web) e 49500 (AltServer) devono essere libere.
 
 Un workflow di GitHub Actions (`.github/workflows/docker.yml`) definisce test Linux/Windows e
 pubblica l'immagine su `ghcr.io/<utente>/altkeeper` a ogni push su `main` (amd64) e sui tag
-`vX.Y.Z` (amd64 e arm64). Nel fork non risultano ancora esecuzioni di GitHub Actions: i test
-Windows sono stati eseguiti localmente, non in CI. Se il repository è privato, anche il pacchetto lo è.
+`vX.Y.Z` (amd64 e arm64). La modifica aggiunge test Linux/Windows; i test locali Windows 10
+non sostituiscono le verifiche CI della PR. Se il repository è privato, anche il pacchetto lo è.
 
 ### 10. Windows (nativo, senza Docker)
 
@@ -283,7 +283,7 @@ end-to-end.
    Studio* con il carico di lavoro **Sviluppo di applicazioni desktop con C++**. Poi, in PowerShell:
 
    ```powershell
-   git clone https://github.com/lgg/altkeeper
+   git clone https://github.com/BartolomeoRusso9/altkeeper
    cd altkeeper
    cargo test --locked
    cargo build --release --locked
