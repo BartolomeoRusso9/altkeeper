@@ -7,19 +7,19 @@ use std::path::Path;
 use std::time::{Duration, Instant};
 
 use idevice::{
+    IdeviceService, ReadWrite, RsdService,
     core_device_proxy::CoreDeviceProxy,
     installation_proxy::InstallationProxyClient,
     misagent::MisagentClient,
     provider::{IdeviceProvider, UsbmuxdProvider},
     remote_pairing::{
-        tunnel::connect_tls_psk_tunnel_native, RemotePairingClient, RemotePairingLockdownService,
-        RpPairingFile, RpPairingSocket,
+        RemotePairingClient, RemotePairingLockdownService, RpPairingFile, RpPairingSocket,
+        tunnel::connect_tls_psk_tunnel_native,
     },
     rsd::RsdHandshake,
     services::lockdown::LockdownClient,
     tcp::adapter::Adapter,
     usbmuxd::{Connection, UsbmuxdAddr, UsbmuxdConnection},
-    IdeviceService, ReadWrite, RsdService,
 };
 use tokio::net::TcpStream;
 
@@ -344,7 +344,8 @@ pub async fn connect_usb(say: &mut impl FnMut(&str)) -> Result<Option<PhoneLink>
     else {
         return Ok(None);
     };
-    let Ok(Ok(devs)) = tokio::time::timeout(Duration::from_secs(3), mux.get_devices()).await else {
+    let Ok(Ok(devs)) = tokio::time::timeout(Duration::from_secs(3), mux.get_devices()).await
+    else {
         return Ok(None);
     };
     let Some(dev) = devs.iter().find(|d| d.connection_type == Connection::Usb) else {
@@ -452,9 +453,7 @@ pub async fn with_timeout<T>(
 /// (due demoni nello stesso processo si contendono la porta 5353 e le risposte si perdono).
 pub fn mdns() -> Option<&'static mdns_sd::ServiceDaemon> {
     static DAEMON: std::sync::OnceLock<Option<mdns_sd::ServiceDaemon>> = std::sync::OnceLock::new();
-    DAEMON
-        .get_or_init(|| mdns_sd::ServiceDaemon::new().ok())
-        .as_ref()
+    DAEMON.get_or_init(|| mdns_sd::ServiceDaemon::new().ok()).as_ref()
 }
 
 /// Cerca via Bonjour gli iPhone in rete (servizio `_remotepairing._tcp`): indirizzi IPv4 e porta.
@@ -500,10 +499,7 @@ pub async fn discover(wait: Duration) -> Vec<SocketAddr> {
 /// Gli altri indirizzi della stessa rete /24 (senza il proprio, né rete né broadcast).
 fn subnet_hosts(own: std::net::Ipv4Addr) -> Vec<std::net::Ipv4Addr> {
     let [a, b, c, d] = own.octets();
-    (1..=254u8)
-        .filter(|h| *h != d)
-        .map(|h| std::net::Ipv4Addr::new(a, b, c, h))
-        .collect()
+    (1..=254u8).filter(|h| *h != d).map(|h| std::net::Ipv4Addr::new(a, b, c, h)).collect()
 }
 
 /// Cerca il telefono senza Bonjour: prova la porta del servizio (di solito 49152) su tutta la
@@ -602,9 +598,7 @@ pub async fn connect_auto(
             Ok(Err(e)) => last_err = e,
             Err(_) => last_err = format!("{addr} non risponde"),
         }
-        say(&format!(
-            "{addr} non risponde, cerco il telefono in rete..."
-        ));
+        say(&format!("{addr} non risponde, cerco il telefono in rete..."));
     }
     if tried.is_empty() {
         say("Cerco il telefono in rete...");

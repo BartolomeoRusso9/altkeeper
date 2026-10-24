@@ -115,15 +115,9 @@ mod tests {
         ];
         let latest = latest_by_bundle(&all);
         assert_eq!(latest.len(), 2);
-        let a = latest
-            .iter()
-            .find(|p| p.bundle_id.as_deref() == Some("com.a"))
-            .unwrap();
+        let a = latest.iter().find(|p| p.bundle_id.as_deref() == Some("com.a")).unwrap();
         assert_eq!(a.uuid, "nuovo");
-        let b = latest
-            .iter()
-            .find(|p| p.bundle_id.as_deref() == Some("com.b"))
-            .unwrap();
+        let b = latest.iter().find(|p| p.bundle_id.as_deref() == Some("com.b")).unwrap();
         assert_eq!(b.uuid, "altro");
     }
 

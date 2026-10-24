@@ -17,17 +17,17 @@ use std::sync::{Arc, Mutex, MutexGuard};
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 use axum::{
+    Json, Router,
     extract::{DefaultBodyLimit, Multipart, Request, State},
-    http::{header, HeaderMap, HeaderValue, Method, StatusCode},
+    http::{HeaderMap, HeaderValue, Method, StatusCode, header},
     middleware::{self, Next},
     response::{Html, IntoResponse, Response},
     routing::{get, post},
-    Json, Router,
 };
 use serde::Deserialize;
-use serde_json::{json, Value};
+use serde_json::{Value, json};
 
-use crate::{apple, phone, profile, PAIRING_FILE};
+use crate::{PAIRING_FILE, apple, phone, profile};
 
 const INDEX_HTML: &str = include_str!("web/index.html");
 const RENEW_LOG: &str = "renew.log";
@@ -127,40 +127,35 @@ where
 {
     let app = guard.0.clone();
     // Più stack del predefinito (2 MB): i futuri del telefono e di Apple sono grandi, soprattutto in debug.
-    let _ = std::thread::Builder::new()
-        .stack_size(16 * 1024 * 1024)
-        .spawn(move || {
-            let _guard = guard;
-            let outcome = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-                let rt = tokio::runtime::Builder::new_current_thread()
-                    .enable_all()
-                    .build()
-                    .expect("runtime");
-                rt.block_on(make(app.clone()));
-            }));
-            if outcome.is_err() {
-                let mut g = app.lock();
-                g.snapshot.checking = false;
-                g.job.running = false;
-                g.job.ok = Some(false);
-                g.job
-                    .lines
-                    .push("Internal error: the operation was interrupted.".into());
-                if g.login.phase == "working" {
-                    g.login = LoginView {
-                        phase: "failed",
-                        message: "Internal error.".into(),
-                    };
-                }
+    let _ = std::thread::Builder::new().stack_size(16 * 1024 * 1024).spawn(move || {
+        let _guard = guard;
+        let outcome = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            let rt = tokio::runtime::Builder::new_current_thread()
+                .enable_all()
+                .build()
+                .expect("runtime");
+            rt.block_on(make(app.clone()));
+        }));
+        if outcome.is_err() {
+            let mut g = app.lock();
+            g.snapshot.checking = false;
+            g.job.running = false;
+            g.job.ok = Some(false);
+            g.job
+                .lines
+                .push("Internal error: the operation was interrupted.".into());
+            if g.login.phase == "working" {
+                g.login = LoginView {
+                    phase: "failed",
+                    message: "Internal error.".into(),
+                };
             }
-        });
+        }
+    });
 }
 
 fn now() -> u64 {
-    SystemTime::now()
-        .duration_since(UNIX_EPOCH)
-        .map(|d| d.as_secs())
-        .unwrap_or(0)
+    SystemTime::now().duration_since(UNIX_EPOCH).map(|d| d.as_secs()).unwrap_or(0)
 }
 
 // ---------------------------------------------------------------------------------------------
@@ -219,9 +214,7 @@ pub async fn serve(
             "raggiungibile solo da questo computer"
         }
     );
-    axum::serve(listener, router)
-        .await
-        .map_err(|e| format!("{e:?}"))
+    axum::serve(listener, router).await.map_err(|e| format!("{e:?}"))
 }
 
 // ---------------------------------------------------------------------------------------------
@@ -252,15 +245,9 @@ async fn guard(State(app): State<Arc<App>>, req: Request, next: Next) -> Respons
     let mut res = next.run(req).await;
     let h = res.headers_mut();
     h.insert(header::CACHE_CONTROL, HeaderValue::from_static("no-store"));
-    h.insert(
-        header::X_CONTENT_TYPE_OPTIONS,
-        HeaderValue::from_static("nosniff"),
-    );
+    h.insert(header::X_CONTENT_TYPE_OPTIONS, HeaderValue::from_static("nosniff"));
     h.insert(header::X_FRAME_OPTIONS, HeaderValue::from_static("DENY"));
-    h.insert(
-        header::REFERRER_POLICY,
-        HeaderValue::from_static("no-referrer"),
-    );
+    h.insert(header::REFERRER_POLICY, HeaderValue::from_static("no-referrer"));
     h.insert(
         header::CONTENT_SECURITY_POLICY,
         HeaderValue::from_static(
@@ -286,10 +273,7 @@ fn host_is_local(headers: &HeaderMap) -> bool {
 }
 
 fn basic_password_ok(headers: &HeaderMap, pin: &str) -> bool {
-    let Some(value) = headers
-        .get(header::AUTHORIZATION)
-        .and_then(|v| v.to_str().ok())
-    else {
+    let Some(value) = headers.get(header::AUTHORIZATION).and_then(|v| v.to_str().ok()) else {
         return false;
     };
     let Some(encoded) = value.strip_prefix("Basic ") else {
@@ -458,11 +442,7 @@ async fn renew(
     {
         let mut g = app.lock();
         g.job = JobView {
-            kind: if force {
-                "renew_all".into()
-            } else {
-                "renew_due".into()
-            },
+            kind: if force { "renew_all".into() } else { "renew_due".into() },
             running: true,
             lines: Vec::new(),
             ok: None,
@@ -507,8 +487,7 @@ impl Drop for UploadInProgress {
 fn new_upload_file() -> Result<(PathBuf, std::fs::File), String> {
     let dir = Path::new("state").join("uploads");
     std::fs::create_dir_all(&dir).map_err(|e| format!("Cannot create upload directory: {e}"))?;
-    crate::fsperm::restrict_dir(&dir)
-        .map_err(|e| format!("Cannot protect upload directory: {e}"))?;
+    crate::fsperm::restrict_dir(&dir).map_err(|e| format!("Cannot protect upload directory: {e}"))?;
 
     let mut random = [0u8; 16];
     rustls::crypto::ring::default_provider()
@@ -544,19 +523,14 @@ async fn receive_ipa(multipart: &mut Multipart) -> Result<UploadedIpa, (StatusCo
         .map_err(|e| (StatusCode::BAD_REQUEST, format!("Invalid upload: {e}")))?
     {
         if field.name() != Some("ipa") || upload.is_some() {
-            return Err((
-                StatusCode::BAD_REQUEST,
-                "Send one IPA file in the 'ipa' field.".into(),
-            ));
+            return Err((StatusCode::BAD_REQUEST, "Send one IPA file in the 'ipa' field.".into()));
         }
         let filename = field.file_name().unwrap_or("");
         if !filename.to_ascii_lowercase().ends_with(".ipa") {
-            return Err((
-                StatusCode::BAD_REQUEST,
-                "Choose a file with the .ipa extension.".into(),
-            ));
+            return Err((StatusCode::BAD_REQUEST, "Choose a file with the .ipa extension.".into()));
         }
-        let (path, file) = new_upload_file().map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e))?;
+        let (path, file) = new_upload_file()
+            .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e))?;
         upload = Some(UploadInProgress {
             path,
             file: Some(file),
@@ -569,44 +543,22 @@ async fn receive_ipa(multipart: &mut Multipart) -> Result<UploadedIpa, (StatusCo
             .map_err(|e| (StatusCode::BAD_REQUEST, format!("Upload failed: {e}")))?
         {
             let Some(upload) = upload.as_mut() else {
-                return Err((
-                    StatusCode::INTERNAL_SERVER_ERROR,
-                    "Upload state was lost.".into(),
-                ));
+                return Err((StatusCode::INTERNAL_SERVER_ERROR, "Upload state was lost.".into()));
             };
             let next_size = upload.size.saturating_add(chunk.len());
             if next_size > MAX_IPA_BYTES {
-                return Err((
-                    StatusCode::PAYLOAD_TOO_LARGE,
-                    "IPA exceeds the 1 GiB limit.".into(),
-                ));
+                return Err((StatusCode::PAYLOAD_TOO_LARGE, "IPA exceeds the 1 GiB limit.".into()));
             }
-            upload
-                .file
-                .as_mut()
-                .ok_or_else(|| {
-                    (
-                        StatusCode::INTERNAL_SERVER_ERROR,
-                        "Upload file was closed unexpectedly.".into(),
-                    )
-                })?
-                .write_all(&chunk)
-                .map_err(|e| {
-                    (
-                        StatusCode::INTERNAL_SERVER_ERROR,
-                        format!("Cannot save upload: {e}"),
-                    )
-                })?;
+            upload.file.as_mut().ok_or_else(|| {
+                (StatusCode::INTERNAL_SERVER_ERROR, "Upload file was closed unexpectedly.".into())
+            })?.write_all(&chunk)
+                .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, format!("Cannot save upload: {e}")))?;
             upload.size = next_size;
         }
     }
 
-    let upload = upload.ok_or_else(|| {
-        (
-            StatusCode::BAD_REQUEST,
-            "Choose an IPA file to install.".into(),
-        )
-    })?;
+    let upload = upload
+        .ok_or_else(|| (StatusCode::BAD_REQUEST, "Choose an IPA file to install.".into()))?;
     if upload.size == 0 {
         return Err((StatusCode::BAD_REQUEST, "The IPA file is empty.".into()));
     }
@@ -669,10 +621,7 @@ async fn login(
     let Some(guard) = try_busy(&app) else {
         return json_err(StatusCode::CONFLICT, BUSY_MSG);
     };
-    app.lock().login = LoginView {
-        phase: "working",
-        message: String::new(),
-    };
+    app.lock().login = LoginView { phase: "working", message: String::new() };
     *app.tfa.last_error.lock().unwrap_or_else(|e| e.into_inner()) = None;
     let save = req.save_password;
     let password = req.password;
@@ -734,10 +683,7 @@ async fn run_check(app: Arc<App>) {
             g.snapshot.error = None;
             g.snapshot.detail = None;
             g.snapshot.profiles_total = profiles.len();
-            g.snapshot.apps = team
-                .as_deref()
-                .map(|t| app_views(&profiles, t))
-                .unwrap_or_default();
+            g.snapshot.apps = team.as_deref().map(|t| app_views(&profiles, t)).unwrap_or_default();
         }
         Ok(Err(e)) => {
             g.snapshot.reachable = Some(false);
@@ -811,8 +757,15 @@ async fn install_ipa(app: &Arc<App>, upload: &UploadedIpa) -> Result<(), String>
     };
 
     app.push_line("Signing the IPA with the configured Apple ID…");
-    let signed_app =
-        apple::sign_ipa(session, &account, team, &device_name, &udid, &upload.0).await?;
+    let signed_app = apple::sign_ipa(
+        session,
+        &account,
+        team,
+        &device_name,
+        &udid,
+        &upload.0,
+    )
+    .await?;
 
     let _work = crate::altserver::phone_lock();
     let (via, mut link) = phone::connect_auto(app.phone, PAIRING_FILE, |_: &str| {}).await?;
@@ -837,6 +790,7 @@ async fn install_ipa(app: &Arc<App>, upload: &UploadedIpa) -> Result<(), String>
 
     phone::with_timeout("Installation", INSTALL_TIMEOUT, install).await
 }
+
 /// Tempo massimo per l'installazione di un'app (upload AFC + installazione).
 const INSTALL_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(15 * 60);
 
@@ -857,11 +811,7 @@ async fn run_login(app: Arc<App>, apple_id: String, password: String, save: bool
             dir,
             &apple::Account {
                 apple_id: apple_id.clone(),
-                password: if save {
-                    password.clone()
-                } else {
-                    String::new()
-                },
+                password: if save { password.clone() } else { String::new() },
                 team_id: Some(team.team_id.clone()),
             },
         )?;
@@ -882,10 +832,7 @@ async fn run_login(app: Arc<App>, apple_id: String, password: String, save: bool
                 )
             },
         },
-        Err(e) => LoginView {
-            phase: "failed",
-            message: short_apple_error(&e),
-        },
+        Err(e) => LoginView { phase: "failed", message: short_apple_error(&e) },
     };
     // I dati del telefono possono cambiare in base al team: il prossimo controllo li rifà.
     g.snapshot.checked_at = None;
@@ -896,10 +843,7 @@ async fn run_login(app: Arc<App>, apple_id: String, password: String, save: bool
 // ---------------------------------------------------------------------------------------------
 
 fn label_of(bundle: &str, team: &str) -> String {
-    bundle
-        .strip_suffix(&format!(".{team}"))
-        .unwrap_or(bundle)
-        .to_string()
+    bundle.strip_suffix(&format!(".{team}")).unwrap_or(bundle).to_string()
 }
 
 fn level_for(days: i64) -> &'static str {
@@ -914,9 +858,7 @@ fn level_for(days: i64) -> &'static str {
 
 /// Le app del team, una riga per bundle (il profilo più recente), dalla più urgente.
 fn app_views(profiles: &[profile::PhoneProfile], team: &str) -> Vec<AppView> {
-    let mine = profiles
-        .iter()
-        .filter(|p| p.team_id.as_deref() == Some(team));
+    let mine = profiles.iter().filter(|p| p.team_id.as_deref() == Some(team));
     let mut views: Vec<AppView> = profile::latest_by_bundle(mine)
         .into_iter()
         .filter_map(|p| {
@@ -939,7 +881,8 @@ fn app_views(profiles: &[profile::PhoneProfile], team: &str) -> Vec<AppView> {
 fn friendly_error(err: &str) -> String {
     let e = err.to_lowercase();
     if e.contains("manca il pairing") {
-        "iPhone pairing is missing. Set it up once over USB (see the guide).".into()
+        "iPhone pairing is missing. Set it up once over USB (see the guide)."
+            .into()
     } else if e.contains("early eof") || e.contains("pairing con l'iphone non riuscito") {
         "The iPhone no longer recognizes the pairing: set it up again over USB.".into()
     } else if e.contains("no route to host")
@@ -1034,10 +977,7 @@ fn english_job_line(line: &str) -> String {
         .strip_prefix("USB non riuscita (")
         .and_then(|s| s.strip_suffix("), provo in Wi-Fi..."))
     {
-        return format!(
-            "USB connection failed ({}); trying Wi-Fi...",
-            short_error(detail)
-        );
+        return format!("USB connection failed ({}); trying Wi-Fi...", short_error(detail));
     }
     if let Some(date) = line.strip_prefix("      nuovo profilo valido fino al ") {
         return format!("      New profile valid until {date}");
@@ -1053,7 +993,8 @@ fn short_apple_error(err: &str) -> String {
         return "Incorrect Apple ID or password.".into();
     }
     if e.contains("429") || e.contains("too many requests") {
-        return "Apple is rate-limiting requests. Wait a while, then try once.".into();
+        return "Apple is rate-limiting requests. Wait a while, then try once."
+            .into();
     }
     if e.contains("aborted") || e.contains("abort") {
         return "Sign-in canceled: the code did not arrive in time.".into();
@@ -1063,10 +1004,7 @@ fn short_apple_error(err: &str) -> String {
         .filter(|l| l.contains('●'))
         .last()
         .map(|l| l.trim().trim_start_matches('●').trim().to_string());
-    last.unwrap_or_else(|| short_error(err))
-        .chars()
-        .take(240)
-        .collect()
+    last.unwrap_or_else(|| short_error(err)).chars().take(240).collect()
 }
 
 /// Ultimi giri di `renew.log`, dal più recente. Legge sia le righe del cron sia quelle scritte
@@ -1088,10 +1026,7 @@ fn parse_history(text: &str, max: usize) -> Vec<Value> {
             let code = lines
                 .iter()
                 .rev()
-                .find_map(|l| {
-                    l.strip_prefix("esito:")
-                        .or_else(|| l.strip_prefix("result:"))
-                })
+                .find_map(|l| l.strip_prefix("esito:").or_else(|| l.strip_prefix("result:")))
                 .and_then(|c| c.trim().parse::<i32>().ok());
             let installed = lines
                 .iter()
@@ -1111,12 +1046,15 @@ fn parse_history(text: &str, max: usize) -> Vec<Value> {
                 friendly_error(last)
             } else if installed > 0 {
                 format!("Renewed {installed} apps")
-            } else if lines.iter().any(|l| {
-                l.contains("Niente da rinnovare")
-                    || l.contains("non serve rinnovare")
-                    || l.contains("Nothing to renew")
-                    || l.contains("no renewal needed")
-            }) {
+            } else if lines
+                .iter()
+                .any(|l| {
+                    l.contains("Niente da rinnovare")
+                        || l.contains("non serve rinnovare")
+                        || l.contains("Nothing to renew")
+                        || l.contains("no renewal needed")
+                })
+            {
                 "Nothing to renew".to_string()
             } else {
                 "Done".to_string()
@@ -1155,11 +1093,7 @@ fn local_time() -> String {
 }
 
 fn append_log(lines: &[String], ok: bool) {
-    let Ok(mut f) = std::fs::OpenOptions::new()
-        .create(true)
-        .append(true)
-        .open(RENEW_LOG)
-    else {
+    let Ok(mut f) = std::fs::OpenOptions::new().create(true).append(true).open(RENEW_LOG) else {
         return;
     };
     let _ = writeln!(f, "=== {} (interfaccia web)", local_time());
@@ -1225,10 +1159,7 @@ mod tests {
         assert!(basic_password_ok(&vuoto, "1234"));
         assert!(!basic_password_ok(&ok, "9999"));
         assert!(!basic_password_ok(&headers(&[]), "1234"));
-        assert!(!basic_password_ok(
-            &headers(&[("authorization", "Bearer 1234")]),
-            "1234"
-        ));
+        assert!(!basic_password_ok(&headers(&[("authorization", "Bearer 1234")]), "1234"));
         // una password con i due punti dentro: vale tutto dopo il primo
         let due_punti = headers(&[("authorization", "Basic dTphOmI=")]); // u:a:b
         assert!(basic_password_ok(&due_punti, "a:b"));
@@ -1246,10 +1177,7 @@ mod tests {
 
     #[test]
     fn etichette_e_livelli() {
-        assert_eq!(
-            label_of("com.spotify.client.TEAM", "TEAM"),
-            "com.spotify.client"
-        );
+        assert_eq!(label_of("com.spotify.client.TEAM", "TEAM"), "com.spotify.client");
         assert_eq!(label_of("com.altro", "TEAM"), "com.altro");
         assert_eq!(level_for(-1), "urgent");
         assert_eq!(level_for(1), "urgent");
@@ -1287,17 +1215,11 @@ mod tests {
 
     #[test]
     fn errori_in_parole_semplici() {
-        assert!(
-            friendly_error("manca il pairing remoto rp-pairing.plist: crealo").contains("missing")
-        );
-        assert!(
-            friendly_error("pairing con l'iPhone non riuscito (Socket(... early eof ...))")
-                .contains("no longer recognizes")
-        );
-        assert!(friendly_error(
-            "Os { code: 113, kind: HostUnreachable, message: \"No route to host\" }"
-        )
-        .contains("cannot find the iPhone"));
+        assert!(friendly_error("manca il pairing remoto rp-pairing.plist: crealo").contains("missing"));
+        assert!(friendly_error("pairing con l'iPhone non riuscito (Socket(... early eof ...))")
+            .contains("no longer recognizes"));
+        assert!(friendly_error("Os { code: 113, kind: HostUnreachable, message: \"No route to host\" }")
+            .contains("cannot find the iPhone"));
         assert!(friendly_error("non trovo l'iPhone in rete: è acceso").contains("cannot find"));
         assert_eq!(friendly_error("boh"), "boh");
     }
@@ -1328,10 +1250,8 @@ mod tests {
         let lungo = "login Apple ID non riuscito: \n ● Failed to log in\n ● GrandSlam error\n \
                      ● Auth error -20101: Your account information was entered incorrectly.";
         assert_eq!(short_apple_error(lungo), "Incorrect Apple ID or password.");
-        assert!(
-            short_apple_error("HTTP status client error (429 Too Many Requests)")
-                .contains("rate-limiting")
-        );
+        assert!(short_apple_error("HTTP status client error (429 Too Many Requests)")
+            .contains("rate-limiting"));
         assert_eq!(
             short_apple_error("x\n ● uno\n ● due cose non previste"),
             "due cose non previste"
@@ -1364,10 +1284,7 @@ esito: 0
         assert_eq!(h[0]["ok"], true);
         assert!(h[0]["when"].as_str().unwrap().contains("interfaccia web"));
         assert_eq!(h[1]["ok"], false);
-        assert!(h[1]["summary"]
-            .as_str()
-            .unwrap()
-            .contains("cannot find the iPhone"));
+        assert!(h[1]["summary"].as_str().unwrap().contains("cannot find the iPhone"));
         assert_eq!(h[2]["summary"], "Nothing to renew");
         assert_eq!(parse_history(log, 1).len(), 1);
         assert!(parse_history("", 5).is_empty());
