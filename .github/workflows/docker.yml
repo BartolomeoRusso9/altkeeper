@@ -61,7 +61,9 @@ jobs:
           if ($LASTEXITCODE -ne 0 -or -not ($output -match '^uso: altkeeper')) { throw "Italian CLI help failed: $output" }
 
   image:
-    needs: test
+    # PRs run Linux and Windows tests only; build/push the multi-arch image once on main.
+    if: github.event_name != 'pull_request'
+    needs: [test, test-windows]
     runs-on: ubuntu-latest
     permissions:
       contents: read
