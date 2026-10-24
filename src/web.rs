@@ -19,7 +19,7 @@ use std::time::{Duration, SystemTime, UNIX_EPOCH};
 use axum::{
     Json, Router,
     extract::{DefaultBodyLimit, Multipart, Request, State},
-    http::{HeaderMap, HeaderValue, Method, StatusCode, header},
+    http::{HeaderMap, HeaderValue, Method, StatusCode, Uri, header},
     middleware::{self, Next},
     response::{Html, IntoResponse, Response},
     routing::{get, post},
@@ -193,6 +193,7 @@ pub async fn serve(
     let router = Router::new()
         .route("/", get(index))
         .route("/api/state", get(state))
+        .route("/api/logs", get(logs))
         .route("/api/check", post(check))
         .route("/api/renew", post(renew))
         .route(
@@ -344,6 +345,17 @@ fn json_ok() -> (StatusCode, Json<Value>) {
 }
 
 const BUSY_MSG: &str = "Another operation is already running: please wait for it to finish.";
+
+/// Le righe di log dopo `?since=N` (0 = tutte quelle in memoria), per la sezione Logs.
+async fn logs(uri: Uri) -> Json<Value> {
+    let since = uri
+        .query()
+        .and_then(|q| q.split('&').find_map(|kv| kv.strip_prefix("since=")))
+        .and_then(|v| v.parse().ok())
+        .unwrap_or(0);
+    let (seq, lines) = crate::log::since(since);
+    Json(json!({ "seq": seq, "lines": lines }))
+}
 
 async fn state(State(app): State<Arc<App>>) -> Json<Value> {
     let account = apple::read_account(Path::new("."));
@@ -1177,6 +1189,30 @@ mod tests {
         assert!(friendly_error("cannot find the iPhone on the network: is it on").contains("cannot find"));
         assert!(friendly_error("192.168.1.2:49152 did not respond").contains("cannot find"));
         assert_eq!(friendly_error("boh"), "boh");
+    }
+
+    #[tokio::test]
+    async fn api_logs_returns_new_lines() {
+        let mine = |v: &Value| -> Vec<String> {
+            v["lines"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .filter_map(|l| l.as_str())
+                .filter(|l| l.contains("logs-api-test"))
+                .map(String::from)
+                .collect()
+        };
+        let (before, _) = crate::log::since(u64::MAX);
+        crate::log::line("logs-api-test a");
+        crate::log::line("logs-api-test b");
+        let Json(v) = logs(format!("/api/logs?since={before}").parse().unwrap()).await;
+        let got = mine(&v);
+        assert_eq!(got.len(), 2);
+        assert!(got[0].ends_with("] logs-api-test a"));
+        let seq = v["seq"].as_u64().unwrap();
+        let Json(v) = logs(format!("/api/logs?since={seq}").parse().unwrap()).await;
+        assert!(mine(&v).is_empty());
     }
 
     #[test]

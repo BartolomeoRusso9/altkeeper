@@ -77,6 +77,7 @@
     max-height: 240px; overflow-y: auto; margin: 10px 0 0; white-space: pre-wrap; word-break: break-word;
   }
   .hist .ico { width: 1.4em; display: inline-block; }
+  pre.logs { max-height: 60vh; white-space: pre; }
   [hidden] { display: none !important; }
   footer { color: var(--muted); font-size: .85rem; text-align: center; margin-top: 20px; }
 </style>
@@ -167,6 +168,16 @@
     <h2>Recent renewals</h2>
     <p class="muted" id="hist-empty">Nothing yet. Automatic renewal runs every evening when configured on the server.</p>
     <ul class="plain" id="hist"></ul>
+  </section>
+
+  <section class="card" id="logs">
+    <h2>Logs</h2>
+    <div class="row">
+      <span class="muted grow">Live server log, newest at the bottom.</span>
+      <button id="btn-logs-copy" type="button">Copy</button>
+      <button id="btn-logs-clear" type="button">Clear view</button>
+    </div>
+    <pre class="log logs" id="logs-view"></pre>
   </section>
 
   <footer>For use on your home network only.</footer>
@@ -396,7 +407,28 @@ $("code-form").onsubmit = async (ev) => {
 };
 $("btn-resend").onclick = () => act(() => api("/api/login/resend", {}), "code-error");
 
+// Logs: only new lines are fetched; the view keeps the last 2,000.
+let logSeq = 0;
+async function pollLogs() {
+  try {
+    const r = await api("/api/logs?since=" + logSeq);
+    if (r.lines.length) {
+      const v = $("logs-view");
+      const atEnd = v.scrollTop + v.clientHeight >= v.scrollHeight - 4;
+      const all = (v.textContent ? v.textContent + "\n" : "") + r.lines.join("\n");
+      v.textContent = all.split("\n").slice(-2000).join("\n");
+      if (atEnd) v.scrollTop = v.scrollHeight;
+    }
+    logSeq = r.seq;
+  } catch (_) {}
+  setTimeout(pollLogs, 2000);
+}
+$("btn-logs-copy").onclick = () => navigator.clipboard.writeText($("logs-view").textContent);
+$("btn-logs-clear").onclick = () => { $("logs-view").textContent = ""; };
+
 refresh();
+pollLogs();
+if (location.hash === "#logs") $("logs").scrollIntoView();
 </script>
 </body>
 </html>
