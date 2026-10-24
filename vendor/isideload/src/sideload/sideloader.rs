@@ -1,7 +1,7 @@
 use crate::{
     dev::{
         app_groups::AppGroupsApi,
-        app_ids::AppIdsApi,
+        app_ids::{AppIdsApi, Profile},
         developer_session::DeveloperSession,
         devices::DevicesApi,
         teams::{DeveloperTeam, TeamsApi},
@@ -13,28 +13,30 @@ use crate::{
         cert_identity::CertificateIdentity,
         sign,
     },
-    util::{device::IdeviceInfo, storage::SideloadingStorage},
+    util::{callbacks::MaxCertsCallback, device::IdeviceInfo, storage::SideloadingStorage},
 };
 
 use std::path::PathBuf;
 
+use apple_codesign_quick::ProvisioningProfile;
 use idevice::provider::IdeviceProvider;
+use plist::Dictionary;
 use rootcause::{option_ext::OptionExt, prelude::*};
 use tracing::info;
 
-pub struct Sideloader {
+pub struct Sideloader<C: MaxCertsCallback> {
     team_selection: TeamSelection,
     storage: Box<dyn SideloadingStorage>,
     dev_session: DeveloperSession,
     machine_name: String,
     apple_email: String,
-    max_certs_behavior: MaxCertsBehavior,
+    max_certs_behavior: MaxCertsBehavior<C>,
     //extensions_behavior: ExtensionsBehavior,
     delete_app_after_install: bool,
     team: Option<DeveloperTeam>,
 }
 
-impl Sideloader {
+impl<C: MaxCertsCallback> Sideloader<C> {
     /// Construct a new `Sideloader` instance with the provided configuration
     ///
     /// See [`crate::sideload::SideloaderBuilder`] for more details and a more convenient way to construct a `Sideloader`.
@@ -42,7 +44,7 @@ impl Sideloader {
         dev_session: DeveloperSession,
         apple_email: String,
         team_selection: TeamSelection,
-        max_certs_behavior: MaxCertsBehavior,
+        max_certs_behavior: MaxCertsBehavior<C>,
         machine_name: String,
         storage: Box<dyn SideloadingStorage>,
         //extensions_behavior: ExtensionsBehavior,
@@ -62,6 +64,8 @@ impl Sideloader {
     }
 
     /// Sign the app at the provided path and return the path to the signed app bundle (in a temp dir). To sign and install, see [`Self::install_app`].
+    /// `pairing_file` is the optional pairing file to be encrypted and placed in the bundle if installing AltStore.
+    /// `device_udid` is the optional device UDID to be used for AltStore pairing file injection.
     pub async fn sign_app<F, Fut>(
         &mut self,
         app_path: PathBuf,
@@ -69,6 +73,8 @@ impl Sideloader {
         // this will be replaced with proper entitlement handling later
         increased_memory_limit: bool,
         progress_callback: Option<F>,
+        pairing_file: Option<&[u8]>,
+        device_udid: Option<&str>,
     ) -> Result<(PathBuf, Option<SpecialApp>), Report>
     where
         F: Fn(f32) -> Fut,
@@ -156,14 +162,43 @@ impl Sideloader {
 
         info!("App IDs configured");
 
-        app.apply_special_app_behavior(&special, &group_identifier, &cert_identity)
-            .await
-            .context("Failed to modify app bundle")?;
+        app.apply_special_app_behavior(
+            &special,
+            &group_identifier,
+            &cert_identity,
+            pairing_file,
+            device_udid,
+        )
+        .await
+        .context("Failed to modify app bundle")?;
 
-        let provisioning_profile = self
+        let main_provisioning_profile = self
             .dev_session
             .download_team_provisioning_profile(&team, &main_app_id, None)
             .await?;
+
+        let mut provisioning_profiles: Vec<(String, Profile, Dictionary)> = Vec::new();
+
+        for id in app_ids
+            .into_iter()
+            .filter(|id| id.identifier != main_app_id.identifier)
+        {
+            let bundle_id = id.identifier.clone();
+
+            let profile = self
+                .dev_session
+                .download_team_provisioning_profile(&team, &id, None)
+                .await
+                .context(format!(
+                    "Failed to download provisioning profile for {}",
+                    bundle_id
+                ))?;
+
+            let parsed_profile = ProvisioningProfile::parse(profile.encoded_profile.as_ref())?;
+            let entitlements = parsed_profile.entitlements().clone();
+
+            provisioning_profiles.push((bundle_id, profile, entitlements));
+        }
 
         if let Some(callback) = &progress_callback {
             callback(0.2).await;
@@ -179,10 +214,10 @@ impl Sideloader {
             ext.write_info()?;
         }
 
-        isideload_vfs::fs::write(
-            app.bundle.bundle_dir.join("embedded.mobileprovision"),
-            provisioning_profile.encoded_profile.as_ref(),
-        )?;
+        // isideload_vfs::fs::write(
+        //     app.bundle.bundle_dir.join("embedded.mobileprovision"),
+        //     provisioning_profile.encoded_profile.as_ref(),
+        // )?;
 
         if let Some(callback) = &progress_callback {
             callback(0.3).await;
@@ -191,7 +226,8 @@ impl Sideloader {
         sign::sign(
             &mut app,
             &cert_identity,
-            &provisioning_profile,
+            &main_provisioning_profile,
+            &mut provisioning_profiles,
             &special,
             &team,
             progress_callback,
@@ -206,6 +242,9 @@ impl Sideloader {
 
     #[cfg(feature = "install")]
     /// Sign and install an app to a device.
+    /// This is more intended to be a helper function for simple use cases, for more complex scenarios you should call `sign_app` and `install_app` separately.
+    /// `pairing_file` is the optional pairing file to be encrypted and placed in the bundle if installing AltStore.
+    /// `device_udid` is the optional device UDID to be used for AltStore pairing file injection.
     pub async fn install_app<F, Fut>(
         &mut self,
         device_provider: &impl IdeviceProvider,
@@ -213,6 +252,7 @@ impl Sideloader {
         // this is gross but will be replaced with proper entitlement handling later
         increased_memory_limit: bool,
         progress_callback: Option<F>,
+        pairing_file: Option<&[u8]>,
     ) -> Result<Option<SpecialApp>, Report>
     where
         F: Fn(f32) -> Fut,
@@ -231,13 +271,20 @@ impl Sideloader {
                 Some(team),
                 increased_memory_limit,
                 progress_callback,
+                pairing_file,
+                Some(&device_info.udid),
             )
             .await?;
 
         info!("Transferring App...");
 
+        let last_logged_progress = std::sync::Arc::new(std::sync::Mutex::new(0));
         crate::sideload::install::install_app(device_provider, &signed_app_path, |progress| {
-            info!("Installing: {}%", progress);
+            let mut last_progress = last_logged_progress.lock().unwrap();
+            if progress >= *last_progress + 10 {
+                *last_progress = progress;
+                info!("Installing: {}%", progress);
+            }
         })
         .await
         .context("Failed to install app on device")?;

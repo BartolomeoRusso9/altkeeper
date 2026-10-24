@@ -191,14 +191,14 @@ enum Record {
 /// Si mette in ascolto e risponde finché il programma vive. Torna la porta davvero usata.
 pub fn start(zone: Zone, bind: SocketAddr) -> Result<u16, String> {
     let socket = UdpSocket::bind(bind)
-        .map_err(|e| format!("DNS: non riesco ad ascoltare su {bind}: {e}"))?;
+        .map_err(|e| crate::tr!(format!("DNS: non riesco ad ascoltare su {bind}: {e}"), format!("DNS: cannot listen on {bind}: {e}")))?;
     let port = socket.local_addr().map_err(|e| e.to_string())?.port();
 
     // Quello che serve nel messaggio va letto ora: subito dopo `zone` passa al thread.
-    println!(
-        "[dns-sd] porta {port}: pubblico {} -> {}:{}",
-        zone.instance, zone.address, zone.port
-    );
+    println!("{}", crate::tr!(
+        format!("[dns-sd] porta {port}: pubblico {} -> {}:{}", zone.instance, zone.address, zone.port),
+        format!("[dns-sd] port {port}: advertising {} -> {}:{}", zone.instance, zone.address, zone.port)
+    ));
 
     std::thread::spawn(move || {
         let mut buf = [0u8; 512];

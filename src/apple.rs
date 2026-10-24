@@ -1,7 +1,6 @@
 //! Login Apple ID (anisette e 2FA), chiamate ai servizi sviluppatori e firma IPA.
 //! Il rinnovo scarica profili; la firma può registrare il dispositivo e creare certificati.
 
-use std::io::Write as _;
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
@@ -18,7 +17,7 @@ use isideload::{
         teams::{DeveloperTeam, TeamsApi},
     },
     sideload::{SideloaderBuilder, builder::MaxCertsBehavior},
-    util::fs_storage::FsStorage,
+    util::{callbacks::MaxCertsCallbackBox, fs_storage::FsStorage},
 };
 use serde::{Deserialize, Serialize};
 
@@ -35,6 +34,23 @@ pub fn set_interactive(on: bool) {
     INTERACTIVE.store(on, Ordering::SeqCst);
 }
 
+/// Interpreta il codice 2FA e i comandi di selezione senza inviare tentativi
+/// malformati ad Apple. Un codice può iniziare con zero.
+fn parse_2fa_input(input: &str, unknown: bool) -> Option<TwoFactorCallbackResponse> {
+    let input = input.trim();
+    match input {
+        "d" => Some(TwoFactorCallbackResponse::SendToDevices),
+        "r" if !unknown => Some(TwoFactorCallbackResponse::ResendCode),
+        _ if input.len() == 6 && input.bytes().all(|b| b.is_ascii_digit()) => {
+            Some(TwoFactorCallbackResponse::SubmitCode(input.to_owned()))
+        }
+        _ => input
+            .strip_prefix('p')
+            .and_then(|id| id.parse::<u32>().ok())
+            .map(TwoFactorCallbackResponse::SendSms),
+    }
+}
+
 #[derive(Serialize, Deserialize)]
 pub struct Account {
     pub apple_id: String,
@@ -47,10 +63,10 @@ pub struct Account {
 
 pub fn load_account(dir: &Path) -> Result<Account, String> {
     let raw = std::fs::read_to_string(dir.join(ACCOUNT_FILE))
-        .map_err(|_| "manca account.json: esegui prima `altkeeper login <apple-id>`".to_string())?;
+        .map_err(|_| crate::tr!("manca account.json: esegui prima `altkeeper login <apple-id>`", "account.json is missing: run `altkeeper login <apple-id>` first").to_string())?;
     let acc: Account = serde_json::from_str(&raw).map_err(dbg)?;
     if acc.password.is_empty() {
-        return Err("password non salvata: rifai `altkeeper login` e scegli di salvarla".into());
+        return Err(crate::tr!("password non salvata: rifai `altkeeper login` e scegli di salvarla", "password was not saved: rerun `altkeeper login` and choose to save it").into());
     }
     Ok(acc)
 }
@@ -100,7 +116,7 @@ pub fn anisette_url(value: Option<&str>) -> Result<Option<String>, String> {
         Some(u) if u.starts_with("https://") || u.starts_with("http://") => {
             Ok(Some(u.trim_end_matches('/').to_string()))
         }
-        Some(_) => Err("ALTKEEPER_ANISETTE_URL deve iniziare con http:// o https://".into()),
+        Some(_) => Err(crate::tr!("ALTKEEPER_ANISETTE_URL deve iniziare con http:// o https://", "ALTKEEPER_ANISETTE_URL must start with http:// or https://").into()),
     }
 }
 
@@ -147,8 +163,15 @@ pub fn iso8601_utc(epoch_secs: u64) -> String {
 /// Il server anisette risponde -45061 ("reprovision required") quando l'identità salvata in
 /// `state/anisette_state` non vale più per lui: server cambiato, backend rifatto, `adi.pb`
 /// perso. Riprovare con la stessa identità non serve a niente, bisogna provisionarne una nuova.
+///
+/// Con isideload 0.4.x `get_anisette_data` riprova da sé fino a 3 volte (`get_data_or_provision`)
+/// e quando li esaurisce restituisce "Max anisette provisioning attempts reached": anche quella
+/// va trattata come identità da rimpiazzare, altrimenti la messa da parte di `anisette_state`
+/// viene saltata proprio nel caso in cui serve.
 fn needs_reprovision(err: &str) -> bool {
-    err.contains("-45061") || err.contains("reprovision required")
+    err.contains("-45061")
+        || err.contains("reprovision required")
+        || err.contains("Max anisette provisioning attempts reached")
 }
 
 /// Mette da parte l'identità anisette scaduta (`anisette_state` -> `anisette_state.stale`):
@@ -173,10 +196,10 @@ pub async fn anisette_for_altstore(dir: &Path) -> Result<serde_json::Value, Stri
     match anisette_for_altstore_once(dir).await {
         Err(e) if needs_reprovision(&e) => {
             if retire_anisette_state(dir)? {
-                println!(
-                    "[anisette] il server non riconosce l'identità salvata ({e}); \
-                     la metto da parte in state/anisette_state.stale e ne creo una nuova"
-                );
+                println!("{}", crate::tr!(
+                    format!("[anisette] il server non riconosce l'identità salvata ({e}); la metto da parte in state/anisette_state.stale e ne creo una nuova"),
+                    format!("[anisette] server did not recognize the saved identity ({e}); moved it to state/anisette_state.stale and provisioning a new one")
+                ));
                 anisette_for_altstore_once(dir).await
             } else {
                 Err(e)
@@ -219,8 +242,40 @@ async fn anisette_for_altstore_once(dir: &Path) -> Result<serde_json::Value, Str
 
 #[cfg(test)]
 mod tests {
-    use super::{anisette_url, is_max_certs_error, iso8601_utc, max_certs_behavior, needs_reprovision};
-    use isideload::sideload::builder::MaxCertsBehavior;
+    use super::{anisette_url, is_max_certs_error, iso8601_utc, max_certs_behavior, needs_reprovision, parse_2fa_input};
+    use isideload::{
+        auth::apple_account::TwoFactorCallbackResponse,
+        sideload::builder::MaxCertsBehavior,
+    };
+
+    #[test]
+    fn accetta_codici_2fa_e_zero_iniziale() {
+        assert!(matches!(
+            parse_2fa_input(" 012345\r\n", false),
+            Some(TwoFactorCallbackResponse::SubmitCode(code)) if code == "012345"
+        ));
+        assert!(matches!(
+            parse_2fa_input("999999", true),
+            Some(TwoFactorCallbackResponse::SubmitCode(code)) if code == "999999"
+        ));
+    }
+
+    #[test]
+    fn riconosce_opzioni_2fa() {
+        assert!(matches!(parse_2fa_input("d", false), Some(TwoFactorCallbackResponse::SendToDevices)));
+        assert!(matches!(parse_2fa_input("r", false), Some(TwoFactorCallbackResponse::ResendCode)));
+        assert!(matches!(parse_2fa_input("p1", false), Some(TwoFactorCallbackResponse::SendSms(1))));
+        assert!(matches!(parse_2fa_input("p42", true), Some(TwoFactorCallbackResponse::SendSms(42))));
+    }
+
+    #[test]
+    fn scarta_input_2fa_non_valido_senza_contattare_apple() {
+        for invalid in ["", " ", "12345", "1234567", "12 456", "abcdef", "p", "pabc", "R"] {
+            assert!(parse_2fa_input(invalid, false).is_none(), "{invalid:?}");
+        }
+        assert!(parse_2fa_input("r", true).is_none());
+    }
+
 
     #[test]
     fn riconosce_la_richiesta_di_riprovisioning() {
@@ -297,11 +352,11 @@ pub async fn open_session_web(
         .anisette_provider(provider)
         .login(password, get_2fa_code)
         .await
-        .map_err(|e| format!("login Apple ID non riuscito: {e}"))?;
+        .map_err(|e| crate::tr!(format!("login Apple ID non riuscito: {e}"), format!("Apple ID sign-in failed: {e}")))?;
 
     DeveloperSession::from_account(&mut account)
         .await
-        .map_err(|e| format!("sessione sviluppatore non riuscita: {e}"))
+        .map_err(|e| crate::tr!(format!("sessione sviluppatore non riuscita: {e}"), format!("Developer session failed: {e}")))
 }
 
 /// Login e sessione verso i servizi sviluppatori di Apple.
@@ -314,27 +369,41 @@ pub async fn open_session(
 
     let get_2fa_code = async |params: TwoFactorCallbackParams| {
         if !INTERACTIVE.load(Ordering::SeqCst) {
-            // Senza terminale non si può chiedere il codice: il login fallirà.
-            return Ok(TwoFactorCallbackResponse::SubmitCode(String::new()));
+            // Non inviare un codice vuoto ai server Apple in esecuzione automatica.
+            return Ok(TwoFactorCallbackResponse::Abort);
         }
         if params.unknown {
-            println!("L'ultimo metodo 2FA non ha funzionato, prova un altro.");
+            println!("{}", crate::tr!(
+                "L'ultimo metodo 2FA non ha funzionato, prova un altro.",
+                "The previous 2FA method did not work; try another one."
+            ));
         } else {
-            println!(
-                "Inserisci il codice a 6 cifre inviato a {}:",
-                if params.sms {
-                    params
-                        .numbers
-                        .iter()
-                        .find(|n| Some(n.id) == params.selected_number_id)
-                        .map(|n| n.number_with_dial_code.clone())
-                        .unwrap_or_else(|| "il tuo telefono".to_string())
-                } else {
-                    "i tuoi dispositivi".to_string()
-                }
-            );
+            let destination = if params.sms {
+                params
+                    .numbers
+                    .iter()
+                    .find(|n| Some(n.id) == params.selected_number_id)
+                    .map(|n| n.number_with_dial_code.clone())
+                    .unwrap_or_else(|| crate::tr!("il tuo telefono", "your phone").to_string())
+            } else {
+                crate::tr!("i tuoi dispositivi", "your devices").to_string()
+            };
+            println!("{}", crate::tr!(
+                format!("Inserisci il codice a 6 cifre inviato a {destination}:"),
+                format!("Enter the six-digit code sent to {destination}:")
+            ));
         }
-        println!("(d = invia ai dispositivi, r = reinvia, p<id> = SMS al numero <id>)");
+        if params.unknown {
+            println!("{}", crate::tr!(
+                "(d = invia ai dispositivi, p<id> = SMS al numero <id>)",
+                "(d = send to devices, p<id> = SMS to number <id>)"
+            ));
+        } else {
+            println!("{}", crate::tr!(
+                "(d = invia ai dispositivi, r = reinvia, p<id> = SMS al numero <id>)",
+                "(d = send to devices, r = resend, p<id> = SMS to number <id>)"
+            ));
+        }
         for n in params
             .numbers
             .iter()
@@ -343,31 +412,43 @@ pub async fn open_session(
             println!("  ID {}: {}", n.id, n.number_with_dial_code);
         }
 
-        let mut code = String::new();
-        let _ = std::io::stdin().read_line(&mut code);
-        let code = code.trim();
+        loop {
+            // Non usare stdin().read_line(): in PowerShell lo stdin del processo
+            // può essere una pipe a EOF nonostante la console funzioni.
+            let code = match crate::terminal::prompt_line(crate::tr!("Codice 2FA o comando: ", "2FA code or command: ")) {
+                Ok(code) => code,
+                Err(e) => {
+                    eprintln!("{}", crate::tr!(format!("Impossibile leggere il codice 2FA dal terminale: {e}"), format!("Cannot read 2FA code from the terminal: {e}")));
+                    return Ok(TwoFactorCallbackResponse::Abort);
+                }
+            };
 
-        if let Some(id) = code.strip_prefix('p').and_then(|s| s.parse::<u32>().ok()) {
-            return Ok(TwoFactorCallbackResponse::SendSms(id));
+            if let Some(response) = parse_2fa_input(&code, params.unknown) {
+                return Ok(response);
+            }
+            println!("{}", if params.unknown {
+                crate::tr!(
+                    "Inserisci un codice di 6 cifre valido oppure d o p<id>.",
+                    "Enter a valid six-digit code, d or p<id>."
+                )
+            } else {
+                crate::tr!(
+                    "Inserisci un codice di 6 cifre valido oppure d, r o p<id>.",
+                    "Enter a valid six-digit code, d, r or p<id>."
+                )
+            });
         }
-        if code == "d" {
-            return Ok(TwoFactorCallbackResponse::SendToDevices);
-        }
-        if code == "r" && !params.unknown {
-            return Ok(TwoFactorCallbackResponse::ResendCode);
-        }
-        Ok(TwoFactorCallbackResponse::SubmitCode(code.to_string()))
     };
 
     let mut account = AppleAccount::builder(apple_id)
         .anisette_provider(provider)
         .login(password, get_2fa_code)
         .await
-        .map_err(|e| format!("login Apple ID non riuscito: {e}"))?;
+        .map_err(|e| crate::tr!(format!("login Apple ID non riuscito: {e}"), format!("Apple ID sign-in failed: {e}")))?;
 
     DeveloperSession::from_account(&mut account)
         .await
-        .map_err(|e| format!("sessione sviluppatore non riuscita: {e}"))
+        .map_err(|e| crate::tr!(format!("sessione sviluppatore non riuscita: {e}"), format!("Developer session failed: {e}")))
 }
 
 /// Sceglie il team: quello indicato, l'unico disponibile, o (in interattivo) chiede.
@@ -378,35 +459,32 @@ pub async fn pick_team(
 ) -> Result<DeveloperTeam, String> {
     let teams = sess.list_teams().await.map_err(|e| e.to_string())?;
     if teams.is_empty() {
-        return Err("nessun team sviluppatore su questo Apple ID".into());
+        return Err(crate::tr!("nessun team sviluppatore su questo Apple ID", "there are no developer teams for this Apple ID").into());
     }
     if let Some(id) = wanted {
         return teams
             .into_iter()
             .find(|t| t.team_id == id)
-            .ok_or_else(|| format!("il team {id} non esiste su questo Apple ID"));
+            .ok_or_else(|| crate::tr!(format!("il team {id} non esiste su questo Apple ID"), format!("Team {id} does not exist for this Apple ID")));
     }
     if teams.len() == 1 || !interactive {
         return Ok(teams.into_iter().next().unwrap());
     }
-    println!("Team disponibili:");
+    println!("{}", crate::tr!("Team disponibili:", "Available teams:"));
     for (i, t) in teams.iter().enumerate() {
         println!(
             "  {}: {} ({})",
             i + 1,
-            t.name.as_deref().unwrap_or("<senza nome>"),
+            t.name.as_deref().unwrap_or(crate::tr!("<senza nome>", "<unnamed>")),
             t.team_id
         );
     }
-    print!("Scegli il numero: ");
-    let _ = std::io::stdout().flush();
-    let mut s = String::new();
-    let _ = std::io::stdin().read_line(&mut s);
-    let n: usize = s.trim().parse().map_err(|_| "scelta non valida".to_string())?;
+    let s = crate::terminal::prompt_line(crate::tr!("Scegli il numero: ", "Choose a number: ")).map_err(dbg)?;
+    let n: usize = s.trim().parse().map_err(|_| crate::tr!("scelta non valida", "invalid selection").to_string())?;
     teams
         .into_iter()
         .nth(n.wrapping_sub(1))
-        .ok_or_else(|| "scelta non valida".to_string())
+        .ok_or_else(|| crate::tr!("scelta non valida", "invalid selection").to_string())
 }
 
 pub async fn app_ids(
@@ -443,7 +521,7 @@ impl Drop for SignedApp {
 /// `ALTKEEPER_REVOKE_CERTS=1` autorizza a revocare i certificati di sviluppo già presenti quando
 /// Apple ha raggiunto il limite (errore 7460). Di default si ferma con un errore, perché la
 /// revoca invalida le app firmate con quei certificati.
-pub fn max_certs_behavior(value: Option<&str>) -> MaxCertsBehavior {
+pub fn max_certs_behavior(value: Option<&str>) -> MaxCertsBehavior<MaxCertsCallbackBox> {
     match value.map(|v| v.trim().to_ascii_lowercase()).as_deref() {
         Some("1" | "true" | "yes" | "si" | "sì" | "on") => MaxCertsBehavior::Revoke,
         _ => MaxCertsBehavior::Error,
@@ -465,7 +543,7 @@ pub async fn sign_ipa(
 ) -> Result<SignedApp, String> {
     let filename = ipa
         .file_name()
-        .ok_or("nome del file IPA mancante")?
+        .ok_or(crate::tr!("nome del file IPA mancante", "IPA filename is missing"))?
         .to_string_lossy();
     let cleanup_dir = std::env::temp_dir().join(format!("{filename}_extracted"));
     let storage_path = Path::new(STATE_DIR).join("sideload");
@@ -474,7 +552,7 @@ pub async fn sign_ipa(
 
     sess.ensure_device_registered(&team, device_name, udid, DeveloperDeviceType::Ios)
         .await
-        .map_err(|e| format!("registrazione iPhone non riuscita: {e}"))?;
+        .map_err(|e| crate::tr!(format!("registrazione iPhone non riuscita: {e}"), format!("iPhone registration failed: {e}")))?;
 
     let mut sideloader = SideloaderBuilder::new(sess, account.apple_id.clone())
         .storage(Box::new(FsStorage::new(storage_path)))
@@ -489,19 +567,20 @@ pub async fn sign_ipa(
             Some(team),
             false,
             None::<fn(f32) -> std::future::Ready<()>>,
+            None,
+            None,
         )
         .await
         .map_err(|e| {
             let _ = std::fs::remove_dir_all(&cleanup_dir);
             let detail = format!("{e:?}");
             if is_max_certs_error(&detail) {
-                format!(
-                    "firma dell'app non riuscita: l'Apple ID ha già un certificato (AltStore/SideStore). \
-                     Per sostituirlo imposta ALTKEEPER_REVOKE_CERTS=1 e riprova; le altre app \
-                     vanno poi rinnovate con un Refresh."
+                crate::tr!(
+                    "firma dell'app non riuscita: l'Apple ID ha già un certificato (AltStore/SideStore). Per sostituirlo imposta ALTKEEPER_REVOKE_CERTS=1 e riprova; le altre app vanno poi rinnovate con un Refresh.".to_string(),
+                    "App signing failed: this Apple ID already has a certificate (AltStore/SideStore). To replace it, set ALTKEEPER_REVOKE_CERTS=1 and retry; other apps will then need refreshing.".to_string()
                 )
             } else {
-                format!("firma dell'app non riuscita: {e}")
+                crate::tr!(format!("firma dell'app non riuscita: {e}"), format!("App signing failed: {e}"))
             }
         })?;
     Ok(SignedApp {

@@ -24,7 +24,6 @@ use axum::{
     response::{Html, IntoResponse, Response},
     routing::{get, post},
 };
-use idevice::{RsdService, services::lockdown::LockdownClient};
 use serde::Deserialize;
 use serde_json::{Value, json};
 
@@ -167,10 +166,12 @@ fn now() -> u64 {
 /// compreso), così una configurazione sbagliata non lascia annunci Bonjour orfani.
 pub fn check_options(bind: SocketAddr, pin: &Option<String>) -> Result<(), String> {
     match pin {
-        None if !bind.ip().is_loopback() => Err("per ascoltare fuori da questo computer serve un \
-                                                 PIN: imposta ALTKEEPER_WEB_PIN (o usa --pin)"
+        None if !bind.ip().is_loopback() => Err(crate::tr!(
+            "per ascoltare fuori da questo computer serve un PIN: imposta ALTKEEPER_WEB_PIN (o usa --pin)",
+            "listening outside this computer requires a PIN: set ALTKEEPER_WEB_PIN (or use --pin)"
+        )
             .into()),
-        Some(p) if p.chars().count() < 4 => Err("il PIN deve avere almeno 4 caratteri".into()),
+        Some(p) if p.chars().count() < 4 => Err(crate::tr!("il PIN deve avere almeno 4 caratteri", "the PIN must contain at least 4 characters").into()),
         _ => Ok(()),
     }
 }
@@ -206,15 +207,15 @@ pub async fn serve(
 
     let listener = tokio::net::TcpListener::bind(bind)
         .await
-        .map_err(|e| format!("non riesco ad ascoltare su {bind}: {e}"))?;
-    println!(
-        "Interfaccia web su http://{bind} ({})",
-        if app.pin.is_some() {
+        .map_err(|e| crate::tr!(format!("non riesco ad ascoltare su {bind}: {e}"), format!("cannot listen on {bind}: {e}")))?;
+    println!("{}", crate::tr!(
+        format!("Interfaccia web su http://{bind} ({})", if app.pin.is_some() {
             "protetta da PIN: il nome utente può essere qualsiasi"
-        } else {
-            "raggiungibile solo da questo computer"
-        }
-    );
+        } else { "raggiungibile solo da questo computer" }),
+        format!("Web interface at http://{bind} ({})", if app.pin.is_some() {
+            "PIN-protected: any username is accepted"
+        } else { "only accessible from this computer" })
+    ));
     axum::serve(listener, router).await.map_err(|e| format!("{e:?}"))
 }
 
@@ -746,27 +747,15 @@ async fn install_ipa(app: &Arc<App>, upload: &UploadedIpa) -> Result<(), String>
     let team = apple::pick_team(&mut session, account.team_id.as_deref(), false).await?;
 
     app.push_line("Connecting to the iPhone to read its device identity…");
-    let (device_name, udid) = {
+
+    let (device_name, udid, _version) = {
         let _work = crate::altserver::phone_lock();
+
         let (_, mut link) = phone::connect_auto(app.phone, PAIRING_FILE, |_: &str| {}).await?;
-        let mut lockdown = LockdownClient::connect_rsd(&mut link.adapter, &mut link.hs)
+
+        link.device_identity()
             .await
-            .map_err(|e| format!("Cannot query iPhone identity through trusted lockdown: {e}"))?;
-        let name = lockdown
-            .get_value(Some("DeviceName"), None)
-            .await
-            .map_err(|e| format!("Cannot read the iPhone device name: {e}"))?
-            .as_string()
-            .ok_or("The iPhone returned an invalid device name.")?
-            .to_string();
-        let udid = lockdown
-            .get_value(Some("UniqueDeviceID"), None)
-            .await
-            .map_err(|e| format!("Cannot read the iPhone UDID: {e}"))?
-            .as_string()
-            .ok_or("The iPhone returned an invalid UDID.")?
-            .to_string();
-        (name, udid)
+            .map_err(|e| format!("Cannot query iPhone identity: {e}"))?
     };
 
     app.push_line("Signing the IPA with the configured Apple ID…");
@@ -780,30 +769,32 @@ async fn install_ipa(app: &Arc<App>, upload: &UploadedIpa) -> Result<(), String>
     )
     .await?;
 
-    app.push_line("Installing the signed app over Wi-Fi…");
     let _work = crate::altserver::phone_lock();
-    let (_, mut link) = phone::connect_auto(app.phone, PAIRING_FILE, |_: &str| {}).await?;
+    let (via, mut link) = phone::connect_auto(app.phone, PAIRING_FILE, |_: &str| {}).await?;
+    app.push_line(&if via == phone::Via::Usb {
+        "Installing the signed app over USB…".to_string()
+    } else {
+        "Installing the signed app over Wi-Fi…".to_string()
+    });
     // Il telefono manda decine di notifiche con la stessa percentuale: una riga ogni 10%.
     let last_logged = std::sync::atomic::AtomicI64::new(-1);
     let started = std::time::Instant::now();
-    isideload::sideload::install::install_app_rsd(
-        &mut link.adapter,
-        &mut link.hs,
-        &signed_app.path,
-        |percent| {
-            if let Some(step) = progress_step(percent, last_logged.load(Ordering::Relaxed)) {
-                last_logged.store(step, Ordering::Relaxed);
-                app.push_line(&format!(
-                    "Installation progress: {step}% ({}s)",
-                    started.elapsed().as_secs()
-                ));
-            }
-        },
-    )
-    .await
-    .map_err(|e| format!("Installation failed: {e}"))?;
-    Ok(())
+    let progress = |percent: u64| {
+        if let Some(step) = progress_step(percent, last_logged.load(Ordering::Relaxed)) {
+            last_logged.store(step, Ordering::Relaxed);
+            app.push_line(&format!(
+                "Installation progress: {step}% ({}s)",
+                started.elapsed().as_secs()
+            ));
+        }
+    };
+    let install = link.install_app(&signed_app.path, &progress);
+
+    phone::with_timeout("Installation", INSTALL_TIMEOUT, install).await
 }
+
+/// Tempo massimo per l'installazione di un'app (upload AFC + installazione).
+const INSTALL_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(15 * 60);
 
 /// La percentuale da scrivere nel log, o `None` se non è ancora cambiata di 10 punti
 /// dall'ultima scritta (`last`, -1 se nessuna). Il 100% si scrive sempre, una volta sola.

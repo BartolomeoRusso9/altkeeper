@@ -13,12 +13,15 @@ use rootcause::prelude::*;
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::time::Instant;
 use tracing::debug;
-
-use crate::{SideloadError, anisette::AnisetteClientInfo, util::plist::PlistDataExtract};
+use tracing::warn;
 
 #[cfg(not(feature = "wasm"))]
-const APPLE_ROOT: &[u8] = include_bytes!("./apple_root.der");
+use crate::sideload::cert_identity::APPLE_ROOT;
+use crate::{SideloadError, anisette::AnisetteClientInfo, util::plist::PlistDataExtract};
+
 const URL_BAG: &str = "https://gsa.apple.com/grandslam/GsService2/lookup";
+const URL_BAG_CLIENT_INFO: &str =
+    "<Mac15,7> <macOS;27.0;26A5378j> <com.apple.AuthKit/1 (com.apple.akd/1.0)>";
 
 /// Con ALTKEEPER_DEBUG (o la vecchia ALTREFRESH_DEBUG) impostata, stampa su stderr come risponde Apple a ogni richiesta:
 /// stato, versione HTTP, intestazioni e, se è un errore, il corpo. Mai il corpo di una richiesta
@@ -60,9 +63,14 @@ impl GrandSlam {
     /// Fetch the URL bag from GrandSlam and cache it
     pub async fn fetch_url_bag(
         client: &reqwest_middleware::ClientWithMiddleware,
-        base_headers: HeaderMap,
+        mut base_headers: HeaderMap,
     ) -> Result<Dictionary, Report> {
         debug!("Fetching URL bag from GrandSlam");
+        // Sending the android client info gets us the wrong url bag, so we lie for this request
+        base_headers.insert(
+            "X-Mme-Client-Info",
+            HeaderValue::from_str(URL_BAG_CLIENT_INFO)?,
+        );
         let n = GS_SEQ.fetch_add(1, Ordering::Relaxed) + 1;
         let started = Instant::now();
         let resp = client
@@ -163,6 +171,7 @@ impl GrandSlam {
         url: &str,
         body: &Dictionary,
         additional_headers: Option<HeaderMap>,
+        retry_limit: Option<u32>,
     ) -> Result<Dictionary, Report> {
         let debug_on = gs_debug();
         let n = GS_SEQ.fetch_add(1, Ordering::Relaxed) + 1;
@@ -180,41 +189,66 @@ impl GrandSlam {
                 self.client_info.user_agent
             );
         }
-
         let sent = self
             .post(url)?
-            .headers(additional_headers.unwrap_or_else(reqwest::header::HeaderMap::new))
+            .headers(
+                additional_headers
+                    .clone()
+                    .unwrap_or_else(reqwest::header::HeaderMap::new),
+            )
             .body(request_xml)
             .send()
             .await;
-        if debug_on && let Err(e) = &sent {
+        if debug_on
+            && let Err(e) = &sent
+        {
             eprintln!("[gs #{n}] send error after {:?}: {e:?}", started.elapsed());
         }
-        let resp = sent.context("Failed to send grandslam request")?;
+        let result = sent.context("Failed to send grandslam request")?;
+
+        if let Some(retries) = retry_limit
+            && result.status() == reqwest::StatusCode::TOO_MANY_REQUESTS
+        {
+            if retries > 0 {
+                warn!(
+                    "Received 429 Too Many Requests, retrying request ({} retries left)",
+                    retries
+                );
+                return Box::pin(self.plist_request(
+                    url,
+                    body,
+                    additional_headers,
+                    Some(retries - 1),
+                ))
+                .await;
+            } else {
+                bail!("Received 429 Too Many Requests, no retries left");
+            }
+        }
 
         if debug_on {
             eprintln!(
                 "[gs #{n}] -> {} {:?} remote={:?} in {:?}",
-                resp.status(),
-                resp.version(),
-                resp.remote_addr(),
+                result.status(),
+                result.version(),
+                result.remote_addr(),
                 started.elapsed()
             );
-            for (k, v) in resp.headers() {
+            for (k, v) in result.headers() {
                 eprintln!("[gs #{n}]   {k}: {v:?}");
             }
         }
 
-        if let Some(e) = resp.error_for_status_ref().err() {
+        if let Some(e) = result.error_for_status_ref().err() {
             if debug_on {
-                let text = resp.text().await.unwrap_or_default();
+                let text = result.text().await.unwrap_or_default();
                 let head: String = text.chars().take(800).collect();
                 eprintln!("[gs #{n}] error body ({} B): {head}", text.len());
             }
             Err::<(), _>(e).context("Received error response from grandslam")?;
             unreachable!("error_for_status_ref gave an error");
         }
-        let resp = resp
+        let resp = result
             .text()
             .await
             .context("Failed to read grandslam response as text")?;
@@ -272,6 +306,10 @@ impl GrandSlam {
             "X-Apple-App-Info",
             HeaderValue::from_static("com.apple.gs.xcode.auth"),
         );
+        headers.insert(
+            reqwest::header::CONNECTION,
+            HeaderValue::from_static("close"),
+        );
 
         Ok(headers)
     }
@@ -283,7 +321,8 @@ impl GrandSlam {
     /// # Errors
     /// Returns an error if the reqwest client cannot be built
     pub fn build_reqwest_client(
-        debug: bool,
+        #[cfg(not(feature = "wasm"))] debug: bool,
+        #[cfg(feature = "wasm")] _debug: bool,
         proxy_url: Option<String>,
     ) -> Result<reqwest_middleware::ClientWithMiddleware, Report> {
         #[cfg(not(feature = "wasm"))]

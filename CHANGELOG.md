@@ -2,6 +2,20 @@
 
 ## Unreleased
 
+### Fixed
+- **Install hung forever over USB on iOS 27.** On USB, installing an IPA now goes through AFC + installation_proxy via usbmuxd (same path as `pymobiledevice3 apps install`) instead of the CoreDeviceProxy software tunnel, and the profile client prefers the lockdown service too. App install and profile install now have timeouts, so a stuck phone produces an error instead of a silent hang. The status line says "over USB" or "over Wi-Fi" according to the real transport. Not compiled in this environment: please run `cargo build` and test.
+
+### Changed
+- **Sign-in works again (Apple `-80045` since 2026-10-12).** The vendored `isideload` was updated to
+  **0.4.6** (upstream `8ca39b62`), which takes the anisette `client_info` from the anisette server
+  and resyncs / re-provisions when Apple asks (nab138/isideload#26 and follow-ups). Only two call
+  sites needed adapting: `MaxCertsBehavior` is now generic (we use the crate's
+  `MaxCertsCallbackBox`), and `sign_app` gained `pairing_file`/`device_udid` (passed as `None`
+  here). The `AnisetteData` accessors used by the AltStore anisette bridge were restored in the
+  vendored copy. The local `ALTKEEPER_DEBUG` logging and the HTTP/1.1 + `Connection: close`
+  transport tweaks were ported to the new copy. Tested on a long-running Docker deployment:
+  unattended renewals (profiles + App IDs) work again.
+
 ### Added
 - **USB when the iPhone is plugged into the machine running AltKeeper.** Every connection (check, renew, sign and install, AltServer) first looks for an iPhone on USB through the local `usbmuxd` (or the one in `USBMUXD_SOCKET_ADDRESS`) and talks to it through the CoreDeviceProxy tunnel; if there is none, or it fails, it falls back to Wi-Fi as before. Much faster for installing IPAs. Needs the phone to already trust the computer (the usual "Trust" prompt), not the remote pairing. `--phone <ip:port>` forces Wi-Fi; `ALTKEEPER_NO_USB=1` turns USB off. In Docker the usbmuxd socket must be mounted into the container.
 - `ALTKEEPER_REVOKE_CERTS=1`: when installing an IPA from the web page fails with Apple error 7460 (the Apple ID already has a development certificate, e.g. from AltStore/SideStore), AltKeeper can revoke it and create its own. Off by default; without it you now get a clear explanation instead of a generic error.
@@ -12,13 +26,26 @@
   `altserver` also stops on console close / shutdown, not only Ctrl-C. New
   `examples/renew.ps1` (the Windows counterpart of `renew.sh`, with the same ntfy notifications)
   and `.gitattributes` so the shell scripts keep LF endings in a Windows checkout. See the
-  README, section "Windows". **Not yet built or run on a real Windows machine**: please report
-  anything that breaks.
+  README, section "Windows". **Confirmed on a real Windows 10 machine:**
+  `cargo test --locked` (63 passed), `cargo build --release --locked`, English `--help`
+  and interactive PowerShell Apple ID / 2FA login. Windows 11 and complete AltServer /
+  unattended-renewal workflows still need end-to-end testing.
 - **Works from outside your home network.** `--dns-domain` publishes the AltServer service as
   ordinary DNS records (unicast DNS-SD), so AltStore discovers it through a VPN. iOS never sends
   Bonjour multicast over a VPN interface, but it does send plain DNS queries, and AltStore browses
   the device's search domains. Includes a small built-in DNS responder (UDP, answers only for its
   own names); put it behind the resolver you already run. See the README for the full setup.
+- **English/Italian CLI** with `ALTKEEPER_LANG=en` or `ALTKEEPER_LANG=it`, default Italian;
+  regional variants and `ALTREFRESH_LANG` alias supported. Localize CLI prompts, login/2FA,
+  errors, server logs and `--help` without modifying protocol responses, JSON or the web UI.
+- Added Windows/Linux locale smoke checks, Rust tests and manual Windows 2FA test guidance.
+
+### Fixed
+- **Windows PowerShell Apple ID 2FA input.** Read directly from the attached Windows console
+  (`CONIN$`) rather than native-process standard input, which can be unavailable in PowerShell.
+  Handle EOF instead of submitting an empty verification code; validate six-digit codes,
+  leading zeroes, device/SMS choices, and use the same mechanism for team selection and
+  the password-save prompt.
 
 ### Documentation
 - "If something goes wrong" now covers the anisette error `not provisioned for this server

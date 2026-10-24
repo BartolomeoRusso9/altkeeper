@@ -7,13 +7,21 @@ use crate::dev::developer_session::DeveloperSession;
 use crate::dev::teams::DeveloperTeam;
 use crate::sideload::bundle::Bundle;
 use crate::sideload::cert_identity::CertificateIdentity;
+use aes_gcm::{
+    Aes256Gcm, Nonce,
+    aead::{Aead, Generate, KeyInit},
+};
 use isideload_vfs::fs::File;
 use rootcause::option_ext::OptionExt;
 use rootcause::prelude::*;
+use sha1::Digest;
+use sha2::Sha256;
 use std::io::Write;
 use std::path::PathBuf;
 use tracing::{info, warn};
 use zip::ZipArchive;
+
+static ALT_PAIRING_FILE: &str = "ALTPairingFile.dat";
 
 pub struct Application {
     pub bundle: Bundle,
@@ -253,6 +261,8 @@ impl Application {
         special: &Option<SpecialApp>,
         group_identifier: &str,
         cert: &CertificateIdentity,
+        pairing_file: Option<&[u8]>,
+        device_udid: Option<&str>,
     ) -> Result<(), Report> {
         let Some(special) = special.as_ref() else {
             return Ok(());
@@ -270,6 +280,15 @@ impl Application {
                     "ALTAppGroups".to_string(),
                     plist::Value::Array(vec![plist::Value::String(group_identifier.to_string())]),
                 );
+                let extensions = self.bundle.app_extensions_mut();
+                for ext in extensions.iter_mut() {
+                    ext.app_info.insert(
+                        "ALTAppGroups".to_string(),
+                        plist::Value::Array(vec![plist::Value::String(
+                            group_identifier.to_string(),
+                        )]),
+                    );
+                }
             }
             info!("Injecting certificate for {}", special);
 
@@ -305,6 +324,44 @@ impl Application {
                     .context(format!("Failed to create {}", cert_file_name))?;
                 file.write_all(&p12_bytes)
                     .context(format!("Failed to write {}", cert_file_name))?;
+            }
+        }
+
+        if matches!(special, SpecialApp::AltStore) {
+            if let Some(pairing_file) = pairing_file {
+                info!("Injecting pairing file for AltStore");
+
+                let key_bytes = Sha256::digest(cert.machine_id.as_bytes());
+
+                let cipher = Aes256Gcm::new(&key_bytes);
+
+                let nonce = Nonce::generate();
+                let ciphertext = cipher.encrypt(&nonce, pairing_file)?;
+
+                let mut sealed_box = Vec::with_capacity(nonce.len() + ciphertext.len());
+                sealed_box.extend_from_slice(&nonce);
+                sealed_box.extend_from_slice(&ciphertext);
+
+                let mut file =
+                    isideload_vfs::fs::File::create(&self.bundle.bundle_dir.join(ALT_PAIRING_FILE))
+                        .context(format!("Failed to create {}", ALT_PAIRING_FILE))?;
+                file.write_all(&sealed_box)
+                    .context(format!("Failed to write {}", ALT_PAIRING_FILE))?;
+            } else {
+                warn!(
+                    "Pairing file is required for AltStore remote AltServer setup, but was not provided"
+                )
+            }
+
+            if let Some(device_udid) = device_udid {
+                self.bundle.app_info.insert(
+                    "ALTDeviceId".to_string(),
+                    plist::Value::String(device_udid.to_string()),
+                );
+            } else {
+                warn!(
+                    "Device UDID is required for AltStore remote AltServer setup, but was not provided"
+                )
             }
         }
         Ok(())

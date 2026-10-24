@@ -9,12 +9,15 @@ use std::time::{Duration, Instant};
 use idevice::{
     IdeviceService, ReadWrite, RsdService,
     core_device_proxy::CoreDeviceProxy,
+    installation_proxy::InstallationProxyClient,
     misagent::MisagentClient,
+    provider::{IdeviceProvider, UsbmuxdProvider},
     remote_pairing::{
         RemotePairingClient, RemotePairingLockdownService, RpPairingFile, RpPairingSocket,
         tunnel::connect_tls_psk_tunnel_native,
     },
     rsd::RsdHandshake,
+    services::lockdown::LockdownClient,
     tcp::adapter::Adapter,
     usbmuxd::{Connection, UsbmuxdAddr, UsbmuxdConnection},
 };
@@ -26,14 +29,261 @@ pub fn dbg<E: std::fmt::Debug>(e: E) -> String {
     format!("{e:?}")
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum TransportKind {
+    Legacy,
+    Rsd,
+}
+
+fn major_ios_version(version: &str) -> Option<u32> {
+    version.split('.').next()?.parse().ok()
+}
+
+fn select_transport(version: &str, force_legacy: bool) -> Result<TransportKind, String> {
+    let major = major_ios_version(version)
+        .ok_or_else(|| format!("Versione iOS non riconosciuta: {version}"))?;
+    Ok(if force_legacy || major < 17 {
+        TransportKind::Legacy
+    } else {
+        TransportKind::Rsd
+    })
+}
+
+/// Trasporto da usare quando la versione di iOS non è stata determinata: RSD, il percorso che
+/// esisteva prima della rilevazione, a meno che `ALTKEEPER_LEGACY` non imponga quello classico.
+fn fallback_transport(force_legacy: bool) -> TransportKind {
+    if force_legacy {
+        TransportKind::Legacy
+    } else {
+        TransportKind::Rsd
+    }
+}
+
+/// Il Wi-Fi passa dal pairing remoto (RPPairing), che esiste solo da iOS 17: chi ha un iPhone
+/// più vecchio deve saperlo, invece di leggere un errore di pairing generico.
+const WIFI_IOS17_HINT: &str = "Nota: il Wi-Fi funziona solo con iOS 17 o successivo; \
+     iOS 12 (e 13-16) è supportato solo via cavo USB";
+
+fn with_wifi_hint(msg: impl std::fmt::Display) -> String {
+    format!("{msg} ({WIFI_IOS17_HINT})")
+}
+
 /// Il client misagent, più il tunnel (`adapter`) e la stretta di mano RSD (`hs`) con cui aprire
 /// gli altri servizi del telefono (installazione e rimozione di app), più gli oggetti che devono
 /// restare vivi finché serve.
-pub struct PhoneLink {
-    pub misagent: MisagentClient,
-    pub adapter: idevice::tcp::handle::AdapterHandle,
-    pub hs: RsdHandshake,
-    _keep: Vec<Box<dyn Any>>,
+pub enum PhoneLink {
+    /// Connessione moderna basata su RSD.
+    Rsd {
+        misagent: MisagentClient,
+        adapter: idevice::tcp::handle::AdapterHandle,
+        hs: RsdHandshake,
+        /// Provider USB conservato per i servizi classici.
+        usb: Option<UsbmuxdProvider>,
+        _keep: Vec<Box<dyn Any>>,
+    },
+    /// Connessione classica via lockdown/usbmuxd, senza RSD.
+    Legacy {
+        misagent: MisagentClient,
+        provider: UsbmuxdProvider,
+        _keep: Vec<Box<dyn Any>>,
+    },
+}
+
+async fn lockdown_string(lockdown: &mut LockdownClient, key: &str) -> Result<String, String> {
+    let value = lockdown.get_value(Some(key), None).await.map_err(dbg)?;
+
+    value
+        .as_string()
+        .map(str::to_owned)
+        .ok_or_else(|| format!("lockdown non ha restituito una stringa per {key}"))
+}
+
+async fn identity_via_provider(
+    provider: &UsbmuxdProvider,
+) -> Result<(String, String, String), String> {
+    let pairing = provider.get_pairing_file().await.map_err(dbg)?;
+    let mut lockdown = LockdownClient::connect(provider).await.map_err(dbg)?;
+
+    lockdown.start_session(&pairing).await.map_err(dbg)?;
+
+    let name = lockdown_string(&mut lockdown, "DeviceName").await?;
+    let udid = lockdown_string(&mut lockdown, "UniqueDeviceID").await?;
+    let version = lockdown_string(&mut lockdown, "ProductVersion").await?;
+
+    Ok((name, udid, version))
+}
+
+async fn identity_via_rsd(
+    adapter: &mut idevice::tcp::handle::AdapterHandle,
+    hs: &mut RsdHandshake,
+) -> Result<(String, String, String), String> {
+    let mut lockdown = LockdownClient::connect_rsd(adapter, hs)
+        .await
+        .map_err(dbg)?;
+
+    let name = lockdown_string(&mut lockdown, "DeviceName").await?;
+    let udid = lockdown_string(&mut lockdown, "UniqueDeviceID").await?;
+    let version = lockdown_string(&mut lockdown, "ProductVersion").await?;
+
+    Ok((name, udid, version))
+}
+
+impl PhoneLink {
+    pub async fn profiles(&mut self) -> Result<Vec<Vec<u8>>, String> {
+        let misagent = match self {
+            Self::Rsd { misagent, .. } | Self::Legacy { misagent, .. } => misagent,
+        };
+
+        misagent.copy_all().await.map_err(dbg)
+    }
+
+    pub async fn install_profile(&mut self, profile: Vec<u8>) -> Result<(), String> {
+        let misagent = match self {
+            Self::Rsd { misagent, .. } | Self::Legacy { misagent, .. } => misagent,
+        };
+
+        misagent.install(profile).await.map_err(dbg)
+    }
+
+    pub async fn remove_profile(&mut self, uuid: &str) -> Result<(), String> {
+        let misagent = match self {
+            Self::Rsd { misagent, .. } | Self::Legacy { misagent, .. } => misagent,
+        };
+
+        misagent.remove(uuid).await.map_err(dbg)
+    }
+
+    pub async fn device_identity(&mut self) -> Result<(String, String, String), String> {
+        const USB_LOCKDOWN_TIMEOUT: Duration = Duration::from_secs(10);
+
+        match self {
+            Self::Legacy { provider, .. } => {
+                with_timeout(
+                    "Lettura dell'identità via lockdown",
+                    USB_LOCKDOWN_TIMEOUT,
+                    identity_via_provider(provider),
+                )
+                .await
+            }
+            // Su USB si prova prima il lockdown classico (start_session); se non riesce resta il
+            // tunnel RSD, che su iOS 17+ era l'unica strada prima di questa modifica.
+            Self::Rsd {
+                adapter,
+                hs,
+                usb: Some(provider),
+                ..
+            } => match with_timeout(
+                "Lettura dell'identità via lockdown",
+                USB_LOCKDOWN_TIMEOUT,
+                identity_via_provider(provider),
+            )
+            .await
+            {
+                Ok(identity) => Ok(identity),
+                Err(usb_err) => identity_via_rsd(adapter, hs)
+                    .await
+                    .map_err(|rsd_err| format!("{rsd_err} (lockdown via USB: {usb_err})")),
+            },
+            Self::Rsd {
+                adapter,
+                hs,
+                usb: None,
+                ..
+            } => identity_via_rsd(adapter, hs).await,
+        }
+    }
+
+    pub async fn install_app(
+        &mut self,
+        app_path: &Path,
+        progress: &(impl Fn(u64) + Send + Sync),
+    ) -> Result<(), String> {
+        match self {
+            Self::Legacy { provider, .. }
+            | Self::Rsd {
+                usb: Some(provider),
+                ..
+            } => isideload::sideload::install::install_app(provider, app_path, progress)
+                .await
+                .map_err(|e| format!("Installation failed: {e}")),
+            Self::Rsd {
+                adapter,
+                hs,
+                usb: None,
+                ..
+            } => isideload::sideload::install::install_app_rsd(adapter, hs, app_path, progress)
+                .await
+                .map_err(|e| format!("Installation failed: {e}")),
+        }
+    }
+
+    pub async fn uninstall_app(&mut self, bundle_id: &str) -> Result<(), String> {
+        match self {
+            Self::Legacy { provider, .. }
+            | Self::Rsd {
+                usb: Some(provider),
+                ..
+            } => {
+                let mut client = InstallationProxyClient::connect(provider)
+                    .await
+                    .map_err(dbg)?;
+
+                client.uninstall(bundle_id, None).await.map_err(dbg)
+            }
+            Self::Rsd {
+                adapter,
+                hs,
+                usb: None,
+                ..
+            } => {
+                let mut client = InstallationProxyClient::connect_rsd(adapter, hs)
+                    .await
+                    .map_err(dbg)?;
+
+                client.uninstall(bundle_id, None).await.map_err(dbg)
+            }
+        }
+    }
+
+    pub async fn install_ipa_bytes_with_callback<Fut>(
+        &mut self,
+        ipa: Vec<u8>,
+        callback: impl Fn((u64, ())) -> Fut,
+    ) -> Result<(), String>
+    where
+        Fut: std::future::Future<Output = ()>,
+    {
+        match self {
+            Self::Legacy { provider, .. }
+            | Self::Rsd {
+                usb: Some(provider),
+                ..
+            } => idevice::utils::installation::install_bytes_with_callback(
+                provider,
+                ipa,
+                None,
+                callback,
+                (),
+            )
+            .await
+            .map_err(dbg),
+            Self::Rsd {
+                adapter,
+                hs,
+                usb: None,
+                ..
+            } => idevice::utils::installation::install_bytes_with_callback_rsd(
+                adapter,
+                hs,
+                ipa,
+                None,
+                callback,
+                (),
+            )
+            .await
+            .map_err(dbg),
+        }
+    }
 }
 
 /// Come si è arrivati al telefono: cavo USB (usbmuxd locale) o rete.
@@ -54,7 +304,7 @@ impl std::fmt::Display for Via {
 
 /// Aspetta il PIN mostrato sull'iPhone in `pin.txt` (max 2 minuti).
 async fn ask_pin() -> String {
-    println!("   l'iPhone chiede un PIN: scrivilo in pin.txt (attendo 2 minuti)");
+    println!("{}", crate::tr!("   l'iPhone chiede un PIN: scrivilo in pin.txt (attendo 2 minuti)", "   iPhone asks for a PIN: write it to pin.txt (waiting up to 2 minutes)"));
     for _ in 0..120 {
         if let Ok(s) = tokio::fs::read_to_string("pin.txt").await {
             let pin = s.trim().to_string();
@@ -71,8 +321,9 @@ async fn ask_pin() -> String {
 /// Si collega al telefono via Wi-Fi con un pairing remoto già esistente.
 pub async fn connect(addr: SocketAddr, pairing_path: &str) -> Result<PhoneLink, String> {
     if !Path::new(pairing_path).exists() {
-        return Err(format!(
-            "manca il pairing remoto {pairing_path}: crealo con `altkeeper pair-usb`"
+        return Err(crate::tr!(
+            format!("manca il pairing remoto {pairing_path}: crealo con `altkeeper pair-usb`"),
+            format!("remote pairing file {pairing_path} is missing; create it with `altkeeper pair-usb`")
         ));
     }
     let mut pf = RpPairingFile::read_from_file(pairing_path)
@@ -85,9 +336,9 @@ pub async fn connect(addr: SocketAddr, pairing_path: &str) -> Result<PhoneLink, 
         .connect(&mut pf, || async { ask_pin().await })
         .await
         .map_err(|e| {
-            format!(
-                "pairing con l'iPhone non riuscito ({e:?}). Se il telefono non riconosce \
-                 questo pairing, rifallo con `altkeeper pair-usb`"
+            crate::tr!(
+                format!("pairing con l'iPhone non riuscito ({e:?}). Se il telefono non riconosce questo pairing, rifallo con `altkeeper pair-usb`"),
+                format!("iPhone pairing failed ({e:?}). If the phone does not recognize the pairing, repeat `altkeeper pair-usb`")
             )
         })?;
 
@@ -115,10 +366,11 @@ pub async fn connect(addr: SocketAddr, pairing_path: &str) -> Result<PhoneLink, 
         .await
         .map_err(dbg)?;
 
-    Ok(PhoneLink {
+    Ok(PhoneLink::Rsd {
         misagent,
         adapter,
         hs,
+        usb: None,
         _keep: vec![Box::new(client)],
     })
 }
@@ -143,8 +395,68 @@ pub async fn connect_usb(say: &mut impl FnMut(&str)) -> Result<Option<PhoneLink>
     let Some(dev) = devs.iter().find(|d| d.connection_type == Connection::Usb) else {
         return Ok(None);
     };
-    say("iPhone trovato via USB, mi collego col cavo...");
+    say(crate::tr!("iPhone trovato via USB, mi collego col cavo...", "iPhone found via USB, connecting over cable..."));
     let provider = dev.to_provider(addr, "altkeeper");
+
+    // Rileva iOS prima di provare CoreDeviceProxy/RSD. Il probe dedicato verifica anche
+    // start_session e Misagent; questa fase cambia solo il rilevamento della versione.
+    let version = tokio::time::timeout(Duration::from_secs(10), async {
+        let mut lockdown = LockdownClient::connect(&provider).await.map_err(dbg)?;
+        let value = lockdown
+            .get_value(Some("ProductVersion"), None)
+            .await
+            .map_err(dbg)?;
+        value
+            .as_string()
+            .map(str::to_owned)
+            .ok_or_else(|| "ProductVersion non restituita come stringa".to_string())
+    })
+    .await
+    .map_err(|_| "timeout leggendo ProductVersion via lockdown".to_string())
+    .and_then(|read| read);
+
+    // Se la versione non si legge (o non si capisce) non si rinuncia al cavo: si prosegue sul
+    // percorso RSD, come prima che esistesse la rilevazione, salvo ALTKEEPER_LEGACY.
+    let force_legacy = crate::env::is_set("LEGACY");
+    let detected = version.and_then(|v| select_transport(&v, force_legacy).map(|t| (v, t)));
+    let transport = match detected {
+        Ok((version, transport)) => {
+            say(&format!(
+                "iOS rilevato: {version} (trasporto {transport:?})"
+            ));
+            transport
+        }
+        Err(e) => {
+            let transport = fallback_transport(force_legacy);
+            say(&format!(
+                "Versione iOS non determinata ({e}): provo il trasporto {transport:?}"
+            ));
+            transport
+        }
+    };
+    if transport == TransportKind::Legacy {
+        let legacy_connect = async {
+            let pairing = provider.get_pairing_file().await.map_err(dbg)?;
+
+            let mut lockdown = LockdownClient::connect(&provider).await.map_err(dbg)?;
+
+            lockdown.start_session(&pairing).await.map_err(dbg)?;
+
+            drop(lockdown);
+
+            MisagentClient::connect(&provider).await.map_err(dbg)
+        };
+
+        let misagent = tokio::time::timeout(Duration::from_secs(15), legacy_connect)
+            .await
+            .map_err(|_| "timeout collegando lockdown/Misagent via USB".to_string())??;
+
+        return Ok(Some(PhoneLink::Legacy {
+            misagent,
+            provider,
+            _keep: Vec::new(),
+        }));
+    }
 
     let open = async {
         let proxy = CoreDeviceProxy::connect(&provider).await.map_err(dbg)?;
@@ -153,20 +465,47 @@ pub async fn connect_usb(say: &mut impl FnMut(&str)) -> Result<Option<PhoneLink>
         let mut adapter = adapter.to_async_handle();
         let rsd_stream = adapter.connect(rsd_port).await.map_err(dbg)?;
         let mut hs = RsdHandshake::new(rsd_stream).await.map_err(dbg)?;
-        let misagent = MisagentClient::connect_rsd(&mut adapter, &mut hs)
-            .await
-            .map_err(dbg)?;
-        Ok::<_, String>(PhoneLink {
+        // misagent: prima il servizio lockdown via usbmuxd (come pymobiledevice3), che su USB è
+        // il più affidabile; se non parte, ripiego sul tunnel RSD.
+        let misagent = match MisagentClient::connect(&provider).await {
+            Ok(m) => m,
+            Err(_) => MisagentClient::connect_rsd(&mut adapter, &mut hs)
+                .await
+                .map_err(dbg)?,
+        };
+        Ok::<_, String>(PhoneLink::Rsd {
             misagent,
             adapter,
             hs,
+            usb: None,
             _keep: Vec::new(),
         })
     };
     match tokio::time::timeout(Duration::from_secs(15), open).await {
-        Ok(Ok(link)) => Ok(Some(link)),
+        Ok(Ok(mut link)) => {
+            if let PhoneLink::Rsd { usb, .. } = &mut link {
+                *usb = Some(provider);
+            }
+            Ok(Some(link))
+        }
         Ok(Err(e)) => Err(e),
-        Err(_) => Err("il telefono non risponde via USB".into()),
+        Err(_) => Err(crate::tr!("il telefono non risponde via USB", "the phone is not responding over USB").into()),
+    }
+}
+
+/// Esegue `fut` con un tempo massimo: un telefono che smette di rispondere non deve bloccare
+/// il processo per sempre, deve dare un errore leggibile.
+pub async fn with_timeout<T>(
+    what: &str,
+    limit: Duration,
+    fut: impl std::future::Future<Output = Result<T, String>>,
+) -> Result<T, String> {
+    match tokio::time::timeout(limit, fut).await {
+        Ok(r) => r,
+        Err(_) => Err(format!(
+            "{what}: nessuna risposta dal telefono dopo {} s (operazione interrotta)",
+            limit.as_secs()
+        )),
     }
 }
 
@@ -289,13 +628,14 @@ pub async fn connect_auto(
         match connect_usb(&mut say).await {
             Ok(Some(link)) => return Ok((Via::Usb, link)),
             Ok(None) => {}
-            Err(e) => say(&format!("USB non riuscita ({e}), provo in Wi-Fi...")),
+            Err(e) => say(&crate::tr!(format!("USB non riuscita ({e}), provo in Wi-Fi..."), format!("USB connection failed ({e}); trying Wi-Fi..."))),
         }
     }
     if !Path::new(pairing_path).exists() {
-        return Err(format!(
-            "manca il pairing remoto {pairing_path}: crealo con `altkeeper pair-usb`"
-        ));
+        return Err(with_wifi_hint(crate::tr!(
+            format!("manca il pairing remoto {pairing_path}: crealo con `altkeeper pair-usb`"),
+            format!("remote pairing file {pairing_path} is missing; create it with `altkeeper pair-usb`")
+        )));
     }
     const PER_TRY: Duration = Duration::from_secs(12);
     let cache = Path::new(LAST_ADDR_FILE);
@@ -317,12 +657,12 @@ pub async fn connect_auto(
                 return Ok((Via::Wifi(addr), link));
             }
             Ok(Err(e)) => last_err = e,
-            Err(_) => last_err = format!("{addr} non risponde"),
+            Err(_) => last_err = crate::tr!(format!("{addr} non risponde"), format!("{addr} did not respond")),
         }
-        say(&format!("{addr} non risponde, cerco il telefono in rete..."));
+        say(&crate::tr!(format!("{addr} non risponde, cerco il telefono in rete..."), format!("{addr} did not respond; searching the network...")));
     }
     if tried.is_empty() {
-        say("Cerco il telefono in rete...");
+        say(crate::tr!("Cerco il telefono in rete...", "Searching for the phone on the network..."));
     }
 
     // Bonjour, poi la scansione della rete (non dipende da Bonjour), poi Bonjour ancora una volta.
@@ -331,7 +671,7 @@ pub async fn connect_auto(
     while step < 3 {
         let mut found = match step {
             1 => {
-                say("Bonjour non risponde: cerco sulla rete locale...");
+                say(crate::tr!("Bonjour non risponde: cerco sulla rete locale...", "Bonjour did not respond; scanning the local network..."));
                 scan_lan(port).await
             }
             _ => discover(Duration::from_secs(4)).await,
@@ -340,22 +680,25 @@ pub async fn connect_auto(
         step += 1;
         for addr in found {
             tried.push(addr);
-            say(&format!("Trovato un telefono a {addr}, provo..."));
+            say(&crate::tr!(format!("Trovato un telefono a {addr}, provo..."), format!("Found an iPhone at {addr}; connecting...")));
             match tokio::time::timeout(PER_TRY, connect(addr, pairing_path)).await {
                 Ok(Ok(link)) => {
                     write_last_addr(cache, addr);
                     return Ok((Via::Wifi(addr), link));
                 }
                 Ok(Err(e)) => last_err = e,
-                Err(_) => last_err = format!("{addr} non risponde"),
+                Err(_) => last_err = crate::tr!(format!("{addr} non risponde"), format!("{addr} did not respond")),
             }
         }
     }
 
     if tried.is_empty() || last_err.is_empty() {
-        Err("non trovo l'iPhone in rete: è acceso e sul Wi-Fi di casa?".into())
+        Err(with_wifi_hint(crate::tr!(
+            "non trovo l'iPhone in rete: è acceso e sul Wi-Fi di casa?",
+            "cannot find the iPhone on the network: is it on and connected to your home Wi-Fi?"
+        )))
     } else {
-        Err(last_err)
+        Err(with_wifi_hint(last_err))
     }
 }
 
@@ -364,7 +707,7 @@ pub async fn connect_auto(
 /// (per esempio quello del Mac, inoltrato con un tunnel SSH).
 pub async fn pair_usb(out: &str) -> Result<(), String> {
     let var = std::env::var("USBMUXD_SOCKET_ADDRESS")
-        .map_err(|_| "manca USBMUXD_SOCKET_ADDRESS (ip:porta di un usbmuxd)".to_string())?;
+        .map_err(|_| crate::tr!("manca USBMUXD_SOCKET_ADDRESS (ip:porta di un usbmuxd)", "USBMUXD_SOCKET_ADDRESS is missing (ip:port of usbmuxd)").to_string())?;
     let sock: SocketAddr = var.parse().map_err(dbg)?;
     let stream = TcpStream::connect(sock).await.map_err(dbg)?;
     let mut mux = UsbmuxdConnection::new(Box::new(stream), 1);
@@ -372,7 +715,7 @@ pub async fn pair_usb(out: &str) -> Result<(), String> {
     let dev = devs
         .iter()
         .find(|d| d.connection_type == Connection::Usb)
-        .ok_or("nessun iPhone collegato via USB")?;
+        .ok_or(crate::tr!("nessun iPhone collegato via USB", "no iPhone connected via USB"))?;
     let provider = dev.to_provider(UsbmuxdAddr::from_env_var().map_err(dbg)?, "altkeeper");
 
     let service = RemotePairingLockdownService::connect(&provider)
@@ -392,6 +735,43 @@ pub async fn pair_usb(out: &str) -> Result<(), String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn legge_la_versione_ios() {
+        assert_eq!(major_ios_version("12.5.8"), Some(12));
+        assert_eq!(major_ios_version("16.7.12"), Some(16));
+        assert_eq!(major_ios_version("17.0"), Some(17));
+        assert_eq!(major_ios_version("27.0.1"), Some(27));
+        assert_eq!(major_ios_version("unknown"), None);
+        assert_eq!(major_ios_version(""), None);
+    }
+
+    #[test]
+    fn seleziona_il_trasporto_per_versione() {
+        assert_eq!(select_transport("12.5.8", false), Ok(TransportKind::Legacy));
+        assert_eq!(
+            select_transport("16.7.12", false),
+            Ok(TransportKind::Legacy)
+        );
+        assert_eq!(select_transport("17.0", false), Ok(TransportKind::Rsd));
+        assert_eq!(select_transport("27.0.1", false), Ok(TransportKind::Rsd));
+        assert_eq!(select_transport("27.0.1", true), Ok(TransportKind::Legacy));
+        assert!(select_transport("unknown", false).is_err());
+    }
+
+    #[test]
+    fn senza_versione_si_prova_rsd_salvo_legacy_forzato() {
+        assert_eq!(fallback_transport(false), TransportKind::Rsd);
+        assert_eq!(fallback_transport(true), TransportKind::Legacy);
+    }
+
+    #[test]
+    fn il_wifi_spiega_che_ios_12_vuole_il_cavo() {
+        let e = with_wifi_hint("non trovo l'iPhone in rete");
+        assert!(e.starts_with("non trovo l'iPhone in rete"));
+        assert!(e.contains("iOS 12"));
+        assert!(e.contains("USB"));
+    }
 
     fn temp_file(name: &str) -> std::path::PathBuf {
         std::env::temp_dir().join(format!("altkeeper-test-{}-{name}", std::process::id()))
