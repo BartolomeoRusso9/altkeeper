@@ -758,7 +758,7 @@ impl AppleAccount {
         let gs_service_url = self.grandslam_client.get_url("gsService")?;
         debug!("GrandSlam service URL: {}", gs_service_url);
 
-        let cpd = anisette_data.get_client_provided_data();
+        let mut cpd = anisette_data.get_client_provided_data();
 
         let srp_client = srp::Client::<G2048, Sha256>::new_with_options(false);
         let a: Vec<u8> = (0..32).map(|_| rand::random::<u8>()).collect();
@@ -780,6 +780,10 @@ impl AppleAccount {
                 .send_init_request(&gs_service_url, &fresh_cpd, &a_pub)
                 .await
                 .context("Failed to send resynced init request")?;
+            // [patch, pending nab138/isideload#29] the proof request below must present the same
+            // client provided data as the resynced init request, otherwise the two halves of the
+            // login use different anisette identities.
+            cpd = fresh_cpd;
         }
         let response = raw_response
             .check_grandslam_error()
