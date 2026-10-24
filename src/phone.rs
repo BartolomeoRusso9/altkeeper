@@ -59,7 +59,7 @@ impl std::fmt::Display for Via {
 
 /// Aspetta il PIN mostrato sull'iPhone in `pin.txt` (max 2 minuti).
 async fn ask_pin() -> String {
-    println!("   l'iPhone chiede un PIN: scrivilo in pin.txt (attendo 2 minuti)");
+    println!("   the iPhone asks for a PIN: write it in pin.txt (waiting 2 minutes)");
     for _ in 0..120 {
         if let Ok(s) = tokio::fs::read_to_string("pin.txt").await {
             let pin = s.trim().to_string();
@@ -77,7 +77,7 @@ async fn ask_pin() -> String {
 pub async fn connect(addr: SocketAddr, pairing_path: &str) -> Result<PhoneLink, String> {
     if !Path::new(pairing_path).exists() {
         return Err(format!(
-            "manca il pairing remoto {pairing_path}: crealo con `altkeeper pair-usb`"
+            "remote pairing file {pairing_path} is missing: create it with `altkeeper pair-usb`"
         ));
     }
     let mut pf = RpPairingFile::read_from_file(pairing_path)
@@ -91,8 +91,8 @@ pub async fn connect(addr: SocketAddr, pairing_path: &str) -> Result<PhoneLink, 
         .await
         .map_err(|e| {
             format!(
-                "pairing con l'iPhone non riuscito ({e:?}). Se il telefono non riconosce \
-                 questo pairing, rifallo con `altkeeper pair-usb`"
+                "iPhone pairing failed ({e:?}). If the phone no longer recognizes \
+                 this pairing, redo it with `altkeeper pair-usb`"
             )
         })?;
 
@@ -149,7 +149,7 @@ pub async fn connect_usb(say: &mut impl FnMut(&str)) -> Result<Option<PhoneLink>
     let Some(dev) = devs.iter().find(|d| d.connection_type == Connection::Usb) else {
         return Ok(None);
     };
-    say("iPhone trovato via USB, mi collego col cavo...");
+    say("iPhone found over USB, connecting with the cable...");
     let provider = dev.to_provider(addr, "altkeeper");
 
     let open = async {
@@ -181,7 +181,7 @@ pub async fn connect_usb(say: &mut impl FnMut(&str)) -> Result<Option<PhoneLink>
             Ok(Some(link))
         }
         Ok(Err(e)) => Err(e),
-        Err(_) => Err("il telefono non risponde via USB".into()),
+        Err(_) => Err("the iPhone is not responding over USB".into()),
     }
 }
 
@@ -195,7 +195,7 @@ pub async fn with_timeout<T>(
     match tokio::time::timeout(limit, fut).await {
         Ok(r) => r,
         Err(_) => Err(format!(
-            "{what}: nessuna risposta dal telefono dopo {} s (operazione interrotta)",
+            "{what}: no response from the phone after {} s (operation aborted)",
             limit.as_secs()
         )),
     }
@@ -320,12 +320,12 @@ pub async fn connect_auto(
         match connect_usb(&mut say).await {
             Ok(Some(link)) => return Ok((Via::Usb, link)),
             Ok(None) => {}
-            Err(e) => say(&format!("USB non riuscita ({e}), provo in Wi-Fi...")),
+            Err(e) => say(&format!("USB connection failed ({e}); trying Wi-Fi...")),
         }
     }
     if !Path::new(pairing_path).exists() {
         return Err(format!(
-            "manca il pairing remoto {pairing_path}: crealo con `altkeeper pair-usb`"
+            "remote pairing file {pairing_path} is missing: create it with `altkeeper pair-usb`"
         ));
     }
     const PER_TRY: Duration = Duration::from_secs(12);
@@ -348,12 +348,12 @@ pub async fn connect_auto(
                 return Ok((Via::Wifi(addr), link));
             }
             Ok(Err(e)) => last_err = e,
-            Err(_) => last_err = format!("{addr} non risponde"),
+            Err(_) => last_err = format!("{addr} did not respond"),
         }
-        say(&format!("{addr} non risponde, cerco il telefono in rete..."));
+        say(&format!("{addr} did not respond; searching the network..."));
     }
     if tried.is_empty() {
-        say("Cerco il telefono in rete...");
+        say("Searching the network for the iPhone...");
     }
 
     // Bonjour, poi la scansione della rete (non dipende da Bonjour), poi Bonjour ancora una volta.
@@ -362,7 +362,7 @@ pub async fn connect_auto(
     while step < 3 {
         let mut found = match step {
             1 => {
-                say("Bonjour non risponde: cerco sulla rete locale...");
+                say("Bonjour did not respond; scanning the local network...");
                 scan_lan(port).await
             }
             _ => discover(Duration::from_secs(4)).await,
@@ -371,20 +371,20 @@ pub async fn connect_auto(
         step += 1;
         for addr in found {
             tried.push(addr);
-            say(&format!("Trovato un telefono a {addr}, provo..."));
+            say(&format!("Found an iPhone at {addr}; trying to connect..."));
             match tokio::time::timeout(PER_TRY, connect(addr, pairing_path)).await {
                 Ok(Ok(link)) => {
                     write_last_addr(cache, addr);
                     return Ok((Via::Wifi(addr), link));
                 }
                 Ok(Err(e)) => last_err = e,
-                Err(_) => last_err = format!("{addr} non risponde"),
+                Err(_) => last_err = format!("{addr} did not respond"),
             }
         }
     }
 
     if tried.is_empty() || last_err.is_empty() {
-        Err("non trovo l'iPhone in rete: è acceso e sul Wi-Fi di casa?".into())
+        Err("cannot find the iPhone on the network: is it on and connected to your home Wi-Fi?".into())
     } else {
         Err(last_err)
     }
@@ -395,7 +395,7 @@ pub async fn connect_auto(
 /// (per esempio quello del Mac, inoltrato con un tunnel SSH).
 pub async fn pair_usb(out: &str) -> Result<(), String> {
     let var = std::env::var("USBMUXD_SOCKET_ADDRESS")
-        .map_err(|_| "manca USBMUXD_SOCKET_ADDRESS (ip:porta di un usbmuxd)".to_string())?;
+        .map_err(|_| "USBMUXD_SOCKET_ADDRESS is missing (ip:port of a usbmuxd)".to_string())?;
     let sock: SocketAddr = var.parse().map_err(dbg)?;
     let stream = TcpStream::connect(sock).await.map_err(dbg)?;
     let mut mux = UsbmuxdConnection::new(Box::new(stream), 1);
@@ -403,7 +403,7 @@ pub async fn pair_usb(out: &str) -> Result<(), String> {
     let dev = devs
         .iter()
         .find(|d| d.connection_type == Connection::Usb)
-        .ok_or("nessun iPhone collegato via USB")?;
+        .ok_or("no iPhone connected over USB")?;
     let provider = dev.to_provider(UsbmuxdAddr::from_env_var().map_err(dbg)?, "altkeeper");
 
     let service = RemotePairingLockdownService::connect(&provider)

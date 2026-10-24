@@ -79,11 +79,11 @@ fn log(msg: &str) {
 /// le connessioni le gestiscono thread propri. Restituisce la porta.
 pub fn start(port: u16, phone: Option<SocketAddr>) -> Result<u16, String> {
     let listener = TcpListener::bind(("0.0.0.0", port))
-        .map_err(|e| format!("AltServer: non riesco ad ascoltare sulla porta {port}: {e}"))?;
+        .map_err(|e| format!("AltServer: cannot listen on port {port}: {e}"))?;
     let port = listener.local_addr().map_err(|e| e.to_string())?.port();
     let id = server_id()?;
     register_bonjour(port, &id)?;
-    log(&format!("in ascolto sulla porta {port}, serverID {}...", &id[..8]));
+    log(&format!("listening on port {port}, serverID {}...", &id[..8]));
 
     std::thread::spawn(move || {
         for stream in listener.incoming() {
@@ -123,10 +123,10 @@ fn server_id() -> Result<String, String> {
     rustls::crypto::ring::default_provider()
         .secure_random
         .fill(&mut bytes)
-        .map_err(|_| "non riesco a generare il serverID: numeri casuali non disponibili".to_string())?;
+        .map_err(|_| "cannot generate the serverID: no random numbers available".to_string())?;
     let id: String = bytes.iter().map(|b| format!("{b:02x}")).collect();
     let _ = std::fs::create_dir_all("state");
-    std::fs::write(&path, &id).map_err(|e| format!("non riesco a salvare il serverID: {e}"))?;
+    std::fs::write(&path, &id).map_err(|e| format!("cannot save the serverID: {e}"))?;
     Ok(id)
 }
 
@@ -155,7 +155,7 @@ pub fn id() -> Result<String, String> {
 }
 
 fn register_bonjour(port: u16, id: &str) -> Result<(), String> {
-    let daemon = phone::mdns().ok_or("Bonjour non disponibile")?;
+    let daemon = phone::mdns().ok_or("Bonjour not available")?;
     let host = hostname();
     let props = [("serverID", id)];
     let info = mdns_sd::ServiceInfo::new(
@@ -193,7 +193,7 @@ pub fn stop() {
 async fn read_frame<R: AsyncRead + Unpin>(r: &mut R) -> Result<Option<Vec<u8>>, String> {
     let mut len = [0u8; 4];
     match tokio::time::timeout(IO_TIMEOUT, r.read_exact(&mut len)).await {
-        Err(_) => return Err("nessuna richiesta entro il tempo limite".into()),
+        Err(_) => return Err("no request within timeout".into()),
         Ok(Err(e))
             if matches!(
                 e.kind(),
@@ -209,7 +209,7 @@ async fn read_frame<R: AsyncRead + Unpin>(r: &mut R) -> Result<Option<Vec<u8>>, 
     }
     let n = i32::from_le_bytes(len);
     if n <= 0 || n as usize > MAX_JSON {
-        return Err(format!("lunghezza del messaggio non valida: {n}"));
+        return Err(format!("invalid message length: {n}"));
     }
     let mut body = vec![0u8; n as usize];
     tokio::time::timeout(IO_TIMEOUT, r.read_exact(&mut body))
@@ -246,7 +246,7 @@ fn error(code: i32) -> Value {
 async fn handle_connection(stream: TcpStream, ctx: Ctx, peer: &str) {
     let (mut rd, wr) = stream.into_split();
     let wr = Rc::new(tokio::sync::Mutex::new(wr));
-    log(&format!("{peer}: connesso"));
+    log(&format!("{peer}: connected"));
 
     loop {
         let frame = match read_frame(&mut rd).await {
@@ -275,7 +275,7 @@ async fn handle_connection(stream: TcpStream, ctx: Ctx, peer: &str) {
             "RemoveProvisioningProfilesRequest" => Box::pin(remove_profiles(&ctx, &req)).await,
             "RemoveAppRequest" => Box::pin(remove_app(&ctx, &req)).await,
             "EnableUnsignedCodeExecutionRequest" => {
-                log("JIT (EnableUnsignedCodeExecution) non supportato");
+                log("JIT (EnableUnsignedCodeExecution) not supported");
                 error(ERR_UNSUPPORTED_IOS)
             }
             "PrepareAppRequest" => match Box::pin(receive_and_install(&mut rd, &wr, &ctx, &req)).await {
@@ -285,16 +285,16 @@ async fn handle_connection(stream: TcpStream, ctx: Ctx, peer: &str) {
             _ => error(ERR_UNKNOWN_REQUEST),
         };
         let what = match reply["errorCode"].as_i64() {
-            Some(code) => format!("errore {code}"),
+            Some(code) => format!("error {code}"),
             None => reply["identifier"].as_str().unwrap_or("?").to_string(),
         };
         if let Err(e) = send(&wr, &reply).await {
-            log(&format!("{peer}: risposta ({what}) non consegnata: {e}"));
+            log(&format!("{peer}: response ({what}) not delivered: {e}"));
             break;
         }
         log(&format!("{peer}: -> {what}"));
     }
-    log(&format!("{peer}: chiuso"));
+    log(&format!("{peer}: closed"));
 }
 
 async fn send(wr: &Rc<tokio::sync::Mutex<OwnedWriteHalf>>, v: &Value) -> Result<(), String> {
@@ -305,11 +305,11 @@ async fn send(wr: &Rc<tokio::sync::Mutex<OwnedWriteHalf>>, v: &Value) -> Result<
 async fn phone_link(ctx: &Ctx) -> Result<phone::PhoneLink, i32> {
     match Box::pin(phone::connect_auto(ctx.phone, PAIRING_FILE, |_: &str| {})).await {
         Ok((addr, link)) => {
-            log(&format!("telefono a {addr}"));
+            log(&format!("phone at {addr}"));
             Ok(link)
         }
         Err(e) => {
-            log(&format!("telefono non raggiungibile: {e}"));
+            log(&format!("phone not reachable: {e}"));
             Err(ERR_DEVICE_NOT_FOUND)
         }
     }
@@ -331,12 +331,12 @@ async fn anisette() -> Value {
     let started = std::time::Instant::now();
     match apple::anisette_for_altstore(Path::new(".")).await {
         Ok(v) => {
-            log(&format!("dati anisette pronti in {:.1} s", started.elapsed().as_secs_f32()));
+            log(&format!("anisette data ready in {:.1} s", started.elapsed().as_secs_f32()));
             *cache = Some((std::time::Instant::now(), v.clone()));
             json!({ "version": 1, "identifier": "AnisetteDataResponse", "anisetteData": v })
         }
         Err(e) => {
-            log(&format!("dati anisette non disponibili: {e}"));
+            log(&format!("anisette data not available: {e}"));
             error(ERR_INVALID_ANISETTE)
         }
     }
@@ -366,15 +366,15 @@ async fn install_profiles(ctx: &Ctx, req: &Value) -> Value {
                 .map(|p| p.bundle_id.unwrap_or(p.name))
                 .unwrap_or_else(|| "?".into());
             if let Err(e) = link.misagent.install(blob).await {
-                log(&format!("profilo {name} non installato: {e:?}"));
+                log(&format!("profile {name} not installed: {e:?}"));
                 return error(ERR_INSTALLATION_FAILED);
             }
-            log(&format!("profilo installato: {name}"));
+            log(&format!("profile installed: {name}"));
         }
     }
     if let Some(active) = req["activeProfiles"].as_array() {
         log(&format!(
-            "activeProfiles ({} bundle) ricevuto: non tolgo profili dal telefono",
+            "activeProfiles ({} bundles) received: not removing profiles from the phone",
             active.len()
         ));
     }
@@ -395,7 +395,7 @@ async fn remove_profiles(ctx: &Ctx, req: &Value) -> Value {
         let raw = match link.misagent.copy_all().await {
             Ok(r) => r,
             Err(e) => {
-                log(&format!("non riesco a leggere i profili: {e:?}"));
+                log(&format!("cannot read the profiles: {e:?}"));
                 return error(ERR_INSTALLATION_FAILED);
             }
         };
@@ -406,8 +406,8 @@ async fn remove_profiles(ctx: &Ctx, req: &Value) -> Value {
                 .is_some_and(|b| wanted.contains(&b.to_lowercase()));
             if matches {
                 match link.misagent.remove(&p.uuid).await {
-                    Ok(()) => log(&format!("profilo tolto: {}", p.bundle_id.unwrap_or_default())),
-                    Err(e) => log(&format!("profilo {} non tolto: {e:?}", p.uuid)),
+                    Ok(()) => log(&format!("profile removed: {}", p.bundle_id.unwrap_or_default())),
+                    Err(e) => log(&format!("profile {} not removed: {e:?}", p.uuid)),
                 }
             }
         }
@@ -437,7 +437,7 @@ async fn remove_app(ctx: &Ctx, req: &Value) -> Value {
             simple("RemoveAppResponse")
         }
         Err(e) => {
-            log(&format!("app {bundle} non disinstallata: {e}"));
+            log(&format!("app {bundle} not uninstalled: {e}"));
             error(ERR_APP_DELETION_FAILED)
         }
     }
@@ -453,10 +453,10 @@ async fn receive_and_install(
 ) -> Result<(), i32> {
     let size = req["contentSize"].as_u64().unwrap_or(0);
     if size == 0 || size > MAX_IPA {
-        log(&format!("dimensione dell'app non valida: {size}"));
+        log(&format!("invalid app size: {size}"));
         return Err(ERR_INVALID_REQUEST);
     }
-    log(&format!("attendo l'app da AltStore: {size} byte"));
+    log(&format!("waiting for the app from AltStore: {size} bytes"));
     let mut ipa = vec![0u8; size as usize];
     let mut got = 0usize;
     let mut last_log = std::time::Instant::now();
@@ -464,27 +464,27 @@ async fn receive_and_install(
     while got < ipa.len() {
         match tokio::time::timeout_at(deadline, rd.read(&mut ipa[got..])).await {
             Ok(Ok(0)) => {
-                log(&format!("AltStore ha chiuso la connessione dopo {got} di {size} byte"));
+                log(&format!("AltStore closed the connection after {got} of {size} bytes"));
                 return Err(ERR_INVALID_REQUEST);
             }
             Ok(Ok(n)) => {
                 got += n;
                 if last_log.elapsed() >= Duration::from_secs(5) {
-                    log(&format!("app in arrivo: {got} di {size} byte"));
+                    log(&format!("receiving app: {got} of {size} bytes"));
                     last_log = std::time::Instant::now();
                 }
             }
             Ok(Err(e)) => {
-                log(&format!("errore leggendo l'app dopo {got} di {size} byte: {e}"));
+                log(&format!("error reading the app after {got} of {size} bytes: {e}"));
                 return Err(ERR_INVALID_REQUEST);
             }
             Err(_) => {
-                log(&format!("app non ricevuta per intero: {got} di {size} byte"));
+                log(&format!("app not fully received: {got} of {size} bytes"));
                 return Err(ERR_INVALID_REQUEST);
             }
         }
     }
-    log(&format!("app ricevuta: {} MB", size / 1_048_576));
+    log(&format!("app received: {} MB", size / 1_048_576));
 
     // Il messaggio successivo deve essere BeginInstallationRequest.
     let next = match read_frame(rd).await {
@@ -496,13 +496,13 @@ async fn receive_and_install(
     }
     if let Some(active) = next["activeProfiles"].as_array() {
         log(&format!(
-            "activeProfiles ({} bundle) ricevuto: non tolgo profili dal telefono",
+            "activeProfiles ({} bundles) received: not removing profiles from the phone",
             active.len()
         ));
     }
     // Un IPA è uno zip.
     if !ipa.starts_with(b"PK") {
-        log("il file ricevuto non è un IPA");
+        log("the received file is not an IPA");
         return Err(ERR_INVALID_APP);
     }
 
@@ -526,10 +526,10 @@ async fn receive_and_install(
     ))
     .await
     .map_err(|e| {
-        log(&format!("installazione non riuscita: {e:?}"));
+        log(&format!("install failed: {e:?}"));
         ERR_INSTALLATION_FAILED
     })?;
-    log("app installata");
+    log("app installed");
     Ok(())
 }
 
