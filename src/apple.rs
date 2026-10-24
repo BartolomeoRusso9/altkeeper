@@ -18,7 +18,7 @@ use isideload::{
         teams::{DeveloperTeam, TeamsApi},
     },
     sideload::{SideloaderBuilder, builder::MaxCertsBehavior},
-    util::fs_storage::FsStorage,
+    util::{callbacks::MaxCertsCallbackBox, fs_storage::FsStorage},
 };
 use serde::{Deserialize, Serialize};
 
@@ -147,8 +147,15 @@ pub fn iso8601_utc(epoch_secs: u64) -> String {
 /// Il server anisette risponde -45061 ("reprovision required") quando l'identità salvata in
 /// `state/anisette_state` non vale più per lui: server cambiato, backend rifatto, `adi.pb`
 /// perso. Riprovare con la stessa identità non serve a niente, bisogna provisionarne una nuova.
+///
+/// Con isideload 0.4.x `get_anisette_data` riprova da sé fino a 3 volte (`get_data_or_provision`)
+/// e quando li esaurisce restituisce "Max anisette provisioning attempts reached": anche quella
+/// va trattata come identità da rimpiazzare, altrimenti la messa da parte di `anisette_state`
+/// viene saltata proprio nel caso in cui serve.
 fn needs_reprovision(err: &str) -> bool {
-    err.contains("-45061") || err.contains("reprovision required")
+    err.contains("-45061")
+        || err.contains("reprovision required")
+        || err.contains("Max anisette provisioning attempts reached")
 }
 
 /// Mette da parte l'identità anisette scaduta (`anisette_state` -> `anisette_state.stale`):
@@ -443,7 +450,7 @@ impl Drop for SignedApp {
 /// `ALTKEEPER_REVOKE_CERTS=1` autorizza a revocare i certificati di sviluppo già presenti quando
 /// Apple ha raggiunto il limite (errore 7460). Di default si ferma con un errore, perché la
 /// revoca invalida le app firmate con quei certificati.
-pub fn max_certs_behavior(value: Option<&str>) -> MaxCertsBehavior {
+pub fn max_certs_behavior(value: Option<&str>) -> MaxCertsBehavior<MaxCertsCallbackBox> {
     match value.map(|v| v.trim().to_ascii_lowercase()).as_deref() {
         Some("1" | "true" | "yes" | "si" | "sì" | "on") => MaxCertsBehavior::Revoke,
         _ => MaxCertsBehavior::Error,
@@ -489,6 +496,8 @@ pub async fn sign_ipa(
             Some(team),
             false,
             None::<fn(f32) -> std::future::Ready<()>>,
+            None,
+            None,
         )
         .await
         .map_err(|e| {

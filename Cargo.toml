@@ -20,7 +20,7 @@ idevice = { version = "0.1.68", default-features = false, features = [
   "afc",
   "usbmuxd",
 ] }
-isideload = { version = "0.3.17", default-features = false, features = [
+isideload = { version = "0.4.6", default-features = false, features = [
   "install",
   "fs-storage",
   "tokio-mt",
@@ -34,9 +34,9 @@ serde_json = "1"
 tokio = { version = "1", features = ["full"] }
 tracing-subscriber = { version = "0.3", features = ["env-filter"] }
 
-# isideload 0.3.17 dichiara a Apple l'identità "com.apple.dt.Xcode", che Apple
-# blocca con un errore 503 al login. La copia in vendor/ è identica all'originale
-# tranne la stringa in src/anisette/remote_v3/mod.rs (ora "com.apple.akd/1.0").
+# La copia in vendor/ è isideload 0.4.6 (upstream 8ca39b62) con due modifiche locali:
+# gli accessor di AnisetteData usati dal ponte AltStore e il logging ALTKEEPER_DEBUG /
+# le impostazioni di trasporto HTTP/1.1 portate dalla vecchia copia 0.3.17.
 [patch.crates-io]
 isideload = { path = "vendor/isideload" }
 

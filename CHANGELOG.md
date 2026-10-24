@@ -2,6 +2,17 @@
 
 ## Unreleased
 
+### Changed
+- **Sign-in works again (Apple `-80045` since 2026-10-12).** The vendored `isideload` was updated to
+  **0.4.6** (upstream `8ca39b62`), which takes the anisette `client_info` from the anisette server
+  and resyncs / re-provisions when Apple asks (nab138/isideload#26 and follow-ups). Only two call
+  sites needed adapting: `MaxCertsBehavior` is now generic (we use the crate's
+  `MaxCertsCallbackBox`), and `sign_app` gained `pairing_file`/`device_udid` (passed as `None`
+  here). The `AnisetteData` accessors used by the AltStore anisette bridge were restored in the
+  vendored copy. The local `ALTKEEPER_DEBUG` logging and the HTTP/1.1 + `Connection: close`
+  transport tweaks were ported to the new copy. Tested on a long-running Docker deployment:
+  unattended renewals (profiles + App IDs) work again.
+
 ### Added
 - **USB when the iPhone is plugged into the machine running AltKeeper.** Every connection (check, renew, sign and install, AltServer) first looks for an iPhone on USB through the local `usbmuxd` (or the one in `USBMUXD_SOCKET_ADDRESS`) and talks to it through the CoreDeviceProxy tunnel; if there is none, or it fails, it falls back to Wi-Fi as before. Much faster for installing IPAs. Needs the phone to already trust the computer (the usual "Trust" prompt), not the remote pairing. `--phone <ip:port>` forces Wi-Fi; `ALTKEEPER_NO_USB=1` turns USB off. In Docker the usbmuxd socket must be mounted into the container.
 - `ALTKEEPER_REVOKE_CERTS=1`: when installing an IPA from the web page fails with Apple error 7460 (the Apple ID already has a development certificate, e.g. from AltStore/SideStore), AltKeeper can revoke it and create its own. Off by default; without it you now get a clear explanation instead of a generic error.
