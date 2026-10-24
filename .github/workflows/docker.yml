@@ -1,7 +1,7 @@
 # Prova il codice e pubblica l'immagine Docker su GitHub Container Registry (ghcr.io).
 #
 # - Pull request: prova i test e la compilazione dell'immagine (amd64), senza pubblicare.
-# - Push su main: pubblica `latest` e `sha-<commit>` (solo amd64: è la compilazione veloce).
+# - Push su main: pubblica `latest` e `sha-<commit>` per amd64 e arm64.
 # - Tag `vX.Y.Z` (per esempio `git tag v0.2.0 && git push --tags`): pubblica `X.Y.Z`, `X.Y` e
 #   `latest`, per amd64 e arm64 (l'arm64 gira sotto emulazione: richiede parecchi minuti).
 #
@@ -65,8 +65,8 @@ jobs:
       - uses: docker/build-push-action@v7
         with:
           context: .
-          # I tag di versione pubblicano anche arm64; il resto solo amd64 (più rapido).
-          platforms: ${{ startsWith(github.ref, 'refs/tags/v') && 'linux/amd64,linux/arm64' || 'linux/amd64' }}
+          # Il fork pubblica amd64 e arm64 anche su main, per Raspberry Pi.
+          platforms: linux/amd64,linux/arm64
           push: ${{ github.event_name != 'pull_request' }}
           tags: ${{ steps.meta.outputs.tags }}
           labels: ${{ steps.meta.outputs.labels }}
