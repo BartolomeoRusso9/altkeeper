@@ -359,6 +359,35 @@ pub async fn connect_auto(
     }
 }
 
+/// Installa un'app già firmata via USB con la strada classica (usbmuxd + lockdown, AFC e
+/// installation_proxy), senza il tunnel software CoreDeviceProxy che con file grandi si blocca.
+/// `Ok(false)` = nessun iPhone su USB: si può ripiegare sul tunnel di rete.
+pub async fn install_via_usb(
+    app: &Path,
+    progress: impl Fn(u64) + Send + Sync,
+) -> Result<bool, String> {
+    if crate::env::is_set("NO_USB") {
+        return Ok(false);
+    }
+    let addr = UsbmuxdAddr::from_env_var().map_err(dbg)?;
+    let Ok(Ok(mut mux)) = tokio::time::timeout(Duration::from_secs(2), addr.connect(1)).await
+    else {
+        return Ok(false);
+    };
+    let Ok(Ok(devs)) = tokio::time::timeout(Duration::from_secs(3), mux.get_devices()).await
+    else {
+        return Ok(false);
+    };
+    let Some(dev) = devs.iter().find(|d| d.connection_type == Connection::Usb) else {
+        return Ok(false);
+    };
+    let provider = dev.to_provider(addr, "altkeeper");
+    isideload::sideload::install::install_app(&provider, app, progress)
+        .await
+        .map_err(|e| format!("Installation failed: {e:?}"))?;
+    Ok(true)
+}
+
 /// Crea il pairing remoto via USB, senza richieste sul telefono.
 /// Serve un usbmuxd raggiungibile via TCP in USBMUXD_SOCKET_ADDRESS
 /// (per esempio quello del Mac, inoltrato con un tunnel SSH).

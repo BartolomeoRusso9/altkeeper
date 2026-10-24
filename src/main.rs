@@ -151,6 +151,22 @@ async fn cmd_phone(addr: Option<SocketAddr>) -> Result<(), String> {
     let profiles = phone_profiles(&mut link).await?;
     println!("{} profili installati sul telefono:", profiles.len());
     profiles.iter().for_each(print_profile);
+
+    use idevice::RsdService;
+    if let Ok(mut inst) = idevice::installation_proxy::InstallationProxyClient::connect_rsd(&mut link.adapter, &mut link.hs).await {
+        if let Ok(apps) = inst.get_apps(Some("User"), None).await {
+            println!("\n{} app utente trovate:", apps.len());
+            for (bundle, info) in &apps {
+                if let Some(dict) = info.as_dictionary() {
+                    let name = dict.get("CFBundleDisplayName").or_else(|| dict.get("CFBundleName")).and_then(|v| v.as_string()).unwrap_or(bundle);
+                    let signer = dict.get("SignerIdentity").and_then(|v| v.as_string()).unwrap_or("<unknown>");
+                    println!(" - {name} ({bundle}) [Signer: {signer}]");
+                } else {
+                    println!(" - {bundle}");
+                }
+            }
+        }
+    }
     Ok(())
 }
 

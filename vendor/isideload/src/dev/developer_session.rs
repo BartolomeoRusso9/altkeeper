@@ -79,6 +79,18 @@ impl DeveloperSession {
             HeaderValue::from_str(&self.token.token)?,
         );
         headers.insert("X-Apple-I-Identity-Id", HeaderValue::from_str(&self.adsid)?);
+        headers.insert(
+            "X-Apple-App-Info",
+            HeaderValue::from_static("com.apple.gs.xcode.auth"),
+        );
+        headers.insert(
+            "X-Xcode-Version",
+            HeaderValue::from_static("14.2 (14C18)"),
+        );
+        headers.insert(
+            "User-Agent",
+            HeaderValue::from_static("Xcode"),
+        );
 
         Ok(headers)
     }

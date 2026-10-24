@@ -20,7 +20,7 @@ use std::path::PathBuf;
 
 use idevice::provider::IdeviceProvider;
 use rootcause::{option_ext::OptionExt, prelude::*};
-use tracing::info;
+use tracing::{info, warn};
 
 pub struct Sideloader {
     team_selection: TeamSelection,
@@ -183,6 +183,30 @@ impl Sideloader {
             app.bundle.bundle_dir.join("embedded.mobileprovision"),
             provisioning_profile.encoded_profile.as_ref(),
         )?;
+
+        // Every app extension needs its own provisioning profile, otherwise iOS refuses to
+        // launch the app ("The app extension is missing a valid provisioning profile").
+        let ext_targets: Vec<(std::path::PathBuf, String)> = app
+            .bundle
+            .app_extensions()
+            .iter()
+            .filter_map(|e| Some((e.bundle_dir.clone(), e.bundle_identifier()?.to_string())))
+            .collect();
+        for (ext_dir, ext_id) in ext_targets {
+            let Some(ext_app_id) = app_ids.iter().find(|a| a.identifier == ext_id).cloned() else {
+                warn!("No App ID found for extension {ext_id}, skipping its profile");
+                continue;
+            };
+            let ext_profile = self
+                .dev_session
+                .download_team_provisioning_profile(&team, &ext_app_id, None)
+                .await?;
+            isideload_vfs::fs::write(
+                ext_dir.join("embedded.mobileprovision"),
+                ext_profile.encoded_profile.as_ref(),
+            )?;
+            info!("Acquired provisioning profile for extension {ext_id}");
+        }
 
         if let Some(callback) = &progress_callback {
             callback(0.3).await;

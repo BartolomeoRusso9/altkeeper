@@ -53,6 +53,19 @@
   ul.plain li { padding: 10px 0; border-top: 1px solid var(--line); }
   ul.plain li:first-child { border-top: 0; padding-top: 0; }
   .app-name { font-weight: 600; word-break: break-all; }
+  .quotas-row { display: flex; gap: 8px; align-items: center; }
+  .quota-badge {
+    display: inline-flex; align-items: center; padding: 3px 10px;
+    border-radius: 999px; font-size: .83rem; font-weight: 600;
+    background: var(--track); color: var(--muted); border: 1px solid var(--line);
+  }
+  .quota-badge.near-limit { background: var(--soon-bg); color: var(--soon); border-color: var(--soon); }
+  .quota-badge.at-limit { background: var(--urgent-bg); color: var(--urgent); border-color: var(--urgent); }
+  .ext-pill {
+    display: inline-block; padding: 1px 7px; border-radius: 6px;
+    font-size: .78rem; font-weight: 500; background: var(--track);
+    color: var(--muted); margin-left: 8px; vertical-align: middle;
+  }
   .bar { height: 8px; border-radius: 6px; background: var(--track); overflow: hidden; margin-top: 6px; }
   .bar > span { display: block; height: 100%; border-radius: 6px; background: var(--ok); }
   li.soon .bar > span { background: var(--soon); }
@@ -102,7 +115,13 @@
   </section>
 
   <section class="card">
-    <h2>Your apps</h2>
+    <div class="row" style="justify-content:space-between; margin-bottom: 8px;">
+      <h2 style="margin:0">Your apps</h2>
+      <div class="quotas-row" id="quotas-row" hidden>
+        <span class="quota-badge" id="quota-apps"></span>
+        <span class="quota-badge" id="quota-appids"></span>
+      </div>
+    </div>
     <p class="muted" id="apps-empty" hidden></p>
     <ul class="plain" id="apps"></ul>
     <div class="row" style="margin-top:14px">
@@ -238,6 +257,28 @@ function render(s) {
   banner("phone-error", err, "bad");
   $("phone-error").title = p.detail || "";
 
+  // Quotas
+  const qRow = $("quotas-row");
+  if (s.quotas && s.account.present && p.reachable === true) {
+    qRow.hidden = false;
+    const qApps = $("quota-apps");
+    const qAppIds = $("quota-appids");
+    const appsUsed = s.quotas.installed_apps;
+    const maxApps = s.quotas.max_installed_apps || 3;
+    const idsUsed = s.quotas.app_ids_used;
+    const maxIds = s.quotas.max_app_ids || 10;
+
+    qApps.textContent = `${appsUsed}/${maxApps} Apps`;
+    qApps.className = appsUsed >= maxApps ? "quota-badge at-limit" : appsUsed >= maxApps - 1 ? "quota-badge near-limit" : "quota-badge";
+    qApps.title = `${appsUsed} of ${maxApps} active sideloaded apps used on this device`;
+
+    qAppIds.textContent = `${idsUsed}/${maxIds} App IDs`;
+    qAppIds.className = idsUsed >= maxIds ? "quota-badge at-limit" : idsUsed >= 7 ? "quota-badge near-limit" : "quota-badge";
+    qAppIds.title = `${idsUsed} of ${maxIds} App IDs registered on this Apple ID this week`;
+  } else {
+    qRow.hidden = true;
+  }
+
   // App
   const ul = $("apps");
   ul.replaceChildren();
@@ -245,9 +286,18 @@ function render(s) {
     const pct = Math.max(4, Math.min(100, Math.round((Math.max(a.days, 0) / 7) * 100)));
     const bar = div("bar", span(""));
     bar.firstChild.style.width = pct + "%";
+    const nameDiv = div("app-name", document.createTextNode(a.label));
+    if (a.extensions && a.extensions.length > 0) {
+      const extPill = span("ext-pill", `+${a.extensions.length} extension${a.extensions.length > 1 ? 's' : ''}`);
+      extPill.title = "App extensions: " + a.extensions.join(", ");
+      nameDiv.appendChild(extPill);
+    }
+    const subText = a.extensions && a.extensions.length > 0
+      ? ` · ${a.expires.slice(0, 10)} (${a.extensions.join(", ")})`
+      : ` · ${a.expires.slice(0, 10)}`;
     ul.append(li(a.level,
-      div("app-name", document.createTextNode(a.label)),
-      div("muted", span(days(a.days), "when"), document.createTextNode(" · " + a.expires.slice(0, 10))),
+      nameDiv,
+      div("muted", span(days(a.days), "when"), document.createTextNode(subText)),
       bar));
   });
   const empty = $("apps-empty");

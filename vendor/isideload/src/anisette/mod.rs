@@ -29,6 +29,29 @@ pub struct AnisetteData {
 }
 
 // Some headers don't seem to be required. I guess not including them is technically more efficient soooo
+pub fn iso8601_utc(epoch_secs: u64) -> String {
+    let days = (epoch_secs / 86_400) as i64;
+    let rem = epoch_secs % 86_400;
+    let z = days + 719_468;
+    let era = z.div_euclid(146_097);
+    let doe = z.rem_euclid(146_097);
+    let yoe = (doe - doe / 1_460 + doe / 36_524 - doe / 146_096) / 365;
+    let mut year = yoe + era * 400;
+    let doy = doe - (365 * yoe + yoe / 4 - yoe / 100);
+    let mp = (5 * doy + 2) / 153;
+    let day = doy - (153 * mp + 2) / 5 + 1;
+    let month = if mp < 10 { mp + 3 } else { mp - 9 };
+    if month <= 2 {
+        year += 1;
+    }
+    format!(
+        "{year:04}-{month:02}-{day:02}T{:02}:{:02}:{:02}Z",
+        rem / 3_600,
+        (rem % 3_600) / 60,
+        rem % 60
+    )
+}
+
 impl AnisetteData {
     // Accessori in sola lettura (usati da altrefresh per rispondere ad AltStore).
     pub fn machine_id(&self) -> &str {
@@ -44,29 +67,25 @@ impl AnisetteData {
         &self.device_unique_identifier
     }
 
+
     pub fn get_headers(&self) -> HashMap<String, String> {
-        //let dt: DateTime<Utc> = Utc::now().round_subsecs(0);
+        let now = SystemTime::now()
+            .duration_since(SystemTime::UNIX_EPOCH)
+            .map(|d| d.as_secs())
+            .unwrap_or(0);
+        let client_time = iso8601_utc(now);
 
         HashMap::from_iter([
-            // (
-            //     "X-Apple-I-Client-Time".to_string(),
-            //     dt.format("%+").to_string().replace("+00:00", "Z"),
-            // ),
-            // ("X-Apple-I-SRL-NO".to_string(), serial),
-            // ("X-Apple-I-TimeZone".to_string(), "UTC".to_string()),
-            // ("X-Apple-Locale".to_string(), "en_US".to_string()),
-            // ("X-Apple-I-MD-RINFO".to_string(), self.routing_info.clone()),
-            // ("X-Apple-I-MD-LU".to_string(), self.local_user_id.clone()),
-            (
-                "X-Mme-Device-Id".to_string(),
-                self.device_unique_identifier.clone(),
-            ),
+            ("X-Apple-I-Client-Time".to_string(), client_time),
+            ("X-Apple-I-SRL-NO".to_string(), "0".to_string()),
+            ("X-Apple-I-TimeZone".to_string(), "GMT".to_string()),
+            ("X-Apple-Locale".to_string(), "en_US".to_string()),
+            ("X-Apple-I-MD-RINFO".to_string(), self.routing_info.clone()),
+            ("X-Apple-I-MD-LU".to_string(), self._local_user_id.clone()),
+            ("X-Mme-Device-Id".to_string(), self.device_unique_identifier.clone()),
             ("X-Apple-I-MD".to_string(), self.one_time_password.clone()),
             ("X-Apple-I-MD-M".to_string(), self.machine_id.clone()),
-            // (
-            //     "X-Mme-Client-Info".to_string(),
-            //     self.device_description.clone(),
-            // ),
+            ("X-Mme-Client-Info".to_string(), self._device_description.clone()),
         ])
     }
 

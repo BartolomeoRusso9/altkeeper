@@ -65,6 +65,7 @@ struct Snapshot {
     detail: Option<String>,
     profiles_total: usize,
     apps: Vec<AppView>,
+    app_ids_used: usize,
 }
 
 #[derive(Clone, PartialEq, Debug)]
@@ -74,6 +75,7 @@ struct AppView {
     days: i64,
     expires: String,
     level: &'static str,
+    extensions: Vec<String>,
 }
 
 #[derive(Default, Clone)]
@@ -387,9 +389,17 @@ async fn state(State(app): State<Arc<App>>) -> Json<Value> {
             "detail": g.snapshot.detail,
             "profiles_total": g.snapshot.profiles_total,
         },
+        "quotas": {
+            "installed_apps": g.snapshot.apps.len(),
+            "max_installed_apps": 3,
+            "app_ids_used": g.snapshot.app_ids_used,
+            "max_app_ids": 10,
+        },
         "apps": g.snapshot.apps.iter().map(|a| json!({
             "bundle": a.bundle, "label": a.label, "days": a.days,
             "expires": a.expires, "level": a.level,
+            "extensions_count": a.extensions.len(),
+            "extensions": a.extensions,
         })).collect::<Vec<_>>(),
         "job": {
             "kind": g.job.kind, "running": g.job.running,
@@ -615,7 +625,7 @@ async fn login(
     State(app): State<Arc<App>>,
     Json(req): Json<LoginReq>,
 ) -> (StatusCode, Json<Value>) {
-    let id = req.apple_id.trim().to_string();
+    let id = req.apple_id.trim().to_lowercase();
     if id.is_empty() || id.len() > 200 || req.password.is_empty() || req.password.len() > 200 {
         return json_err(StatusCode::BAD_REQUEST, "Enter your Apple ID and password.");
     }
@@ -684,7 +694,12 @@ async fn run_check(app: Arc<App>) {
             g.snapshot.error = None;
             g.snapshot.detail = None;
             g.snapshot.profiles_total = profiles.len();
-            g.snapshot.apps = team.as_deref().map(|t| app_views(&profiles, t)).unwrap_or_default();
+            let (apps, app_ids_used) = team
+                .as_deref()
+                .map(|t| app_views(&profiles, t))
+                .unwrap_or_default();
+            g.snapshot.apps = apps;
+            g.snapshot.app_ids_used = app_ids_used;
         }
         Ok(Err(e)) => {
             g.snapshot.reachable = Some(false);
@@ -780,9 +795,32 @@ async fn install_ipa(app: &Arc<App>, upload: &UploadedIpa) -> Result<(), String>
     )
     .await?;
 
-    app.push_line("Installing the signed app over Wi-Fi…");
     let _work = crate::altserver::phone_lock();
-    let (_, mut link) = phone::connect_auto(app.phone, PAIRING_FILE, |_: &str| {}).await?;
+    // Prima la strada diretta via USB (veloce e affidabile); il tunnel serve solo in Wi-Fi.
+    {
+        let last_logged = std::sync::atomic::AtomicI64::new(-1);
+        let started = std::time::Instant::now();
+        app.push_line("Installing the signed app over USB (direct)…");
+        let usb_done = phone::install_via_usb(&signed_app.path, |percent| {
+            if let Some(step) = progress_step(percent, last_logged.load(Ordering::Relaxed)) {
+                last_logged.store(step, Ordering::Relaxed);
+                app.push_line(&format!(
+                    "Installation progress: {step}% ({}s)",
+                    started.elapsed().as_secs()
+                ));
+            }
+        })
+        .await?;
+        if usb_done {
+            return Ok(());
+        }
+    }
+    let (via, mut link) = phone::connect_auto(app.phone, PAIRING_FILE, |_: &str| {}).await?;
+    let medium = match via {
+        phone::Via::Usb => "USB",
+        phone::Via::Wifi(_) => "Wi-Fi",
+    };
+    app.push_line(&format!("Installing the signed app over {medium}…"));
     // Il telefono manda decine di notifiche con la stessa percentuale: una riga ogni 10%.
     let last_logged = std::sync::atomic::AtomicI64::new(-1);
     let started = std::time::Instant::now();
@@ -867,25 +905,51 @@ fn level_for(days: i64) -> &'static str {
     }
 }
 
-/// Le app del team, una riga per bundle (il profilo più recente), dalla più urgente.
-fn app_views(profiles: &[profile::PhoneProfile], team: &str) -> Vec<AppView> {
+/// Le app del team, raggruppate per app principale con le relative estensioni, dalla piu urgente.
+fn app_views(profiles: &[profile::PhoneProfile], team: &str) -> (Vec<AppView>, usize) {
     let mine = profiles.iter().filter(|p| p.team_id.as_deref() == Some(team));
-    let mut views: Vec<AppView> = profile::latest_by_bundle(mine)
-        .into_iter()
-        .filter_map(|p| {
-            let bundle = p.bundle_id.clone()?;
-            let days = p.days_left().unwrap_or(-1);
-            Some(AppView {
+    let mut latest = profile::latest_by_bundle(mine);
+    let app_ids_used = latest.len();
+
+    // Ordina per lunghezza del bundle crescente: le app genitore precedono sempre le loro estensioni.
+    latest.sort_by_key(|p| p.bundle_id.as_ref().map(|b| b.len()).unwrap_or(0));
+
+    let mut views: Vec<AppView> = Vec::new();
+
+    for p in latest {
+        let Some(bundle) = p.bundle_id.clone() else { continue; };
+        let days = p.days_left().unwrap_or(-1);
+
+        let mut found_parent = false;
+        for parent in &mut views {
+            let prefix = format!("{}.", parent.bundle);
+            if bundle.starts_with(&prefix) {
+                let ext_name = bundle[prefix.len()..].to_string();
+                parent.extensions.push(ext_name);
+                if days < parent.days {
+                    parent.days = days;
+                    parent.expires = p.expires_text();
+                    parent.level = level_for(days);
+                }
+                found_parent = true;
+                break;
+            }
+        }
+
+        if !found_parent {
+            views.push(AppView {
                 label: label_of(&bundle, team),
                 bundle,
                 days,
                 expires: p.expires_text(),
                 level: level_for(days),
-            })
-        })
-        .collect();
+                extensions: Vec::new(),
+            });
+        }
+    }
+
     views.sort_by(|a, b| a.days.cmp(&b.days).then_with(|| a.label.cmp(&b.label)));
-    views
+    (views, app_ids_used)
 }
 
 /// Traduce gli errori tecnici in una frase comprensibile.
@@ -910,11 +974,13 @@ fn friendly_error(err: &str) -> String {
 }
 
 fn short_error(err: &str) -> String {
-    let one_line = err
-        .lines()
-        .map(str::trim)
-        .find(|l| !l.is_empty())
-        .unwrap_or(err);
+    let non_empty: Vec<&str> = err.lines().map(str::trim).filter(|l| !l.is_empty()).collect();
+    let one_line = if non_empty.len() > 1 && (non_empty[0].ends_with(":") || non_empty[0] == "Installation failed:") {
+        format!("{} {}", non_empty[0], non_empty[1])
+    } else {
+        non_empty.first().copied().unwrap_or(err).to_string()
+    };
+    let one_line = one_line.as_str();
     let translated = if let Some(detail) = one_line.strip_prefix("login Apple ID non riuscito: ") {
         format!("Apple ID sign-in failed: {detail}")
     } else if let Some(detail) = one_line.strip_prefix("sessione sviluppatore non riuscita: ") {
@@ -1216,12 +1282,29 @@ mod tests {
             profile("3", "T", "com.a.T", 6), // rinnovato: vale questo
             profile("4", "ALTRO", "com.store", 70),
         ];
-        let v = app_views(&all, "T");
+        let (v, count) = app_views(&all, "T");
+        assert_eq!(count, 2);
         assert_eq!(v.len(), 2);
         assert_eq!(v[0].label, "com.a");
         assert_eq!(v[0].days, 6);
         assert_eq!(v[1].label, "com.b");
         assert!(v.iter().all(|a| a.level == "ok"));
+    }
+
+    #[test]
+    fn raggruppa_estensioni_sotto_app_principale() {
+        let all = vec![
+            profile("1", "T", "com.google.music.T", 6),
+            profile("2", "T", "com.google.music.T.Widget", 6),
+            profile("3", "T", "com.google.music.T.Intents", 2),
+            profile("4", "T", "app.standalone.T", 5),
+        ];
+        let (v, count) = app_views(&all, "T");
+        assert_eq!(count, 4);
+        assert_eq!(v.len(), 2);
+        let music = v.iter().find(|a| a.label == "com.google.music").unwrap();
+        assert_eq!(music.extensions.len(), 2);
+        assert_eq!(music.days, 2);
     }
 
     #[test]

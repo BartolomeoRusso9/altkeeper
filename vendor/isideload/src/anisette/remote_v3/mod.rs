@@ -160,10 +160,23 @@ impl AnisetteProvider for RemoteV3AnisetteProvider {
     }
 
     async fn get_client_info(&self) -> Result<AnisetteClientInfo, Report> {
+        let resp = self
+            .client
+            .get(format!("{}/v3/client_info", self.url))
+            .send()
+            .await;
+
+        if let Ok(r) = resp {
+            if r.status().is_success() {
+                if let Ok(info) = r.json::<AnisetteClientInfo>().await {
+                    return Ok(info);
+                }
+            }
+        }
+
         Ok(AnisetteClientInfo {
-            client_info: "<Mac15,7> <macOS;27.0;26A5378j> <com.apple.AuthKit/1 (com.apple.akd/1.0)>".to_string(),
-            // Lo stesso User-Agent moderno di AltSign (ramo notarized): quello "akd/1.0" è vecchio.
-            user_agent: "AuthKit/1 (Macintosh; OS X 26.5.2) (com.apple.dt.Xcode/26.0)".to_string(),
+            client_info: "<MacBookPro13,2> <macOS;13.1;22C65> <com.apple.AuthKit/1 (com.apple.akd/1.0)>".to_string(),
+            user_agent: "akd/1.0 CFNetwork/808.1.4".to_string(),
         })
     }
 
@@ -221,18 +234,17 @@ impl RemoteV3AnisetteProvider {
             "X-Apple-I-MD-LU",
             HeaderValue::from_str(&hex::encode(state.get_md_lu()))?,
         );
-        // headers.insert(
-        //     "X-Apple-I-Client-Time",
-        //     HeaderValue::from_str(
-        //         &Utc::now()
-        //             .round_subsecs(0)
-        //             .format("%+")
-        //             .to_string()
-        //             .replace("+00:00", "Z"),
-        //     )?,
-        // );
-        // headers.insert("X-Apple-I-TimeZone", HeaderValue::from_static("UTC"));
-        // headers.insert("X-Apple-Locale", HeaderValue::from_static("en_US"));
+        let now = SystemTime::now()
+            .duration_since(SystemTime::UNIX_EPOCH)
+            .map(|d| d.as_secs())
+            .unwrap_or(0);
+        let client_time = crate::anisette::iso8601_utc(now);
+        headers.insert(
+            "X-Apple-I-Client-Time",
+            HeaderValue::from_str(&client_time)?,
+        );
+        headers.insert("X-Apple-I-TimeZone", HeaderValue::from_static("GMT"));
+        headers.insert("X-Apple-Locale", HeaderValue::from_static("en_US"));
         headers.insert(
             "X-Mme-Device-Id",
             HeaderValue::from_str(&state.get_device_id())?,
