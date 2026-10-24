@@ -257,20 +257,29 @@ async fn cmd_renew(
     // finché il profilo vecchio non scade).
     let latest = profile::latest_by_bundle(mine);
 
-    // Only unattended/expiring-app renewal requires proof of actual installation.
-    // A failed listing aborts the operation rather than silently renewing stale profiles.
+    // When the installed-app lookup fails, explicitly fall back to renewing ALL
+    // known team profiles. This is intentional and must be visible in logs.
+    let mut fallback_renew_all = false;
     let installed = if installed_only {
-        Some(phone::with_timeout(
+        match phone::with_timeout(
             "Installed app lookup",
             std::time::Duration::from_secs(30),
             link.installed_app_ids(),
-        ).await?)
+        ).await {
+            Ok(apps) => {
+                say(&format!("Detected {} installed user apps on the iPhone.", apps.len()));
+                Some(apps)
+            }
+            Err(err) => {
+                fallback_renew_all = true;
+                say(&format!("WARNING: installed-app lookup failed: {err}"));
+                say("FALLBACK: renewing ALL known profiles for this Apple team, regardless of expiry.");
+                None
+            }
+        }
     } else {
         None
     };
-    if let Some(apps) = &installed {
-        say(&format!("Detected {} installed user apps on the iPhone.", apps.len()));
-    }
 
     // Si decide cosa rinnovare prima di parlare con Apple: se niente è in scadenza non si
     // accede affatto (meno login, meno rischio che Apple limiti le richieste).
@@ -292,7 +301,7 @@ async fn cmd_renew(
             }
         }
         let days = p.days_left().unwrap_or(-1);
-        if !force && days > min_days {
+        if !force && !fallback_renew_all && days > min_days {
             say(&format!("   {bundle}: expires in {days} days, no renewal needed"));
             continue;
         }
