@@ -381,8 +381,25 @@ async fn terminated() {
     std::future::pending::<()>().await
 }
 
-#[tokio::main]
-async fn main() -> Result<(), String> {
+fn main() -> Result<(), String> {
+    // Il future di `run()` è grande in debug: su Windows lo stack di main è di 1 MB e
+    // andrebbe in overflow, quindi il runtime gira su un thread con 16 MiB di stack.
+    std::thread::Builder::new()
+        .name("altkeeper-main".into())
+        .stack_size(16 * 1024 * 1024)
+        .spawn(|| -> Result<(), String> {
+            tokio::runtime::Builder::new_multi_thread()
+                .enable_all()
+                .build()
+                .map_err(|e| e.to_string())?
+                .block_on(run())
+        })
+        .map_err(|e| e.to_string())?
+        .join()
+        .unwrap_or_else(|_| Err("main thread panicked".to_string()))
+}
+
+async fn run() -> Result<(), String> {
     rustls::crypto::ring::default_provider()
         .install_default()
         .ok();
