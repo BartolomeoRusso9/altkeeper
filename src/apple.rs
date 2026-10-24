@@ -18,7 +18,7 @@ use isideload::{
         teams::{DeveloperTeam, TeamsApi},
     },
     sideload::{SideloaderBuilder, builder::MaxCertsBehavior},
-    util::fs_storage::FsStorage,
+    util::{callbacks::MaxCertsCallbackBox, fs_storage::FsStorage},
 };
 use serde::{Deserialize, Serialize};
 
@@ -443,7 +443,7 @@ impl Drop for SignedApp {
 /// `ALTKEEPER_REVOKE_CERTS=1` autorizza a revocare i certificati di sviluppo già presenti quando
 /// Apple ha raggiunto il limite (errore 7460). Di default si ferma con un errore, perché la
 /// revoca invalida le app firmate con quei certificati.
-pub fn max_certs_behavior(value: Option<&str>) -> MaxCertsBehavior {
+pub fn max_certs_behavior(value: Option<&str>) -> MaxCertsBehavior<MaxCertsCallbackBox> {
     match value.map(|v| v.trim().to_ascii_lowercase()).as_deref() {
         Some("1" | "true" | "yes" | "si" | "sì" | "on") => MaxCertsBehavior::Revoke,
         _ => MaxCertsBehavior::Error,
@@ -489,6 +489,8 @@ pub async fn sign_ipa(
             Some(team),
             false,
             None::<fn(f32) -> std::future::Ready<()>>,
+            None,
+            None,
         )
         .await
         .map_err(|e| {
