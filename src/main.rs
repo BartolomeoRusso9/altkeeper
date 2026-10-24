@@ -139,7 +139,7 @@ async fn open_phone(
 
 /// Legge e interpreta tutti i profili presenti sul telefono.
 async fn phone_profiles(link: &mut phone::PhoneLink) -> Result<Vec<profile::PhoneProfile>, String> {
-    let raw = link.misagent.copy_all().await.map_err(dbg)?;
+    let raw = link.profiles().await?;
     Ok(raw.iter().filter_map(|r| profile::parse(r)).collect())
 }
 
@@ -310,7 +310,7 @@ async fn cmd_renew(
         phone::with_timeout(
             "Profile install",
             std::time::Duration::from_secs(60),
-            async { link.misagent.install(bytes).await.map_err(dbg) },
+            async { link.install_profile(bytes).await },
         )
         .await?;
         say("      installed on the phone");
@@ -336,7 +336,7 @@ async fn cmd_renew(
 async fn cmd_profile_remove(addr: Option<SocketAddr>, uuid: Option<String>) -> Result<(), String> {
     let uuid = uuid.ok_or("uso: altkeeper profile-remove <uuid>")?;
     let mut link = open_phone(addr, &mut |s| println!("{s}")).await?;
-    let raw = link.misagent.copy_all().await.map_err(dbg)?;
+    let raw = link.profiles().await?;
     let (found, parsed) = raw
         .iter()
         .find_map(|r| {
@@ -358,7 +358,7 @@ async fn cmd_profile_remove(addr: Option<SocketAddr>, uuid: Option<String>) -> R
     }
     println!("Copia salvata in {}", path.display());
 
-    link.misagent.remove(&parsed.uuid).await.map_err(dbg)?;
+    link.remove_profile(&parsed.uuid).await?;
     println!("Tolto dal telefono: {}  [{}]", parsed.name, parsed.uuid);
     Ok(())
 }
@@ -369,7 +369,7 @@ async fn cmd_profile_restore(addr: Option<SocketAddr>, file: Option<String>) -> 
     let bytes = std::fs::read(&file).map_err(dbg)?;
     let parsed = profile::parse(&bytes).ok_or("il file non è un profilo valido")?;
     let mut link = open_phone(addr, &mut |s| println!("{s}")).await?;
-    link.misagent.install(bytes).await.map_err(dbg)?;
+    link.install_profile(bytes).await?;
     println!("Rimesso sul telefono: {}  [{}]", parsed.name, parsed.uuid);
     Ok(())
 }

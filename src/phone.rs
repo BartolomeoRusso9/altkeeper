@@ -8,8 +8,9 @@ use std::time::{Duration, Instant};
 
 use idevice::{
     core_device_proxy::CoreDeviceProxy,
+    installation_proxy::InstallationProxyClient,
     misagent::MisagentClient,
-    provider::UsbmuxdProvider,
+    provider::{IdeviceProvider, UsbmuxdProvider},
     remote_pairing::{
         tunnel::connect_tls_psk_tunnel_native, RemotePairingClient, RemotePairingLockdownService,
         RpPairingFile, RpPairingSocket,
@@ -51,15 +52,195 @@ fn select_transport(version: &str, force_legacy: bool) -> Result<TransportKind, 
 /// Il client misagent, più il tunnel (`adapter`) e la stretta di mano RSD (`hs`) con cui aprire
 /// gli altri servizi del telefono (installazione e rimozione di app), più gli oggetti che devono
 /// restare vivi finché serve.
-pub struct PhoneLink {
-    pub misagent: MisagentClient,
-    pub adapter: idevice::tcp::handle::AdapterHandle,
-    pub hs: RsdHandshake,
-    /// Provider usbmuxd del telefono, presente solo se ci si è collegati via cavo. Serve per i
-    /// servizi "classici" (lockdown: AFC, installation_proxy, misagent) che su USB funzionano
-    /// anche quando il tunnel software CoreDeviceProxy si pianta (iOS 27).
-    pub usb: Option<UsbmuxdProvider>,
-    _keep: Vec<Box<dyn Any>>,
+pub enum PhoneLink {
+    /// Connessione moderna basata su RSD.
+    Rsd {
+        misagent: MisagentClient,
+        adapter: idevice::tcp::handle::AdapterHandle,
+        hs: RsdHandshake,
+        /// Provider USB conservato per i servizi classici.
+        usb: Option<UsbmuxdProvider>,
+        _keep: Vec<Box<dyn Any>>,
+    },
+    /// Connessione classica via lockdown/usbmuxd, senza RSD.
+    Legacy {
+        misagent: MisagentClient,
+        provider: UsbmuxdProvider,
+        _keep: Vec<Box<dyn Any>>,
+    },
+}
+
+async fn lockdown_string(lockdown: &mut LockdownClient, key: &str) -> Result<String, String> {
+    let value = lockdown.get_value(Some(key), None).await.map_err(dbg)?;
+
+    value
+        .as_string()
+        .map(str::to_owned)
+        .ok_or_else(|| format!("lockdown non ha restituito una stringa per {key}"))
+}
+
+async fn identity_via_provider(
+    provider: &UsbmuxdProvider,
+) -> Result<(String, String, String), String> {
+    let pairing = provider.get_pairing_file().await.map_err(dbg)?;
+    let mut lockdown = LockdownClient::connect(provider).await.map_err(dbg)?;
+
+    lockdown.start_session(&pairing).await.map_err(dbg)?;
+
+    let name = lockdown_string(&mut lockdown, "DeviceName").await?;
+    let udid = lockdown_string(&mut lockdown, "UniqueDeviceID").await?;
+    let version = lockdown_string(&mut lockdown, "ProductVersion").await?;
+
+    Ok((name, udid, version))
+}
+
+async fn identity_via_rsd(
+    adapter: &mut idevice::tcp::handle::AdapterHandle,
+    hs: &mut RsdHandshake,
+) -> Result<(String, String, String), String> {
+    let mut lockdown = LockdownClient::connect_rsd(adapter, hs)
+        .await
+        .map_err(dbg)?;
+
+    let name = lockdown_string(&mut lockdown, "DeviceName").await?;
+    let udid = lockdown_string(&mut lockdown, "UniqueDeviceID").await?;
+    let version = lockdown_string(&mut lockdown, "ProductVersion").await?;
+
+    Ok((name, udid, version))
+}
+
+impl PhoneLink {
+    pub async fn profiles(&mut self) -> Result<Vec<Vec<u8>>, String> {
+        let misagent = match self {
+            Self::Rsd { misagent, .. } | Self::Legacy { misagent, .. } => misagent,
+        };
+
+        misagent.copy_all().await.map_err(dbg)
+    }
+
+    pub async fn install_profile(&mut self, profile: Vec<u8>) -> Result<(), String> {
+        let misagent = match self {
+            Self::Rsd { misagent, .. } | Self::Legacy { misagent, .. } => misagent,
+        };
+
+        misagent.install(profile).await.map_err(dbg)
+    }
+
+    pub async fn remove_profile(&mut self, uuid: &str) -> Result<(), String> {
+        let misagent = match self {
+            Self::Rsd { misagent, .. } | Self::Legacy { misagent, .. } => misagent,
+        };
+
+        misagent.remove(uuid).await.map_err(dbg)
+    }
+
+    pub async fn device_identity(&mut self) -> Result<(String, String, String), String> {
+        match self {
+            Self::Legacy { provider, .. } => identity_via_provider(provider).await,
+            Self::Rsd {
+                usb: Some(provider),
+                ..
+            } => identity_via_provider(provider).await,
+            Self::Rsd {
+                adapter,
+                hs,
+                usb: None,
+                ..
+            } => identity_via_rsd(adapter, hs).await,
+        }
+    }
+
+    pub async fn install_app(
+        &mut self,
+        app_path: &Path,
+        progress: &(impl Fn(u64) + Send + Sync),
+    ) -> Result<(), String> {
+        match self {
+            Self::Legacy { provider, .. }
+            | Self::Rsd {
+                usb: Some(provider),
+                ..
+            } => isideload::sideload::install::install_app(provider, app_path, progress)
+                .await
+                .map_err(dbg),
+            Self::Rsd {
+                adapter,
+                hs,
+                usb: None,
+                ..
+            } => isideload::sideload::install::install_app_rsd(adapter, hs, app_path, progress)
+                .await
+                .map_err(dbg),
+        }
+    }
+
+    pub async fn uninstall_app(&mut self, bundle_id: &str) -> Result<(), String> {
+        match self {
+            Self::Legacy { provider, .. }
+            | Self::Rsd {
+                usb: Some(provider),
+                ..
+            } => {
+                let mut client = InstallationProxyClient::connect(provider)
+                    .await
+                    .map_err(dbg)?;
+
+                client.uninstall(bundle_id, None).await.map_err(dbg)
+            }
+            Self::Rsd {
+                adapter,
+                hs,
+                usb: None,
+                ..
+            } => {
+                let mut client = InstallationProxyClient::connect_rsd(adapter, hs)
+                    .await
+                    .map_err(dbg)?;
+
+                client.uninstall(bundle_id, None).await.map_err(dbg)
+            }
+        }
+    }
+
+    pub async fn install_ipa_bytes_with_callback<Fut>(
+        &mut self,
+        ipa: Vec<u8>,
+        callback: impl Fn((u64, ())) -> Fut,
+    ) -> Result<(), String>
+    where
+        Fut: std::future::Future<Output = ()>,
+    {
+        match self {
+            Self::Legacy { provider, .. }
+            | Self::Rsd {
+                usb: Some(provider),
+                ..
+            } => idevice::utils::installation::install_bytes_with_callback(
+                provider,
+                ipa,
+                None,
+                callback,
+                (),
+            )
+            .await
+            .map_err(dbg),
+            Self::Rsd {
+                adapter,
+                hs,
+                usb: None,
+                ..
+            } => idevice::utils::installation::install_bytes_with_callback_rsd(
+                adapter,
+                hs,
+                ipa,
+                None,
+                callback,
+                (),
+            )
+            .await
+            .map_err(dbg),
+        }
+    }
 }
 
 /// Come si è arrivati al telefono: cavo USB (usbmuxd locale) o rete.
@@ -141,7 +322,7 @@ pub async fn connect(addr: SocketAddr, pairing_path: &str) -> Result<PhoneLink, 
         .await
         .map_err(dbg)?;
 
-    Ok(PhoneLink {
+    Ok(PhoneLink::Rsd {
         misagent,
         adapter,
         hs,
@@ -193,10 +374,27 @@ pub async fn connect_usb(say: &mut impl FnMut(&str)) -> Result<Option<PhoneLink>
         "iOS rilevato: {version} (trasporto {transport:?})"
     ));
     if transport == TransportKind::Legacy {
-        return Err(format!(
-            "iOS {version} richiede il trasporto USB legacy, che non è ancora implementato; \
-             questa build non tenterà CoreDeviceProxy/RSD"
-        ));
+        let legacy_connect = async {
+            let pairing = provider.get_pairing_file().await.map_err(dbg)?;
+
+            let mut lockdown = LockdownClient::connect(&provider).await.map_err(dbg)?;
+
+            lockdown.start_session(&pairing).await.map_err(dbg)?;
+
+            drop(lockdown);
+
+            MisagentClient::connect(&provider).await.map_err(dbg)
+        };
+
+        let misagent = tokio::time::timeout(Duration::from_secs(15), legacy_connect)
+            .await
+            .map_err(|_| "timeout collegando lockdown/Misagent via USB".to_string())??;
+
+        return Ok(Some(PhoneLink::Legacy {
+            misagent,
+            provider,
+            _keep: Vec::new(),
+        }));
     }
 
     let open = async {
@@ -214,7 +412,7 @@ pub async fn connect_usb(say: &mut impl FnMut(&str)) -> Result<Option<PhoneLink>
                 .await
                 .map_err(dbg)?,
         };
-        Ok::<_, String>(PhoneLink {
+        Ok::<_, String>(PhoneLink::Rsd {
             misagent,
             adapter,
             hs,
@@ -224,7 +422,9 @@ pub async fn connect_usb(say: &mut impl FnMut(&str)) -> Result<Option<PhoneLink>
     };
     match tokio::time::timeout(Duration::from_secs(15), open).await {
         Ok(Ok(mut link)) => {
-            link.usb = Some(provider);
+            if let PhoneLink::Rsd { usb, .. } = &mut link {
+                *usb = Some(provider);
+            }
             Ok(Some(link))
         }
         Ok(Err(e)) => Err(e),
