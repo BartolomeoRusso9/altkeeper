@@ -21,7 +21,8 @@ There is also a small **web page** to see the state of your apps and renew them:
 > version at the time of writing), running on a Mac and on a Debian 13
 > mini PC (x86-64, Docker). It relies on private Apple APIs and on AltStore's own protocol, which can
 > change without notice. For personal use with your own Apple ID; not affiliated with Apple or
-> AltStore. Some command-line messages and code comments are localized to the original project language.
+> AltStore. The CLI supports English and Italian (default); the web UI and third-party
+> diagnostic messages have separate language behavior.
 >
 > Confirmed with AltServer running from the Docker image on the Debian mini PC: *Refresh* from
 > AltStore installs the new profile on the iPhone, and installing an app from AltStore works.
@@ -30,6 +31,43 @@ There is also a small **web page** to see the state of your apps and renew them:
 > rebooting the iPhone). Not confirmed yet: what happens on the day the *original* profile
 > expires, running AltServer on a server for a longer time, or installing an IPA uploaded from the
 > web page against Apple and a real iPhone.
+
+## CLI language (English / Italian)
+
+AltKeeper's command-line prompts, errors, and service logs default to Italian for backwards
+compatibility. Set `ALTKEEPER_LANG=en` to use English, or `ALTKEEPER_LANG=it` for Italian.
+Language is read for each invocation (no rebuild necessary). Values such as `en-US`,
+`en_GB`, and `it-IT` are accepted case-insensitively; unknown languages fall back to Italian.
+The legacy `ALTREFRESH_LANG` variable is also accepted when `ALTKEEPER_LANG` is unset.
+This changes human-readable CLI output, **not** protocol messages, machine-readable data,
+or the web application's language.
+
+PowerShell (applies to the current session and child processes):
+
+```powershell
+$env:ALTKEEPER_LANG = "en"
+.\target\release\altkeeper.exe --help
+.\target\release\altkeeper.exe login "your-apple-id@example.com"
+# Restore default: Remove-Item Env:ALTKEEPER_LANG
+```
+
+Command Prompt (cmd.exe):
+
+```cmd
+set ALTKEEPER_LANG=en
+target\release\altkeeper.exe phone
+```
+
+Linux, macOS, or a container environment:
+
+```sh
+ALTKEEPER_LANG=en ./altkeeper phone
+```
+
+The provided `examples/docker-compose.yml` uses list-style `environment:`. Add
+`- ALTKEEPER_LANG=en` there. The environment variable controls human-readable CLI
+and server logs, **not** the HTML web page, protocol or JSON. The same 2FA menu commands
+(`d`, `r` when offered, `p<id>`) are available in both languages.
 
 ## What it does, and what it does not
 
@@ -52,8 +90,10 @@ There is also a small **web page** to see the state of your apps and renew them:
 ## What you need
 
 - An iPhone on **iOS 17 or later**, with Developer Mode on, on the same Wi-Fi as the server.
-- A machine that is always on in your home network. Tested: Debian 13 (x86-64). A Mac works too. Windows 10/11 also works natively
-  (see [Windows](#10-windows-native-no-docker)); that port has not been tried on a real PC yet.
+- A machine that is always on in your home network. Tested: Debian 13 (x86-64); a Mac also
+  works. On **Windows 10**, the native build, tests and interactive Apple ID / 2FA login have
+  been verified. Windows 11 and the full Windows AltServer/renewal workflow remain unverified
+  end to end (see [Windows](#10-windows-native-no-docker)).
 - For AltServer mode: **AltStore Classic** on the iPhone, with the *Local Network* permission.
 - For the unattended renewal: a **free Apple ID** whose team already signed the apps.
 - For the **first pairing only**: the iPhone plugged in by USB to a computer (a Mac is easiest).
@@ -146,7 +186,7 @@ Leave it running (as a service or in Docker). On the iPhone, in AltStore, open *
 ./altkeeper login your.apple.id@example.com
 ```
 
-It asks for your password (**it is shown on screen while you type**) and the 6-digit 2FA code from
+It asks for your password (**input is hidden by the terminal**) and the 6-digit 2FA code from
 your other devices. Answer `s` when it asks to save the password: that is what lets the renewal run
 without you. It is stored **in clear text** in `account.json` (mode 600). Sign in once; if Apple
 answers with errors, wait before trying again instead of repeating it.
@@ -222,13 +262,16 @@ ports 8787 (web) and 49500 (AltServer) must be free.
 
 A GitHub Actions workflow (`.github/workflows/docker.yml`) runs the tests and publishes the image
 to `ghcr.io/<user>/altkeeper` on pushes to `main` (amd64) and on `vX.Y.Z` tags (amd64 and
-arm64). It has not been run on GitHub yet. If the repository is private the package is private too.
+arm64). Linux and Windows checks are defined in this change. Local Windows 10 test success is
+independent of GitHub CI; see the Actions checks for this PR. If the repo is private, the package is too.
 
 ### 10. Windows (native, no Docker)
 
 Docker Desktop on Windows cannot use the host network that AltKeeper needs for Bonjour, so on
-Windows run the program directly. **This port has not been built or run on a real Windows
-machine yet**: if something breaks, please open an issue.
+Windows run the program directly. **Verified on Windows 10:** `cargo test --locked` (63/63
+passed), `cargo build --release --locked`, English `--help`, and a real Apple ID login from
+PowerShell, including six-digit 2FA entry and commands in the 2FA menu. This does **not**
+prove Windows 11, other shell hosts, AltServer installation or unattended renewal end to end.
 
 1. Install [Rust](https://rustup.rs) (the default MSVC toolchain) and the *Build Tools for Visual
    Studio* with the **Desktop development with C++** workload. Then, in PowerShell:
@@ -236,7 +279,8 @@ machine yet**: if something breaks, please open an issue.
    ```powershell
    git clone https://github.com/BartolomeoRusso9/altkeeper
    cd altkeeper
-   cargo build --release
+   cargo test --locked
+   cargo build --release --locked
    ```
 
    The binary is `target\release\altkeeper.exe`. Make a folder (for example `C:\altkeeper`) and
@@ -273,7 +317,13 @@ machine yet**: if something breaks, please open an issue.
    comes with iTunes, is fine), see "If something goes wrong". Stop with Ctrl-C.
 
 4. **Sign in and automatic renewal.** `.\altkeeper.exe login you@example.com` works as on the
-   other systems. `account.json`, `state\` and `profili-salvati\` are restricted to your Windows
+   other systems. In PowerShell and cmd.exe, type the six-digit 2FA code and press Enter;
+   the `d`, `r`, and `p<id>` options also work. Interactive prompts are read directly
+   from the Windows console, so switching from PowerShell to cmd.exe is unnecessary.
+   **Login and the 2FA menu were manually verified on Windows 10 PowerShell.** Run
+   `login` in an interactive console rather than a background task. See the
+   [Windows 2FA test guide](docs/windows-2fa-smoke-test.md) for verification details.
+   `account.json`, `state\` and `profili-salvati\` are restricted to your Windows
    user (the equivalent of `chmod 600/700`). For the nightly renewal use the Task Scheduler with
    `renew.ps1` instead of cron:
 
@@ -468,7 +518,7 @@ Linux) or through `USBMUXD_SOCKET_ADDRESS`; the phone must already trust the com
 no phone on USB, or it fails, Wi-Fi is used as before. `--phone` / `ALTKEEPER_PHONE` force Wi-Fi,
 and `ALTKEEPER_NO_USB=1` turns USB off. In Docker, mount `/var/run/usbmuxd` into the container.
 
-**USB.** If the iPhone is plugged into the same computer that runs AltKeeper, it is used instead of Wi-Fi (faster, especially for installing IPAs): AltKeeper looks for it through the local `usbmuxd` (on Windows/macOS it is installed with iTunes/Apple Devices or is built in; on Linux install `usbmuxd`), or through `USBMUXD_SOCKET_ADDRESS`. The phone must already trust the computer. Passing `--phone ip:port` forces Wi-Fi, and `ALTKEEPER_NO_USB=1` turns USB off. In Docker, mount `/var/run/usbmuxd` into the container.
+`altkeeper --help` (also `altkeeper login --help`) prints usage in the selected CLI language.
 `ALTKEEPER_DEBUG=1` prints what Apple answers to each sign-in request (status, headers, error
 bodies; never request bodies or successful responses).
 `ALTKEEPER_ANISETTE_URL=https://...` uses your own anisette server (for example `anisette-v3-server`)
