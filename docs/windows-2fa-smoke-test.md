@@ -6,28 +6,34 @@ challenge or prove correct PowerShell console behavior.
 
 ## Environment
 
-- Windows 10 or Windows 11, paired iPhone and working anisette endpoint
+- Windows 10 (the verified platform) or Windows 11 (not independently confirmed),
+  an iPhone and a working anisette endpoint
 - Run from the AltKeeper project directory
 - **Never** put your real Apple ID password, six-digit code, or `account.json` in logs,
   screenshots, CI artifacts or issue comments
 - Avoid repeatedly requesting verification codes when Apple rate limits requests
 
-## Test matrix
+## Verification matrix (2026-10-24)
 
-| Host | Expected result |
+| Platform / scenario | Result |
 |---|---|
-| PowerShell 7.x in Windows Terminal | Code and Enter are accepted |
-| Windows PowerShell 5.1 (ConsoleHost) | Code and Enter are accepted |
-| cmd.exe | Existing behavior still works |
-| PowerShell with `ALTKEEPER_LANG=en` | English prompts, code works |
-| PowerShell with `ALTKEEPER_LANG=it` | Italian prompts, code works |
+| Windows 10 PowerShell: real Apple ID login | **User-confirmed:** 2FA digits and menu commands work |
+| Windows 10 `cargo test --locked` | **Passed:** 63 / 63 tests |
+| Windows 10 `cargo build --release --locked` | **Passed:** executable built |
+| Windows 10 `ALTKEEPER_LANG=en` / `--help` | **Passed:** English usage printed |
+| Windows PowerShell 5.1 (ConsoleHost) | Not separately confirmed |
+| cmd.exe regression | Not separately confirmed after this change |
+| Windows 11 PowerShell | Not verified |
+| Windows AltServer and unattended renewal | Not verified end to end |
 
 ## Steps
 
-1. Build the current PR branch:
+1. Build the current main branch (or the feature branch if testing a future PR):
 
    ```powershell
-   git switch fix/issue-1-windows-console-2fa
+   git switch main
+   git pull --ff-only
+   cargo test --locked
    cargo build --release --locked
    $env:ALTKEEPER_ANISETTE_URL = "https://mac-ani.jkcoxson.com"
    $env:ALTKEEPER_LANG = "en"
@@ -56,6 +62,7 @@ cargo run --locked -- --help
 ```
 
 English output should start with `usage: altkeeper`, Italian with `uso: altkeeper`.
-These tests should run on GitHub Actions for Windows and Linux as well.
+The GitHub workflow defines Windows and Linux tests, but **no Actions runs were available**
+when the Windows 10 results were recorded. Local success does not imply CI success.
 
 Report only operating system, terminal version, pass/fail, and sanitized error messages.

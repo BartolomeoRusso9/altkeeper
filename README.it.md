@@ -24,7 +24,8 @@ C'è anche una piccola **pagina web** per vedere lo stato delle app e rinnovarle
 > versione al momento della scrittura), con il programma su un Mac e su un mini PC
 > Debian 13 (x86-64, Docker). Usa API private di Apple e il protocollo di AltStore, che possono
 > cambiare senza preavviso. Per uso personale con il proprio Apple ID; non affiliato ad Apple né ad
-> AltStore. Alcuni messaggi del programma e commenti nel codice sono ancora in italiano (la lingua originale del progetto).
+> AltStore. La CLI supporta l'italiano (predefinito) e l'inglese per messaggi, errori e log;
+> la pagina web e i messaggi delle librerie esterne hanno impostazioni indipendenti.
 >
 > Confermato con AltServer dall'immagine Docker sul mini PC Debian: il *Refresh* da AltStore installa
 > il profilo nuovo sull'iPhone e l'installazione di un'app da AltStore funziona. Confermato prima con
@@ -44,11 +45,13 @@ ricadono sull'italiano. Se `ALTKEEPER_LANG` manca, funziona anche
 `ALTREFRESH_LANG`. Questo cambia solo il testo visibile della CLI, non il
 protocollo AltStore, i dati JSON o la lingua della pagina web.
 
-PowerShell:
+PowerShell (vale per la sessione corrente e per i processi figli):
 
 ```powershell
 $env:ALTKEEPER_LANG = "en"
+.\target\release\altkeeper.exe --help
 .\target\release\altkeeper.exe login "you@example.com"
+# Per ripristinare il valore predefinito: Remove-Item Env:ALTKEEPER_LANG
 ```
 
 Prompt dei comandi (cmd.exe):
@@ -64,8 +67,9 @@ Linux/macOS:
 ALTKEEPER_LANG=en ./altkeeper phone
 ```
 
-In Docker Compose si può aggiungere `ALTKEEPER_LANG: en` nella sezione
-`environment:` del servizio.
+Il file `examples/docker-compose.yml` usa una lista `environment:`: per l'inglese aggiungi
+`- ALTKEEPER_LANG=en`. Questo cambia i messaggi CLI e i log, **non** il protocollo,
+i JSON o la pagina web. I comandi del menu 2FA restano `d`, `r` (se disponibile), `p<id>`.
 
 ## Cosa fa e cosa non fa
 
@@ -89,9 +93,10 @@ In Docker Compose si può aggiungere `ALTKEEPER_LANG: en` nella sezione
 
 - Un iPhone con **iOS 17 o successivo**, con la modalità sviluppatore attiva, sullo stesso Wi-Fi
   del server.
-- Una macchina sempre accesa nella rete di casa. Provato: Debian 13 (x86-64). Va bene anche un Mac. Funziona anche su
-  Windows 10/11, senza Docker (vedi [Windows](#10-windows-nativo-senza-docker)); questa versione
-  non è ancora stata provata su un PC vero.
+- Una macchina sempre accesa nella rete di casa. Provato: Debian 13 (x86-64); va bene anche un Mac.
+  Su **Windows 10** sono stati verificati la compilazione nativa, i test e il login interattivo
+  con Apple ID e 2FA. Windows 11 e l'intero flusso AltServer/rinnovo su Windows non sono ancora
+  verificati end-to-end (vedi [Windows](#10-windows-nativo-senza-docker)).
 - Per la modalità AltServer: **AltStore Classic** sull'iPhone, con il permesso *Rete locale*.
 - Per il rinnovo senza controllo: un **Apple ID gratuito** il cui team ha già firmato le app.
 - Solo per il **primo pairing**: l'iPhone collegato via USB a un computer (il più facile è un Mac).
@@ -102,7 +107,7 @@ In Docker Compose si può aggiungere `ALTKEEPER_LANG: en` nella sezione
 ### 1. Ottieni il programma
 
 ```sh
-git clone https://github.com/BartolomeoRusso9/altkeeper
+git clone https://github.com/lgg/altkeeper
 cd altkeeper
 docker run --rm -v "$PWD":/w -w /w rust:1-bookworm cargo build --release
 ```
@@ -237,7 +242,7 @@ o "Rinnova tutte adesso", con il log in diretta), di accedere con l'Apple ID (il
 nel browser) e di vedere gli ultimi rinnovi da `renew.log`. Senza `--bind`, o con un indirizzo di
 loopback, ascolta solo sulla macchina stessa e non chiede il PIN; su qualsiasi altro indirizzo
 **rifiuta di partire senza PIN** (almeno 4 caratteri). Usa la variabile d'ambiente e non `--pin`, che
-si vede con `ps`. La pagina è in italiano e non c'è HTTPS: tienila dentro la rete di casa. L'accesso
+si vede con `ps`. La pagina web è in inglese e non c'è HTTPS: tienila dentro la rete di casa. L'accesso
 e il rinnovo dalla pagina web non sono ancora stati provati con Apple.
 
 Da un PC puoi anche caricare un file `.ipa` nella sezione **Install an app from this PC**: AltKeeper
@@ -260,23 +265,28 @@ tuo `rp-pairing.plist` (e `account.json` e `state/` se usi `renew`), scrivi
 Usa la rete dell'host, perché serve Bonjour per trovare l'iPhone e per farsi trovare da AltStore; le
 porte 8787 (web) e 49500 (AltServer) devono essere libere.
 
-Un workflow di GitHub Actions (`.github/workflows/docker.yml`) lancia i test e pubblica l'immagine su
-`ghcr.io/<utente>/altkeeper` a ogni push su `main` (amd64) e sui tag `vX.Y.Z` (amd64 e arm64).
-Non è ancora stato eseguito su GitHub. Se il repository è privato lo è anche il pacchetto.
+Un workflow di GitHub Actions (`.github/workflows/docker.yml`) definisce test Linux/Windows e
+pubblica l'immagine su `ghcr.io/<utente>/altkeeper` a ogni push su `main` (amd64) e sui tag
+`vX.Y.Z` (amd64 e arm64). Nel fork non risultano ancora esecuzioni di GitHub Actions: i test
+Windows sono stati eseguiti localmente, non in CI. Se il repository è privato, anche il pacchetto lo è.
 
 ### 10. Windows (nativo, senza Docker)
 
 Docker Desktop su Windows non può usare la rete dell'host, che AltKeeper richiede per Bonjour:
-su Windows si lancia quindi il programma direttamente. **Questa versione non è ancora stata
-compilata né provata su un Windows vero**: se qualcosa non funziona, apri una segnalazione.
+su Windows si lancia quindi il programma direttamente. **Verificato su Windows 10:**
+`cargo test --locked` (63/63), `cargo build --release --locked`, `ALTKEEPER_LANG=en` con
+`--help`, e login reale da PowerShell con codice 2FA di sei cifre e comandi del menu 2FA.
+Queste verifiche **non** coprono Windows 11, tutti i terminali, AltServer o rinnovo automatico
+end-to-end.
 
 1. Installa [Rust](https://rustup.rs) (la toolchain MSVC predefinita) e i *Build Tools per Visual
    Studio* con il carico di lavoro **Sviluppo di applicazioni desktop con C++**. Poi, in PowerShell:
 
    ```powershell
-   git clone https://github.com/BartolomeoRusso9/altkeeper
+   git clone https://github.com/lgg/altkeeper
    cd altkeeper
-   cargo build --release
+   cargo test --locked
+   cargo build --release --locked
    ```
 
    Il programma è `target\release\altkeeper.exe`. Crea una cartella (per esempio `C:\altkeeper`) e
@@ -316,7 +326,9 @@ compilata né provata su un Windows vero**: se qualcosa non funziona, apri una s
    sistemi. In PowerShell e cmd.exe inserisci il codice 2FA di sei cifre e premi Invio;
    funzionano anche i comandi `d`, `r` e `p<id>`. AltKeeper legge le risposte
    direttamente dalla console di Windows: non è necessario passare a cmd.exe.
-   Avvia `login` in una console interattiva, non come attività in background.
+   **Login e menu 2FA verificati manualmente su Windows 10 PowerShell.** Avvia `login` in
+   una console interattiva, non come attività in background. Consulta la
+   [guida alla verifica Windows 2FA](docs/windows-2fa-smoke-test.md).
    `account.json`, `state\` e `profili-salvati\` restano riservati al tuo utente Windows
    (l'equivalente di `chmod 600/700`). Per il rinnovo serale usa l'Utilità di pianificazione con
    `renew.ps1` al posto di cron:
@@ -513,6 +525,8 @@ provare la scansione). `ALTKEEPER_DEBUG=1` stampa cosa risponde Apple a ogni ric
 intestazioni, corpo degli errori; mai il corpo delle richieste né le risposte riuscite).
 `ALTKEEPER_ANISETTE_URL=https://...` usa un server anisette tuo (per esempio `anisette-v3-server`) al
 posto di quello predefinito; deve iniziare con `http://` o `https://`. Se quello predefinito smette di funzionare, vedi "Se qualcosa va storto".
+
+`altkeeper --help` (anche `altkeeper login --help`) mostra la sintassi nella lingua configurata.
 
 Il progetto si chiamava altrefresh: i vecchi nomi `ALTREFRESH_*` funzionano ancora (se ci sono
 entrambi vince `ALTKEEPER_*`). `altkeeper --version` stampa la versione.
