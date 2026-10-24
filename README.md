@@ -104,7 +104,7 @@ and server logs, **not** the HTML web page, protocol or JSON. The same 2FA menu 
 ### 1. Get the program
 
 ```sh
-git clone https://github.com/lgg/altkeeper
+git clone https://github.com/BartolomeoRusso9/altkeeper
 cd altkeeper
 docker run --rm -v "$PWD":/w -w /w rust:1-bookworm cargo build --release
 ```
@@ -186,7 +186,7 @@ Leave it running (as a service or in Docker). On the iPhone, in AltStore, open *
 ./altkeeper login your.apple.id@example.com
 ```
 
-It asks for your password (**it is shown on screen while you type**) and the 6-digit 2FA code from
+It asks for your password (**input is hidden by the terminal**) and the 6-digit 2FA code from
 your other devices. Answer `s` when it asks to save the password: that is what lets the renewal run
 without you. It is stored **in clear text** in `account.json` (mode 600). Sign in once; if Apple
 answers with errors, wait before trying again instead of repeating it.
@@ -262,8 +262,8 @@ ports 8787 (web) and 49500 (AltServer) must be free.
 
 A GitHub Actions workflow (`.github/workflows/docker.yml`) runs the tests and publishes the image
 to `ghcr.io/<user>/altkeeper` on pushes to `main` (amd64) and on `vX.Y.Z` tags (amd64 and
-arm64). Linux and Windows checks are defined, but no GitHub Actions runs were reported in
-this fork at the time of the local Windows 10 tests. If the repo is private, the package is too.
+arm64). Linux and Windows checks are defined in this change. Local Windows 10 test success is
+independent of GitHub CI; see the Actions checks for this PR. If the repo is private, the package is too.
 
 ### 10. Windows (native, no Docker)
 
@@ -277,7 +277,7 @@ prove Windows 11, other shell hosts, AltServer installation or unattended renewa
    Studio* with the **Desktop development with C++** workload. Then, in PowerShell:
 
    ```powershell
-   git clone https://github.com/lgg/altkeeper
+   git clone https://github.com/BartolomeoRusso9/altkeeper
    cd altkeeper
    cargo test --locked
    cargo build --release --locked
