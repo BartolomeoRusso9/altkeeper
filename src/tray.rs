@@ -25,6 +25,26 @@ pub enum UserEvent {
     Menu(MenuEvent),
     ServerFailed(String),
     Status { reachable: bool, tip: String },
+    Updates { fork: Option<crate::update::Release>, upstream: Option<String> },
+}
+
+fn open_in_browser(url: &str) {
+    let _ = std::process::Command::new("explorer").arg(url).spawn();
+}
+
+/// Controlla fork e progetto originale; `manual` = chiesto dal menu, quindi si risponde anche
+/// quando non c'è niente di nuovo.
+fn check_updates(proxy: &EventLoopProxy<UserEvent>, manual: bool) {
+    let fork = crate::update::check();
+    let upstream = crate::update::upstream_newer();
+    for e in [fork.as_ref().err(), upstream.as_ref().err()].into_iter().flatten() {
+        crate::log::err(&format!("[update] {e}"));
+    }
+    let (fork, upstream) = (fork.ok().flatten(), upstream.ok().flatten());
+    if manual && fork.is_none() {
+        toast(&format!("AltKeeperPlus {} is up to date.", env!("CARGO_PKG_VERSION")));
+    }
+    let _ = proxy.send_event(UserEvent::Updates { fork, upstream });
 }
 
 /// Stacca il processo dal terminale: lanciato con un doppio clic, la finestra nera si chiude.
@@ -273,6 +293,9 @@ pub fn run(bind: SocketAddr, dir: &Path, start: impl FnOnce(EventLoopProxy<UserE
     let logs = MenuItem::new("Show logs", true, None);
     let autostart =
         CheckMenuItem::new("Start with Windows", true, autostart_enabled_as(RUN_VALUE), None);
+    let check = MenuItem::new("Check for updates", true, None);
+    let update_now = MenuItem::new("Up to date", false, None);
+    let upstream = MenuItem::new("Upstream: nothing new", false, None);
     let quit = MenuItem::new("Quit", true, None);
     let menu = Menu::new();
     let _ = menu.append_items(&[
@@ -280,6 +303,9 @@ pub fn run(bind: SocketAddr, dir: &Path, start: impl FnOnce(EventLoopProxy<UserE
         &logs,
         &PredefinedMenuItem::separator(),
         &autostart,
+        &check,
+        &update_now,
+        &upstream,
         &PredefinedMenuItem::separator(),
         &quit,
     ]);
@@ -305,6 +331,17 @@ pub fn run(bind: SocketAddr, dir: &Path, start: impl FnOnce(EventLoopProxy<UserE
     std::thread::spawn(watch_log);
     let p = proxy.clone();
     std::thread::spawn(move || watch_state(bind, p));
+    let p = proxy.clone();
+    std::thread::spawn(move || {
+        std::thread::sleep(Duration::from_secs(30));
+        loop {
+            check_updates(&p, false);
+            std::thread::sleep(Duration::from_secs(24 * 3600));
+        }
+    });
+    let check_proxy = proxy.clone();
+    let mut pending: Option<crate::update::Release> = None;
+    let mut announced = String::new();
     start(proxy);
 
     let dir = dir.to_path_buf();
@@ -327,6 +364,15 @@ pub fn run(bind: SocketAddr, dir: &Path, start: impl FnOnce(EventLoopProxy<UserE
                         crate::log::err(&format!("[tray] cannot change Start with Windows: {err}"));
                         autostart.set_checked(!on);
                     }
+                } else if e.id == check.id() {
+                    let p = check_proxy.clone();
+                    std::thread::spawn(move || check_updates(&p, true));
+                } else if e.id == update_now.id() {
+                    if let Some(r) = &pending {
+                        open_in_browser(&r.page);
+                    }
+                } else if e.id == upstream.id() {
+                    open_in_browser(crate::update::UPSTREAM_COMMITS);
                 } else if e.id == quit.id() {
                     crate::altserver::stop();
                     std::process::exit(0);
@@ -335,6 +381,24 @@ pub fn run(bind: SocketAddr, dir: &Path, start: impl FnOnce(EventLoopProxy<UserE
             Event::UserEvent(UserEvent::Status { reachable, tip }) => {
                 let _ = tray.set_icon(Some(dot(if reachable { GREEN } else { GREY })));
                 let _ = tray.set_tooltip(Some(tip));
+            }
+            Event::UserEvent(UserEvent::Updates { fork, upstream: up }) => {
+                if let Some(r) = &fork {
+                    update_now.set_text(format!("Update now to {}", r.tag));
+                    update_now.set_enabled(true);
+                    if announced != r.tag {
+                        toast(&format!(
+                            "{} is available. Right-click the tray icon and choose Update now.",
+                            r.tag
+                        ));
+                        announced = r.tag.clone();
+                    }
+                }
+                pending = fork.or(pending.take());
+                if let Some(tag) = up {
+                    upstream.set_text(format!("Upstream has new changes ({tag}): sync the fork"));
+                    upstream.set_enabled(true);
+                }
             }
             Event::UserEvent(UserEvent::ServerFailed(msg)) => {
                 crate::log::err(&msg);

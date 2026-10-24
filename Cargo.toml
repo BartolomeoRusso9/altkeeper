@@ -1,6 +1,6 @@
 [package]
 name = "altkeeper"
-version = "0.2.0"
+version = "0.2.0-plus.1"
 edition = "2021"
 description = "AltServer for iOS 17+ that runs on your home server (Docker): renews and installs sideloaded iPhone apps over Wi-Fi, no computer or VPN"
 license = "MIT"
@@ -38,6 +38,7 @@ tracing-subscriber = { version = "0.3", features = ["env-filter"] }
 [target.'cfg(windows)'.dependencies]
 tao = "0.37"
 tauri-winrt-notification = "0.8"
+reqwest = { version = "0.13", default-features = false, features = ["blocking", "json", "rustls-no-provider"] }
 tray-icon = "0.26"
 winreg = "0.56"
 windows-sys = { version = "0.61", features = ["Win32_System_Console", "Win32_UI_WindowsAndMessaging"] }

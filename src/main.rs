@@ -30,6 +30,8 @@ mod phone;
 mod profile;
 #[cfg(windows)]
 mod tray;
+#[cfg(windows)]
+mod update;
 mod web;
 
 use std::net::SocketAddr;
