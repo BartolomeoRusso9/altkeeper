@@ -1,6 +1,6 @@
 # Windows console / Apple ID 2FA smoke test
 
-This is a **manual integration test** for [issue #1](https://github.com/lgg/altkeeper/issues/1).
+This is a **manual integration test** for the interactive Apple ID login on Windows.
 Automated unit tests cover parsing and EOF; they cannot emulate Apple's trusted-device
 challenge or prove correct PowerShell console behavior.
 
@@ -22,17 +22,16 @@ challenge or prove correct PowerShell console behavior.
 | Windows 10 `cargo build --release --locked` | **Passed:** executable built |
 | Windows 10 `ALTKEEPER_LANG=en` / `--help` | **Passed:** English usage printed |
 | Windows PowerShell 5.1 (ConsoleHost) | Not separately confirmed |
-| cmd.exe regression | Not separately confirmed after this change |
+| cmd.exe regression | Not separately confirmed |
 | Windows 11 PowerShell | Not verified |
 | Windows AltServer and unattended renewal | Not verified end to end |
 
 ## Steps
 
-1. **Stay on the branch under test.** To verify an unmerged PR, check out that PR's
-   head branch before starting this procedure. Do not switch to `main`, as that would
-   test an older build instead of the proposed changes. To verify a merged release,
-   you may run `git switch main` and `git pull --ff-only` beforehand.
-   Check the current branch and commit, then build and test:
+1. **Test the build you intend to verify.** Check out the branch or commit under test and stay
+   on it: switching to `main` would test a different build. To verify a merged release, run
+   `git switch main` and `git pull --ff-only` first. Check the current branch and commit, then
+   build and test:
 
    ```powershell
    git branch --show-current
@@ -66,7 +65,7 @@ cargo run --locked -- --help
 ```
 
 English output should start with `usage: altkeeper`, Italian with `uso: altkeeper`.
-The workflow includes Windows and Linux checks. Check the CI results on the contribution PR;
-the user's successful Windows 10 tests alone do not prove CI passes.
+The workflow includes Windows and Linux checks. A local Windows pass is independent of the CI
+result, so check the GitHub Actions run as well.
 
 Report only operating system, terminal version, pass/fail, and sanitized error messages.

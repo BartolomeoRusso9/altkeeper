@@ -21,6 +21,10 @@
   Bonjour multicast over a VPN interface, but it does send plain DNS queries, and AltStore browses
   the device's search domains. Includes a small built-in DNS responder (UDP, answers only for its
   own names); put it behind the resolver you already run. See the README for the full setup.
+- **English/Italian CLI** with `ALTKEEPER_LANG=en` or `ALTKEEPER_LANG=it`, default Italian;
+  regional variants and `ALTREFRESH_LANG` alias supported. Localize CLI prompts, login/2FA,
+  errors, server logs and `--help` without modifying protocol responses, JSON or the web UI.
+- Added Windows/Linux locale smoke checks, Rust tests and manual Windows 2FA test guidance.
 
 ### Fixed
 - **Windows PowerShell Apple ID 2FA input.** Read directly from the attached Windows console
@@ -28,12 +32,6 @@
   Handle EOF instead of submitting an empty verification code; validate six-digit codes,
   leading zeroes, device/SMS choices, and use the same mechanism for team selection and
   the password-save prompt.
-
-### CLI localization
-- **English/Italian CLI** with `ALTKEEPER_LANG=en` or `ALTKEEPER_LANG=it`, default Italian;
-  regional variants and `ALTREFRESH_LANG` alias supported. Localize CLI prompts, login/2FA,
-  errors, server logs and `--help` without modifying protocol responses, JSON or the web UI.
-- Added Windows/Linux locale smoke checks, Rust tests and manual Windows 2FA test guidance.
 
 ### Documentation
 - "If something goes wrong" now covers the anisette error `not provisioned for this server

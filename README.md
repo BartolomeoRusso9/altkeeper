@@ -187,8 +187,8 @@ Leave it running (as a service or in Docker). On the iPhone, in AltStore, open *
 ```
 
 It asks for your password (**input is hidden by the terminal**) and the 6-digit 2FA code from
-your other devices. Answer `s` when it asks to save the password: that is what lets the renewal run
-without you. It is stored **in clear text** in `account.json` (mode 600). Sign in once; if Apple
+your other devices. Answer `y` when it asks to save the password (`s` if the prompt is in Italian;
+both are accepted): that is what lets the renewal run without you. It is stored **in clear text** in `account.json` (mode 600). Sign in once; if Apple
 answers with errors, wait before trying again instead of repeating it.
 
 ```sh
@@ -260,10 +260,10 @@ The image holds nothing secret: pairing, account and state live in the `/data` v
 uses the host network, because it needs Bonjour to find the iPhone and to be found by AltStore;
 ports 8787 (web) and 49500 (AltServer) must be free.
 
-A GitHub Actions workflow (`.github/workflows/docker.yml`) runs the tests and publishes the image
-to `ghcr.io/<user>/altkeeper` on pushes to `main` (amd64) and on `vX.Y.Z` tags (amd64 and
-arm64). Linux and Windows checks are defined in this change. Local Windows 10 test success is
-independent of GitHub CI; see the Actions checks for this PR. If the repo is private, the package is too.
+A GitHub Actions workflow (`.github/workflows/docker.yml`) runs the tests on Linux and Windows,
+checks `--help` in both CLI languages, and publishes the image to `ghcr.io/<user>/altkeeper` on
+pushes to `main` (amd64) and on `vX.Y.Z` tags (amd64 and arm64). If the repository is private, the
+package is too.
 
 ### 10. Windows (native, no Docker)
 

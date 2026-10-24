@@ -265,10 +265,10 @@ tuo `rp-pairing.plist` (e `account.json` e `state/` se usi `renew`), scrivi
 Usa la rete dell'host, perché serve Bonjour per trovare l'iPhone e per farsi trovare da AltStore; le
 porte 8787 (web) e 49500 (AltServer) devono essere libere.
 
-Un workflow di GitHub Actions (`.github/workflows/docker.yml`) definisce test Linux/Windows e
-pubblica l'immagine su `ghcr.io/<utente>/altkeeper` a ogni push su `main` (amd64) e sui tag
-`vX.Y.Z` (amd64 e arm64). La modifica aggiunge test Linux/Windows; i test locali Windows 10
-non sostituiscono le verifiche CI della PR. Se il repository è privato, anche il pacchetto lo è.
+Un workflow di GitHub Actions (`.github/workflows/docker.yml`) esegue i test su Linux e Windows,
+controlla `--help` nelle due lingue della CLI e pubblica l'immagine su `ghcr.io/<utente>/altkeeper`
+a ogni push su `main` (amd64) e sui tag `vX.Y.Z` (amd64 e arm64). Se il repository è privato,
+anche il pacchetto lo è.
 
 ### 10. Windows (nativo, senza Docker)
 
