@@ -26,7 +26,6 @@ use std::rc::Rc;
 use std::sync::Mutex;
 use std::time::Duration;
 
-use idevice::{RsdService, installation_proxy::InstallationProxyClient};
 use serde_json::{Value, json};
 use tokio::io::{AsyncRead, AsyncReadExt, AsyncWrite, AsyncWriteExt};
 use tokio::net::TcpStream;
@@ -365,7 +364,7 @@ async fn install_profiles(ctx: &Ctx, req: &Value) -> Value {
             let name = profile::parse(&blob)
                 .map(|p| p.bundle_id.unwrap_or(p.name))
                 .unwrap_or_else(|| "?".into());
-            if let Err(e) = link.misagent.install(blob).await {
+            if let Err(e) = link.install_profile(blob).await {
                 log(&crate::tr!(format!("profilo {name} non installato: {e:?}"), format!("profile {name} failed to install: {e:?}")));
                 return error(ERR_INSTALLATION_FAILED);
             }
@@ -392,7 +391,7 @@ async fn remove_profiles(ctx: &Ctx, req: &Value) -> Value {
             Ok(l) => l,
             Err(code) => return error(code),
         };
-        let raw = match link.misagent.copy_all().await {
+        let raw = match link.profiles().await {
             Ok(r) => r,
             Err(e) => {
                 log(&crate::tr!(format!("non riesco a leggere i profili: {e:?}"), format!("cannot read profiles: {e:?}")));
@@ -405,7 +404,7 @@ async fn remove_profiles(ctx: &Ctx, req: &Value) -> Value {
                 .as_ref()
                 .is_some_and(|b| wanted.contains(&b.to_lowercase()));
             if matches {
-                match link.misagent.remove(&p.uuid).await {
+                match link.remove_profile(&p.uuid).await {
                     Ok(()) => log(&crate::tr!(format!("profilo tolto: {}", p.bundle_id.unwrap_or_default()), format!("profile removed: {}", p.bundle_id.unwrap_or_default()))),
                     Err(e) => log(&crate::tr!(format!("profilo {} non tolto: {e:?}", p.uuid), format!("profile {} not removed: {e:?}", p.uuid))),
                 }
@@ -424,13 +423,7 @@ async fn remove_app(ctx: &Ctx, req: &Value) -> Value {
         Ok(l) => l,
         Err(code) => return error(code),
     };
-    let result = Box::pin(async {
-        let mut inst = InstallationProxyClient::connect_rsd(&mut link.adapter, &mut link.hs)
-            .await
-            .map_err(|e| format!("{e:?}"))?;
-        inst.uninstall(bundle, None).await.map_err(|e| format!("{e:?}"))
-    })
-    .await;
+    let result = link.uninstall_app(bundle).await;
     match result {
         Ok(()) => {
             log(&crate::tr!(format!("app disinstallata: {bundle}"), format!("app uninstalled: {bundle}")));
@@ -509,26 +502,21 @@ async fn receive_and_install(
     let _work = phone_lock();
     let mut link = phone_link(ctx).await?;
     let for_cb = wr.clone();
+
     let callback = move |(pct, ()): (u64, ())| {
         let wr = for_cb.clone();
+
         async move {
-            // 100 lo manda solo la fine, quando l'installazione è davvero finita.
+            // Il 100% viene inviato soltanto quando l'installazione è terminata.
             let _ = send(&wr, &progress(pct.min(99) as f64 / 100.0)).await;
         }
     };
-    Box::pin(idevice::utils::installation::install_bytes_with_callback_rsd(
-        &mut link.adapter,
-        &mut link.hs,
-        ipa,
-        None,
-        callback,
-        (),
-    ))
-    .await
-    .map_err(|e| {
-        log(&crate::tr!(format!("installazione non riuscita: {e:?}"), format!("installation failed: {e:?}")));
-        ERR_INSTALLATION_FAILED
-    })?;
+    Box::pin(link.install_ipa_bytes_with_callback(ipa, callback))
+        .await
+        .map_err(|e| {
+            log(&crate::tr!(format!("installazione non riuscita: {e}"), format!("installation failed: {e}")));
+            ERR_INSTALLATION_FAILED
+        })?;
     log(crate::tr!("app installata", "app installed"));
     Ok(())
 }

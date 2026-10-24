@@ -24,7 +24,6 @@ use axum::{
     response::{Html, IntoResponse, Response},
     routing::{get, post},
 };
-use idevice::{RsdService, services::lockdown::LockdownClient};
 use serde::Deserialize;
 use serde_json::{Value, json};
 
@@ -748,27 +747,15 @@ async fn install_ipa(app: &Arc<App>, upload: &UploadedIpa) -> Result<(), String>
     let team = apple::pick_team(&mut session, account.team_id.as_deref(), false).await?;
 
     app.push_line("Connecting to the iPhone to read its device identity…");
-    let (device_name, udid) = {
+
+    let (device_name, udid, _version) = {
         let _work = crate::altserver::phone_lock();
+
         let (_, mut link) = phone::connect_auto(app.phone, PAIRING_FILE, |_: &str| {}).await?;
-        let mut lockdown = LockdownClient::connect_rsd(&mut link.adapter, &mut link.hs)
+
+        link.device_identity()
             .await
-            .map_err(|e| format!("Cannot query iPhone identity through trusted lockdown: {e}"))?;
-        let name = lockdown
-            .get_value(Some("DeviceName"), None)
-            .await
-            .map_err(|e| format!("Cannot read the iPhone device name: {e}"))?
-            .as_string()
-            .ok_or("The iPhone returned an invalid device name.")?
-            .to_string();
-        let udid = lockdown
-            .get_value(Some("UniqueDeviceID"), None)
-            .await
-            .map_err(|e| format!("Cannot read the iPhone UDID: {e}"))?
-            .as_string()
-            .ok_or("The iPhone returned an invalid UDID.")?
-            .to_string();
-        (name, udid)
+            .map_err(|e| format!("Cannot query iPhone identity: {e}"))?
     };
 
     app.push_line("Signing the IPA with the configured Apple ID…");
@@ -801,26 +788,8 @@ async fn install_ipa(app: &Arc<App>, upload: &UploadedIpa) -> Result<(), String>
             ));
         }
     };
-    // Su USB si usano AFC + installation_proxy via usbmuxd (come `pymobiledevice3 apps install`);
-    // il tunnel software RSD serve solo in Wi-Fi.
-    let install = async {
-        match link.usb.as_ref() {
-            Some(provider) => {
-                isideload::sideload::install::install_app(provider, &signed_app.path, &progress)
-                    .await
-            }
-            None => {
-                isideload::sideload::install::install_app_rsd(
-                    &mut link.adapter,
-                    &mut link.hs,
-                    &signed_app.path,
-                    &progress,
-                )
-                .await
-            }
-        }
-        .map_err(|e| format!("Installation failed: {e}"))
-    };
+    let install = link.install_app(&signed_app.path, &progress);
+
     phone::with_timeout("Installation", INSTALL_TIMEOUT, install).await
 }
 
