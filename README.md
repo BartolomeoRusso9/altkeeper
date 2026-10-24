@@ -200,6 +200,25 @@ answers with errors, wait before trying again instead of repeating it.
 `renew` looks at each app's newest profile, renews the ones with `--min-days` days left or fewer
 (default 3), and signs in to Apple **only if something is due**.
 
+**Installed-app safety filter (default for scheduled/CLI `renew` and web “Renew expiring apps”):**
+Before checking expiry, AltKeeper queries the phone's installed user apps through installation_proxy.
+Profiles that do not correspond to installed apps are skipped. **If that lookup fails (including
+a timeout), AltKeeper explicitly falls back to renewing *all* known profiles for the configured
+Apple team, ignoring the expiry threshold.** This fallback is logged as WARNING/FALLBACK.
+A successful lookup returning zero apps skips all renewals.
+
+To renew a specific app, use `altkeeper renew --bundle <bundle-id> --force` or the per-app
+**Renew** button on the web page. The manual `--force` and web “Renew all now” operations
+do not check installed apps; `--installed-only` can be used with CLI `--force` to opt in.
+No unattended schedule is enabled by merely running the Docker container.
+
+The web page also lists **individual provisioning profiles** (including older versions) with a
+**Delete profile** button. Every removal requires confirmation, is limited to the saved Apple team,
+and saves then verifies a private `profili-salvati/<uuid>.mobileprovision` backup before removal.
+Removing a profile currently needed by an installed app can prevent that app from opening.
+To restore a backup: `altkeeper profile-restore profili-salvati/<uuid>.mobileprovision`.
+Neither profile deletion nor renewal removes Apple Developer App IDs.
+
 ### 6. Automatic renewal (optional)
 
 A safety net that does not depend on the iPhone running AltStore.
@@ -502,7 +521,7 @@ If it says it cannot find the server, watch the DNS with
 | `pair-usb [file]` | creates the remote pairing over USB (once) |
 | `login <apple-id>` | signs in with 2FA and saves the account |
 | `apps` | lists your App IDs and their expiry dates |
-| `renew [--dry-run] [--force] [--min-days N] [--phone ip:port]` | renews the profiles that are due |
+| `renew [--dry-run] [--force] [--min-days N] [--phone ip:port] [--bundle ID] [--installed-only]` | renews profiles, optionally one bundle or with installed-app filtering |
 | `altserver [--port N] [--dir folder] [--phone ip:port] [--dns-domain D --dns-address IP]` | acts as AltServer for AltStore |
 | `serve [--bind ip:port] [--pin PIN] [--dir folder] [--phone ip:port] [--altserver] [--altserver-port N]` | web page (and, with `--altserver`, AltServer) |
 | `profile-remove <uuid>` | takes one profile off the phone, saving a copy in `profili-salvati/` |

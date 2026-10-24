@@ -5,7 +5,7 @@
 //!   altkeeper pair-usb [file]                     crea il pairing remoto via USB
 //!   altkeeper login <apple-id>                    accede e salva l'account
 //!   altkeeper apps                                elenca App ID e scadenze
-//!   altkeeper renew [--phone ip:porta] [--dry-run] [--force] [--min-days N]
+//!   altkeeper renew [--phone ip:porta] [--dry-run] [--force] [--min-days N] [--bundle ID] [--installed-only]
 //!   altkeeper profile-remove <uuid> [--phone ip:porta]   toglie un profilo (ne salva prima una copia)
 //!   altkeeper profile-restore <file> [--phone ip:porta]  rimette un profilo salvato
 //!   altkeeper serve [--bind ip:porta] [--pin PIN] [--dir cartella] [--phone ip:porta]
@@ -229,6 +229,8 @@ async fn cmd_renew(
     dry_run: bool,
     force: bool,
     min_days: i64,
+    bundle_filter: Option<&str>,
+    installed_only: bool,
     say: &mut dyn FnMut(&str),
 ) -> Result<(), String> {
     let acc = apple::load_account(Path::new("."))?;
@@ -255,20 +257,58 @@ async fn cmd_renew(
     // finché il profilo vecchio non scade).
     let latest = profile::latest_by_bundle(mine);
 
+    // When the installed-app lookup fails, explicitly fall back to renewing ALL
+    // known team profiles. This is intentional and must be visible in logs.
+    let mut fallback_renew_all = false;
+    let installed = if installed_only {
+        match phone::with_timeout(
+            "Installed app lookup",
+            std::time::Duration::from_secs(30),
+            link.installed_app_ids(),
+        ).await {
+            Ok(apps) => {
+                say(&format!("Detected {} installed user apps on the iPhone.", apps.len()));
+                Some(apps)
+            }
+            Err(err) => {
+                fallback_renew_all = true;
+                say(&format!("WARNING: installed-app lookup failed: {err}"));
+                say("FALLBACK: renewing ALL known profiles for this Apple team, regardless of expiry.");
+                None
+            }
+        }
+    } else {
+        None
+    };
+
     // Si decide cosa rinnovare prima di parlare con Apple: se niente è in scadenza non si
     // accede affatto (meno login, meno rischio che Apple limiti le richieste).
     let mut due: Vec<(&str, i64)> = Vec::new();
+    let mut requested_found = false;
     for p in latest {
         let Some(bundle) = p.bundle_id.as_deref() else {
             say(&format!("   {}: bundle ID cannot be read, skipping", p.name));
             continue;
         };
+        if let Some(selected) = bundle_filter {
+            if selected != bundle { continue; }
+            requested_found = true;
+        }
+        if let Some(apps) = &installed {
+            if !apps.contains(bundle) {
+                say(&format!("   {bundle}: no installed app found, skipping"));
+                continue;
+            }
+        }
         let days = p.days_left().unwrap_or(-1);
-        if !force && days > min_days {
+        if !force && !fallback_renew_all && days > min_days {
             say(&format!("   {bundle}: expires in {days} days, no renewal needed"));
             continue;
         }
         due.push((bundle, days));
+    }
+    if bundle_filter.is_some() && !requested_found {
+        return Err("Selected app has no provisioning profile for the configured Apple team.".into());
     }
     if due.is_empty() {
         say("Nothing to renew: skipping Apple sign-in.");
@@ -318,30 +358,50 @@ async fn cmd_renew(
 /// Toglie dal telefono il profilo con questo UUID, dopo averne salvato e riletto una copia in
 /// `profili-salvati/` (si rimette con `profile-restore`). Serve a capire se iOS accetta i
 /// profili nuovi per un'app installata con quello originale.
-async fn cmd_profile_remove(addr: Option<SocketAddr>, uuid: Option<String>) -> Result<(), String> {
-    let uuid = uuid.ok_or(crate::tr!("uso: altkeeper profile-remove <uuid>", "usage: altkeeper profile-remove <uuid>"))?;
-    let mut link = open_phone(addr, &mut |s| println!("{s}")).await?;
+/// Validate an exact UUID, back up its original bytes, then remove only that profile.
+/// The web endpoint also restricts deletion to the configured Apple team.
+async fn remove_profile_with_backup(
+    link: &mut phone::PhoneLink,
+    uuid: &str,
+    required_team: Option<&str>,
+) -> Result<profile::PhoneProfile, String> {
+    if uuid.is_empty() || uuid.len() > 64 || !uuid.bytes().all(|b| b.is_ascii_hexdigit() || b == b'-') {
+        return Err("Invalid profile UUID.".into());
+    }
     let raw = link.profiles().await?;
     let (found, parsed) = raw
         .iter()
         .find_map(|r| {
             profile::parse(r)
-                .filter(|p| p.uuid.eq_ignore_ascii_case(&uuid))
+                .filter(|p| p.uuid.eq_ignore_ascii_case(uuid))
                 .map(|p| (r, p))
         })
-        .ok_or(crate::tr!("profilo non trovato sul telefono", "profile not found on the phone"))?;
+        .ok_or("Profile not found on the iPhone.")?;
+    if let Some(team) = required_team {
+        if parsed.team_id.as_deref() != Some(team) || parsed.bundle_id.is_none() {
+            return Err("Refusing to remove a profile outside your Apple team.".into());
+        }
+    }
 
     std::fs::create_dir_all(SAVED_DIR).map_err(dbg)?;
     fsperm::restrict_dir(Path::new(SAVED_DIR)).map_err(dbg)?;
     let path = Path::new(SAVED_DIR).join(format!("{}.mobileprovision", parsed.uuid));
     fsperm::write_private(&path, found).map_err(dbg)?;
     if std::fs::read(&path).map_err(dbg)? != *found {
-        return Err(crate::tr!(format!("la copia in {} non coincide: non tolgo niente", path.display()), format!("saved copy at {} does not match; refusing to remove the profile", path.display())));
+        return Err("Profile backup verification failed; nothing was removed.".into());
     }
-    println!("{}", crate::tr!(format!("Copia salvata in {}", path.display()), format!("Copy saved to {}", path.display())));
-
     link.remove_profile(&parsed.uuid).await?;
-    println!("{}", crate::tr!(format!("Tolto dal telefono: {}  [{}]", parsed.name, parsed.uuid), format!("Removed from the phone: {}  [{}]", parsed.name, parsed.uuid)));
+    Ok(parsed)
+}
+
+async fn cmd_profile_remove(addr: Option<SocketAddr>, uuid: Option<String>) -> Result<(), String> {
+    let uuid = uuid.ok_or(crate::tr!("uso: altkeeper profile-remove <uuid>", "usage: altkeeper profile-remove <uuid>"))?;
+    let mut link = open_phone(addr, &mut |s| println!("{s}")).await?;
+    let parsed = remove_profile_with_backup(&mut link, &uuid, None).await?;
+    println!("{}", crate::tr!(
+        format!("Tolto dal telefono: {} [{}] (copia in {})", parsed.name, parsed.uuid, SAVED_DIR),
+        format!("Removed from the phone: {} [{}] (backup in {})", parsed.name, parsed.uuid, SAVED_DIR)
+    ));
     Ok(())
 }
 
@@ -453,11 +513,18 @@ async fn run() -> Result<(), String> {
                 .map(|v| v.parse::<i64>().map_err(|e| crate::tr!(format!("--min-days non valido: {e}"), format!("invalid --min-days: {e}"))))
                 .transpose()?
                 .unwrap_or(3);
+            let bundle = opt("--bundle");
+            let force = flag("--force");
+            // Default CLI renewal (e.g. cron) and web "due" use installed-only.
+            // Explicit --force without --installed-only retains manual override behavior.
+            let installed_only = flag("--installed-only") || (!force && bundle.is_none());
             cmd_renew(
                 phone_addr(opt("--phone"))?,
                 flag("--dry-run"),
-                flag("--force"),
+                force,
                 min_days,
+                bundle.as_deref(),
+                installed_only,
                 &mut |s| println!("{s}"),
             )
             .await

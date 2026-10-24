@@ -117,6 +117,13 @@
   </section>
 
   <section class="card">
+    <h2>Provisioning profiles on iPhone</h2>
+    <p class="muted">Old profiles may remain after renewal. Deleting a profile still needed by an installed app can stop it opening. A verified server-side backup is saved before removal.</p>
+    <p class="muted" id="profiles-empty" hidden></p>
+    <ul class="plain" id="profiles"></ul>
+  </section>
+
+  <section class="card">
     <h2>Install an app from this PC</h2>
     <p class="muted">Choose an IPA. AltKeeper signs it with the configured Apple ID and installs it over Wi-Fi. The Apple ID password must be saved on the server.</p>
     <form id="install-form">
@@ -239,16 +246,26 @@ function render(s) {
   $("phone-error").title = p.detail || "";
 
   // App
+  const canRenew = s.account.present && s.account.password_saved && s.account.team && !s.busy;
   const ul = $("apps");
   ul.replaceChildren();
   s.apps.forEach((a) => {
     const pct = Math.max(4, Math.min(100, Math.round((Math.max(a.days, 0) / 7) * 100)));
     const bar = div("bar", span(""));
     bar.firstChild.style.width = pct + "%";
-    ul.append(li(a.level,
+    const details = div("grow",
       div("app-name", document.createTextNode(a.label)),
-      div("muted", span(days(a.days), "when"), document.createTextNode(" · " + a.expires.slice(0, 10))),
-      bar));
+      div("muted", span(days(a.days), "when"), document.createTextNode(" · " + a.expires.slice(0, 10))));
+    const renewBtn = document.createElement("button");
+    renewBtn.type = "button";
+    renewBtn.textContent = "Renew";
+    renewBtn.disabled = !canRenew;
+    renewBtn.onclick = () => {
+      if (confirm("Renew only " + a.label + " now?")) {
+        act(() => api("/api/renew", { mode: "single", bundle: a.bundle }));
+      }
+    };
+    ul.append(li(a.level, div("row", details, renewBtn), bar));
   });
   const empty = $("apps-empty");
   if (!s.account.present) { empty.textContent = "Sign in with your Apple ID to see your apps."; empty.hidden = false; }
@@ -257,13 +274,36 @@ function render(s) {
   else { empty.hidden = true; }
 
   // Renewal buttons
-  const canRenew = s.account.present && s.account.password_saved && s.account.team && !s.busy;
   $("btn-due").disabled = !canRenew;
   $("btn-all").disabled = !canRenew;
   $("btn-check").disabled = s.busy;
   $("renew-hint").textContent = !s.account.present ? "Sign in with your Apple ID first."
     : !s.account.password_saved ? "The password must be saved to renew: sign in again and leave the checkbox selected."
     : s.busy ? "Working…" : "";
+
+  // Manual, individually backed-up profile removal. Never deletes apps or Apple App IDs.
+  const pu = $("profiles");
+  pu.replaceChildren();
+  (s.profiles || []).forEach((p) => {
+    const details = div("grow",
+      div("app-name", document.createTextNode(p.label)),
+      div("muted", document.createTextNode(days(p.days) + " · " + p.expires.slice(0, 10))),
+      div("muted", document.createTextNode("Profile " + p.uuid)));
+    const removeBtn = document.createElement("button");
+    removeBtn.type = "button";
+    removeBtn.textContent = "Delete profile";
+    removeBtn.disabled = s.busy || s.phone.reachable !== true;
+    removeBtn.onclick = () => {
+      if (confirm("Remove this provisioning profile for " + p.label +
+        "? This may prevent the app from opening. A backup will be saved first.\n\n" + p.uuid)) {
+        act(() => api("/api/profile/remove", { uuid: p.uuid }));
+      }
+    };
+    pu.append(li("", div("row", details, removeBtn)));
+  });
+  const pempty = $("profiles-empty");
+  pempty.textContent = "No provisioning profiles found for the current Apple team.";
+  pempty.hidden = (s.profiles || []).length > 0 || s.phone.reachable !== true;
 
   const canInstall = s.account.present && s.account.password_saved && s.account.team &&
                      p.reachable === true && !s.busy;
@@ -283,9 +323,11 @@ function render(s) {
       st.className = "banner";
       st.textContent = job.kind === "install"
         ? "Signing and installing the app. Keep this page open until it finishes…"
+        : job.kind === "remove_profile"
+        ? "Backing up and deleting the selected profile…"
         : "Renewal in progress. Keep this page open until it finishes…";
     }
-    else if (job.ok) { st.className = "banner good"; st.textContent = job.kind === "install" ? "App installed." : "Done."; }
+    else if (job.ok) { st.className = "banner good"; st.textContent = job.kind === "install" ? "App installed." : job.kind === "remove_profile" ? "Profile removed and backed up." : "Done."; }
     else { st.className = "banner bad"; st.textContent = "It did not complete successfully. Check the last line."; }
     const log = $("job-log");
     const atEnd = log.scrollTop + log.clientHeight >= log.scrollHeight - 8;
