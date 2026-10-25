@@ -75,7 +75,7 @@ dependencies = [
 
 [[package]]
 name = "altkeeper"
-version = "0.2.0"
+version = "0.2.0-plus.1"
 dependencies = [
  "axum",
  "chrono",
@@ -83,6 +83,7 @@ dependencies = [
  "isideload",
  "mdns-sd",
  "plist",
+ "reqwest",
  "rpassword",
  "rustls",
  "serde",
@@ -3716,7 +3717,9 @@ dependencies = [
  "base64 0.23.1",
  "bytes",
  "encoding_rs",
+ "futures-channel",
  "futures-core",
+ "futures-util",
  "h2",
  "http",
  "http-body",
