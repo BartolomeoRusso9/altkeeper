@@ -180,13 +180,17 @@ pub(crate) async fn install_signed_app_rsd(
     // IPA installs use CFBundleIdentifier; PackageType=Developer is for a
     // staged .app directory, not a compressed IPA package.
     options.insert("CFBundleIdentifier".into(), plist::Value::String(bundle_id));
-    install.install_with_callback(
-        remote_path,
+    let result = install.install_with_callback(
+        remote_path.clone(),
         Some(plist::Value::Dictionary(options)),
         async |(percent, _)| { progress(70 + percent.min(100) * 30 / 100); },
         (),
-    ).await.map_err(err)?;
-    Ok(())
+    ).await.map_err(err);
+    // Do not retain a potentially large staged IPA on the phone after success
+    // or an iOS-reported installation failure. Cleanup errors must not mask
+    // the actual installation result.
+    let _ = afc.remove(remote_path).await;
+    result
 }
 
 #[cfg(test)]
