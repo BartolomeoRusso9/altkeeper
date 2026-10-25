@@ -65,6 +65,52 @@ assert(html.includes('rel="icon"'));
 assert(html.includes('"/api/discord/test"'));
 console.log("Localized dashboard JavaScript syntax, actions, labels and layout OK");
 
+// Video keepalive is strictly limited to an active IPA installation, never a renewal.
+// It is a local-HTTP-friendly best-effort workaround, not a guaranteed iOS wake lock.
+{
+  assert(html.includes('id="install-keepawake" hidden'));
+  assert(html.includes('id="install-keepawake-video" muted autoplay loop playsinline'));
+  assert(html.includes('src="data:video/mp4;base64,'));
+  assert(html.includes('syncInstallKeepawake(job);'));
+  const nodes = {
+    "install-keepawake": { hidden: true },
+    "install-keepawake-video": {
+      paused: true, playCount: 0, pauseCount: 0,
+      play() { this.paused = false; this.playCount++; return Promise.resolve(); },
+      pause() { this.paused = true; this.pauseCount++; },
+    },
+  };
+  let hidden = false;
+  const context = vm.createContext({
+    document: { get hidden() { return hidden; }, getElementById: id => nodes[id] },
+  });
+  const source = embedded[1];
+  const start = source.indexOf('function syncInstallKeepawake(job) {');
+  const end = source.indexOf('document.addEventListener("visibilitychange"', start);
+  assert(start >= 0 && end > start);
+  vm.runInContext('const $ = id => document.getElementById(id);\\n' + source.slice(start, end), context);
+  const run = job => context.syncInstallKeepawake(job);
+  run({ kind:"renew", running:true });
+  assert.equal(nodes["install-keepawake"].hidden, true);
+  assert.equal(nodes["install-keepawake-video"].playCount, 0);
+  run({ kind:"install", running:true });
+  assert.equal(nodes["install-keepawake"].hidden, false);
+  assert.equal(nodes["install-keepawake-video"].playCount, 1);
+  run({ kind:"install", running:true });
+  assert.equal(nodes["install-keepawake-video"].playCount, 1, "polling must not restart playback");
+  hidden = true;
+  run({ kind:"install", running:true });
+  assert.equal(nodes["install-keepawake-video"].paused, true);
+  hidden = false;
+  run({ kind:"install", running:true });
+  assert.equal(nodes["install-keepawake-video"].playCount, 2);
+  run({ kind:"install", running:false });
+  assert.equal(nodes["install-keepawake"].hidden, true);
+  assert.equal(nodes["install-keepawake-video"].paused, true);
+  run({ kind:"renew", running:true });
+  assert.equal(nodes["install-keepawake-video"].playCount, 2);
+}
+
 // Installation progress stays next to the IPA controls, including its final
 // failure/success. A later renewal moves the same panel back without copying
 // log nodes or losing the reader's scroll position.
