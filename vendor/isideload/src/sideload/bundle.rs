@@ -135,6 +135,13 @@ impl Bundle {
         &mut self.app_extensions
     }
 
+    /// Synchronize the in-memory app tree after unchecked extensions are removed from disk.
+    pub fn retain_app_extensions(&mut self, keep: &std::collections::HashSet<&str>) {
+        self.app_extensions.retain(|e| {
+            e.bundle_identifier().is_some_and(|id| keep.contains(id))
+        });
+    }
+
     pub fn frameworks(&self) -> &[Bundle] {
         &self.frameworks
     }
