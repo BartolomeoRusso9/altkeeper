@@ -237,9 +237,17 @@ impl PhoneLink {
                 hs,
                 usb: None,
                 ..
-            } => isideload::sideload::install::install_app_rsd(adapter, hs, app_path, progress)
-                .await
-                .map_err(|e| format!("Installation failed: {e}")),
+            } => {
+                if crate::install_archive::use_archive_on_wifi() {
+                    crate::install_archive::install_signed_app_rsd(adapter, hs, app_path, progress)
+                        .await
+                        .map_err(|e| format!("IPA installation failed: {e}"))
+                } else {
+                    isideload::sideload::install::install_app_rsd(adapter, hs, app_path, progress)
+                        .await
+                        .map_err(|e| format!("Installation failed: {e}"))
+                }
+            },
         }
     }
 

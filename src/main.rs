@@ -26,6 +26,7 @@ mod dnssd;
 mod env;
 mod fsperm;
 mod i18n;
+mod install_archive;
 mod phone;
 mod profile;
 mod terminal;
