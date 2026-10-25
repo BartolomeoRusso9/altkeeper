@@ -351,7 +351,7 @@ mod tests {
         let raw = [
             "com.example.app.AAAAAAAAAA",
             "com.example.app.BBBBBBBBBB.Ext.AAAAAAAAAA",
-            "com.example.app.AAAAAAAAAA.other",
+            "com.example.app.feature.other",
         ];
         assert_eq!(group_root(raw[1], &raw, "AAAAAAAAAA"), raw[0]);
         assert_eq!(group_root(raw[2], &raw, "AAAAAAAAAA"), raw[2]);
