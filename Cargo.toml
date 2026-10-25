@@ -33,6 +33,8 @@ rustls = { version = "0.23", default-features = false, features = ["ring", "std"
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 tokio = { version = "1", features = ["full"] }
+tempfile = "3.27"
+zip = { version = "8.6", default-features = false, features = ["deflate"] }
 tracing-subscriber = { version = "0.3", features = ["env-filter"] }
 
 # La copia in vendor/ è isideload 0.4.6 (upstream 8ca39b62) con due modifiche locali:
