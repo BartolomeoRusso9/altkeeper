@@ -21,7 +21,10 @@ for (const snippet of [
   'data-i18n="Send test notification"',
   'data-i18n="Sign and install"',
   'data-i18n="Discord failure notifications"',
-  '.action-row > button { flex: 0 0 184px; width: 184px;',
+  '.action-row { justify-content: flex-start; align-items: stretch; flex-wrap: nowrap; }',
+  'flex: 1 1 0; min-width: 0; max-width: 184px;',
+  '.action-row { gap: 6px; }',
+  'word-break: keep-all; overflow-wrap: anywhere;',
   'justify-content: center; text-align: center;',
   'class="row action-row"',
   'id="extension-choice"',
@@ -49,6 +52,13 @@ for (const id of [
 ]) {
   assert(html.includes('id="' + id + '"'), "Missing control: " + id);
 }
+// Under 420px, action groups must stay on one row and divide the available
+// card width into three compact button slots without overflowing.
+const iphoneMiniContent = 375 - 2 * 16 - 2 * 16 - 2;
+assert((iphoneMiniContent - 2 * 6) / 3 > 90, "iPhone mini action buttons should fit 3 across");
+assert(html.includes('#code-form .row { justify-content: flex-start; flex-wrap: nowrap; gap: 8px; }'));
+assert(html.includes('<div class="row" style="margin-top:10px">'));
+
 // Safari icon and already-approved Discord test stay intact through localization.
 assert(html.includes('rel="apple-touch-icon"'));
 assert(html.includes('rel="icon"'));
