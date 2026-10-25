@@ -227,6 +227,20 @@ pub async fn serve(
             "PIN-protected: any username is accepted"
         } else { "only accessible from this computer" })
     ));
+    // Runs independently of iPhone communications and renewal. Check daily but
+    // perform a sweep only if 30 days have passed since the last successful sweep.
+    tokio::spawn(async {
+        loop {
+            match profile::cleanup_backups_if_due(SystemTime::now()) {
+                Ok(Some(removed)) => println!(
+                    "[backup-cleanup] Monthly sweep: removed {removed} profiles expired over 30 days ago"
+                ),
+                Ok(None) => {}
+                Err(e) => eprintln!("[backup-cleanup] Failed: {e}"),
+            }
+            tokio::time::sleep(Duration::from_secs(24 * 60 * 60)).await;
+        }
+    });
     axum::serve(listener, router).await.map_err(|e| format!("{e:?}"))
 }
 

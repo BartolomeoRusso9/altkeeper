@@ -219,6 +219,16 @@ Removing a profile currently needed by an installed app can prevent that app fro
 To restore a backup: `altkeeper profile-restore profili-salvati/<uuid>.mobileprovision`.
 Neither profile deletion nor renewal removes Apple Developer App IDs.
 
+**Monthly backup cleanup:** When the web service (`serve`, including Docker `serve --altserver`)
+is running, it checks once a day whether a cleanup is due. Every **30 days after the last
+successful sweep** (including the first startup), it removes only saved `.mobileprovision`
+files whose embedded expiry date is at least **30 days in the past**. A verified UUID/file name
+match is required; malformed, unreadable, future-dated or unrelated files are preserved.
+A cleanup log line reports the number removed. The last successful sweep is recorded at
+`state/profile-backup-last-cleanup` so Docker restarts do not reset the schedule.
+No iPhone communication, Apple login, cron job, or new systemd timer is required.
+This cleanup does not touch live iPhone profiles or Apple Developer App IDs.
+
 ### 6. Automatic renewal (optional)
 
 A safety net that does not depend on the iPhone running AltStore.
