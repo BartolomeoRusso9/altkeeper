@@ -214,7 +214,7 @@ No unattended schedule is enabled by merely running the Docker container (defaul
 
 **Optional built-in scheduler in the web UI:** Use **Automatic renewal** to enable/disable a
 once-daily job and choose a time in **Asia/Seoul (KST, UTC+09:00)**. The default clock
-time is 21:17 KST and the switch is initially OFF. When enabled, AltKeeper runs
+time is 06:00 KST and the switch is initially OFF. When enabled, AltKeeper runs
 the same installed-app-aware renewal as **Renew expiring apps**, with the documented
 all-profile fallback if installed-app listing fails. The server needs a saved
 Apple ID password, must be running, and the iPhone must be reachable.
