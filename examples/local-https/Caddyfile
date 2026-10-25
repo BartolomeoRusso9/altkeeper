@@ -1,0 +1,13 @@
+# Only the iPhone/PC -> WalnutPi hop uses HTTPS.
+# The existing AltKeeper keeps serving HTTP on :8787 for compatibility.
+# Caddy issues a LOCAL certificate for this LAN IP; it does not request a
+# public certificate, open a router port, or redirect the existing HTTP site.
+{
+    auto_https disable_redirects
+    admin off
+}
+
+https://{$ALTKEEPER_LAN_IP}:8788 {
+    tls internal
+    reverse_proxy host.docker.internal:8787
+}

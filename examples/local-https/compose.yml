@@ -1,0 +1,18 @@
+# Start this compose SEPARATELY from the existing AltKeeper compose.
+# Only binds the named LAN IP; does not publish 8788 on the WAN.
+# Keep ./caddy-data private and persistent: it contains the local CA KEY.
+services:
+  altkeeper-https:
+    image: caddy:2-alpine
+    container_name: altkeeper-https
+    restart: unless-stopped
+    ports:
+      - "${ALTKEEPER_LAN_IP:-192.168.0.62}:8788:8788"
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
+    environment:
+      ALTKEEPER_LAN_IP: "${ALTKEEPER_LAN_IP:-192.168.0.62}"
+    volumes:
+      - ./Caddyfile:/etc/caddy/Caddyfile:ro
+      - ./caddy-data:/data
+      - ./caddy-config:/config
