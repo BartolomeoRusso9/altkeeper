@@ -178,9 +178,7 @@ impl Application {
             isideload_vfs::fs::remove_dir_all(path)
                 .context("Could not remove an excluded extension")?;
         }
-        self.bundle.app_extensions.retain(|e| {
-            e.bundle_identifier().is_some_and(|id| keep.contains(id))
-        });
+        self.bundle.retain_app_extensions(&keep);
         Ok(())
     }
 
