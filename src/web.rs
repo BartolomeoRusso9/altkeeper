@@ -32,6 +32,10 @@ use crate::{PAIRING_FILE, apple, phone, profile};
 const INDEX_HTML: &str = include_str!("web/index.html");
 const RENEW_LOG: &str = "renew.log";
 const AUTO_RENEW_CONFIG: &str = "state/auto-renew.json";
+const DISCORD_WEBHOOK_FILE: &str = "state/discord-webhook";
+const APP_STATUS_FILE: &str = "state/app-renew-status.json";
+const RETRY_SECONDS: u64 = 30 * 60;
+const MAX_RETRIES: u8 = 2;
 const KST_OFFSET_SECS: u64 = 9 * 60 * 60;
 const DAY_SECS: u64 = 24 * 60 * 60;
 const MAX_JOB_LINES: usize = 300;
@@ -188,16 +192,29 @@ struct AutoRenewConfig {
     enabled: bool,
     /// HH:MM in Asia/Seoul (fixed UTC+09:00), independent of container TZ.
     time: String,
+    #[serde(default = "default_min_days")]
+    min_days: u8,
     /// KST calendar day of the most recent automatic attempt.
     last_attempt_day: Option<u64>,
+    #[serde(default)]
+    retry_count: u8,
+    #[serde(default)]
+    retry_at: Option<u64>,
+    #[serde(default)]
+    last_error: Option<String>,
 }
+fn default_min_days() -> u8 { 3 }
 
 impl Default for AutoRenewConfig {
     fn default() -> Self {
         Self {
             enabled: false,
             time: "06:00".into(),
+            min_days: 3,
             last_attempt_day: None,
+            retry_count: 0,
+            retry_at: None,
+            last_error: None,
         }
     }
 }
@@ -221,6 +238,7 @@ fn kst_seconds_of_day(now_secs: u64) -> u64 {
 
 fn next_auto_run(config: &AutoRenewConfig, now_secs: u64) -> Option<u64> {
     if !config.enabled { return None; }
+    if let Some(retry_at) = config.retry_at { return Some(retry_at); }
     let target = parse_kst_time(&config.time)?;
     let today = kst_day(now_secs);
     let can_run_today = kst_seconds_of_day(now_secs) < target
@@ -239,7 +257,7 @@ fn load_auto_renew() -> AutoRenewConfig {
         }
     };
     match serde_json::from_str::<AutoRenewConfig>(&raw) {
-        Ok(config) if parse_kst_time(&config.time).is_some() => config,
+        Ok(config) if parse_kst_time(&config.time).is_some() && (1..=6).contains(&config.min_days) => config,
         _ => {
             eprintln!("[auto-renew] Invalid schedule config; automatic renewal disabled");
             AutoRenewConfig::default()
@@ -257,40 +275,102 @@ fn save_auto_renew(config: &AutoRenewConfig) -> Result<(), String> {
     std::fs::rename(tmp, AUTO_RENEW_CONFIG).map_err(crate::phone::dbg)
 }
 
+fn retryable_renew_error(err: &str) -> bool {
+    let lower = err.to_ascii_lowercase();
+    !["2fa", "incorrect password", "invalid password", "invalid credentials",
+      "unauthorized", "forbidden", "rate.limit", "too many requests", "429",
+      "apple id sign-in", "apple id login"].iter().any(|part| lower.contains(part))
+}
+
+fn validate_discord_webhook(url: &str) -> bool {
+    let prefixes = ["https://discord.com/api/webhooks/", "https://discordapp.com/api/webhooks/"];
+    let Some(rest) = prefixes.iter().find_map(|prefix| url.strip_prefix(prefix)) else {
+        return false;
+    };
+    let mut parts = rest.split('/');
+    let Some(id) = parts.next() else { return false };
+    let Some(token) = parts.next() else { return false };
+    parts.next().is_none() && id.len() >= 10 && token.len() >= 20
+        && id.bytes().all(|b| b.is_ascii_digit())
+        && token.bytes().all(|b| b.is_ascii_alphanumeric() || b == b'-' || b == b'_')
+}
+
+fn discord_configured() -> bool {
+    std::fs::read_to_string(DISCORD_WEBHOOK_FILE)
+        .ok().is_some_and(|url| validate_discord_webhook(url.trim()))
+}
+
+fn send_discord_failure(error: &str) -> Result<(), String> {
+    use std::io::Write;
+    let url = std::fs::read_to_string(DISCORD_WEBHOOK_FILE).map_err(crate::phone::dbg)?;
+    let url = url.trim();
+    if !validate_discord_webhook(url) { return Err("Invalid Discord webhook configuration".into()); }
+    // Pass the sensitive webhook URL via stdin (curl config), not process arguments.
+    let msg = format!("AltKeeper: automatic renewal failed after retries.\\n{}",
+        error.chars().take(240).collect::<String>());
+    let body = json!({ "content": msg }).to_string();
+    let mut child = std::process::Command::new("curl")
+        .args(["--fail", "--silent", "--show-error", "--max-time", "12",
+            "--request", "POST", "--header", "Content-Type: application/json",
+            "--data-raw", &body, "--config", "-"])
+        .stdin(std::process::Stdio::piped())
+        .stdout(std::process::Stdio::null())
+        .stderr(std::process::Stdio::piped())
+        .spawn().map_err(crate::phone::dbg)?;
+    // Validated webhook has no quote/backslash/newline, so it is safe for curl config.
+    if let Some(mut stdin) = child.stdin.take() {
+        stdin.write_all(format!("url = \\"{url}\\"\\n").as_bytes()).map_err(crate::phone::dbg)?;
+    }
+    let output = child.wait_with_output().map_err(crate::phone::dbg)?;
+    if output.status.success() { Ok(()) }
+    else { Err("Discord rejected webhook notification".into()) }
+}
+
 async fn auto_renew_loop(app: Arc<App>) {
     loop {
         let now_secs = now();
         let guard = {
             let config = app.auto_renew.lock().unwrap_or_else(|e| e.into_inner());
-            let due = config.enabled
-                && parse_kst_time(&config.time)
-                    .is_some_and(|target| kst_seconds_of_day(now_secs) >= target)
+            let retry_due = config.retry_at.is_some_and(|at| at <= now_secs);
+            let scheduled_due = parse_kst_time(&config.time)
+                .is_some_and(|target| kst_seconds_of_day(now_secs) >= target)
                 && config.last_attempt_day != Some(kst_day(now_secs));
-            if due { try_busy(&app) } else { None }
+            if config.enabled && (retry_due || scheduled_due) { try_busy(&app) } else { None }
         };
         if let Some(guard) = guard {
             let mut config = app.auto_renew.lock().unwrap_or_else(|e| e.into_inner());
-            if config.enabled && config.last_attempt_day != Some(kst_day(now_secs)) {
-                let mut updated = config.clone();
-                updated.last_attempt_day = Some(kst_day(now_secs));
-                match save_auto_renew(&updated) {
-                    Ok(()) => {
+            if config.enabled {
+                let is_retry = config.retry_at.is_some_and(|t| t <= now_secs);
+                let is_new_day = config.last_attempt_day != Some(kst_day(now_secs))
+                    && config.retry_at.is_none();
+                if is_retry || is_new_day {
+                    let mut updated = config.clone();
+                    if is_retry {
+                        updated.retry_count = updated.retry_count.saturating_add(1);
+                    } else {
+                        updated.last_attempt_day = Some(kst_day(now_secs));
+                        updated.retry_count = 0;
+                    }
+                    updated.retry_at = None;
+                    if let Err(err) = save_auto_renew(&updated) {
+                        eprintln!("[auto-renew] Could not persist attempt: {err}");
+                    } else {
+                        let threshold = updated.min_days as i64;
+                        let attempt = updated.retry_count + 1;
                         *config = updated;
-                        drop(config); // avoid lock-order inversion with /api/state
+                        drop(config);
                         app.lock().job = JobView {
                             kind: "auto_renew".into(),
                             running: true,
-                            lines: vec!["Automatic renewal started (Asia/Seoul schedule).".into()],
+                            lines: vec![format!("Scheduled renewal attempt {attempt}/3 (Asia/Seoul).")],
                             ok: None,
                         };
-                        println!("[auto-renew] Starting scheduled renewal.");
-                        spawn_job(guard, |app| run_renew(app, false, None, true));
+                        spawn_job(guard, move |app| run_renew(app, false, None, true, threshold, true));
                     }
-                    Err(err) => eprintln!("[auto-renew] Could not persist attempt; skipping: {err}"),
                 }
             }
         }
-        tokio::time::sleep(Duration::from_secs(60)).await;
+        tokio::time::sleep(Duration::from_secs(30)).await;
     }
 }
 
