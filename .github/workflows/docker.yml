@@ -1,6 +1,6 @@
 # Prova il codice e pubblica l'immagine Docker su GitHub Container Registry (ghcr.io).
 #
-# - Pull request: esegue i test Linux e Windows, senza pubblicare immagini.
+# - Pull request: esegue i test Linux e Windows e compila il Dockerfile per amd64, senza pubblicare immagini.
 # - Push su main: pubblica `latest` e `sha-<commit>` per amd64 e arm64.
 # - Tag `vX.Y.Z` (per esempio `git tag v0.2.0 && git push --tags`): pubblica `X.Y.Z`, `X.Y` e
 #   `latest`, per amd64 e arm64 (build nativi paralleli, senza QEMU).
@@ -64,8 +64,24 @@ jobs:
           $output = cargo run --locked -- --help
           if ($LASTEXITCODE -ne 0 -or -not ($output -match '^uso: altkeeper')) { throw "Italian CLI help failed: $output" }
 
+  build-pr:
+    if: github.event_name == 'pull_request'
+    needs: [test, test-windows]
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@v7
+      - uses: docker/setup-buildx-action@v4
+      - uses: docker/build-push-action@v7
+        with:
+          context: .
+          platforms: linux/amd64
+          push: false
+          cache-from: type=gha,scope=altkeeper-amd64
+
   image:
-    # Build architectures concurrently on native runners; PRs run tests only.
+    # Build architectures concurrently on native runners for publishing.
     if: github.event_name != 'pull_request'
     needs: [test, test-windows]
     strategy:
@@ -91,17 +107,19 @@ jobs:
           registry: ghcr.io
           username: ${{ github.actor }}
           password: ${{ secrets.GITHUB_TOKEN }}
+      - id: image-name
+        run: echo "image=ghcr.io/${GITHUB_REPOSITORY,,}" >> "$GITHUB_OUTPUT"
       - id: meta
         uses: docker/metadata-action@v6
         with:
-          images: ghcr.io/${{ github.repository }}
+          images: ${{ steps.image-name.outputs.image }}
       - id: build
         uses: docker/build-push-action@v7
         with:
           context: .
           platforms: ${{ matrix.platform }}
           # Immutable per-arch pushes; only the final manifest receives tags.
-          outputs: type=image,name=ghcr.io/${{ github.repository }},push-by-digest=true,name-canonical=true,push=true
+          outputs: type=image,name=${{ steps.image-name.outputs.image }},push-by-digest=true,name-canonical=true,push=true
           labels: ${{ steps.meta.outputs.labels }}
           cache-from: type=gha,scope=altkeeper-${{ matrix.arch }}
           cache-to: type=gha,scope=altkeeper-${{ matrix.arch }},mode=max
@@ -138,10 +156,12 @@ jobs:
           registry: ghcr.io
           username: ${{ github.actor }}
           password: ${{ secrets.GITHUB_TOKEN }}
+      - id: image-name
+        run: echo "image=ghcr.io/${GITHUB_REPOSITORY,,}" >> "$GITHUB_OUTPUT"
       - id: meta
         uses: docker/metadata-action@v6
         with:
-          images: ghcr.io/${{ github.repository }}
+          images: ${{ steps.image-name.outputs.image }}
           tags: |
             type=semver,pattern={{version}}
             type=semver,pattern={{major}}.{{minor}}
@@ -156,7 +176,7 @@ jobs:
           test "$(find . -maxdepth 1 -type f | wc -l)" -eq 2
           docker buildx imagetools create \
             $(jq -cr '.tags | map("-t " + .) | join(" ")' <<< "$DOCKER_METADATA_OUTPUT_JSON") \
-            $(printf 'ghcr.io/${{ github.repository }}@sha256:%s ' *)
+            $(printf '${{ steps.image-name.outputs.image }}@sha256:%s ' *)
       - name: Inspect published manifest
         env:
           DOCKER_METADATA_OUTPUT_JSON: ${{ steps.meta.outputs.json }}

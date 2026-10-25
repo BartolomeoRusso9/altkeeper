@@ -165,3 +165,46 @@ async function checkDashboardState() {
 }
 checkDashboardState().catch(error => { console.error(error); process.exitCode = 1; });
 
+// A restarted server resets its sequence. Fetch its startup lines before
+// advancing the cursor, and keep the old cursor if that recovery request fails.
+async function checkLogPolling() {
+  const view = { textContent: "before restart", scrollTop: 0, clientHeight: 100, scrollHeight: 100 };
+  const requests = [], responses = [], timers = [];
+  const context = vm.createContext({
+    $: id => { assert.equal(id, "logs-view"); return view; },
+    api: async path => {
+      requests.push(path);
+      const response = responses.shift();
+      if (response instanceof Error) throw response;
+      assert(response, "unexpected log request");
+      return response;
+    },
+    setTimeout: (_fn, delay) => timers.push(delay),
+  });
+  const poll = embedded[1].match(/async function pollLogs\(\) \{[\s\S]*?\r?\n\}/);
+  assert(poll);
+  vm.runInContext('let logSeq = 100;\n' + poll[0], context);
+  responses.push({ seq: 2, lines: [] }, { seq: 3, lines: ["startup", "ready", "listening"] });
+  await vm.runInContext('pollLogs()', context);
+  assert.deepEqual(requests.splice(0), ["/api/logs?since=100", "/api/logs?since=0"]);
+  assert.equal(view.textContent, "before restart\nstartup\nready\nlistening");
+  assert.equal(vm.runInContext('logSeq', context), 3);
+  assert.equal(view.scrollTop, view.scrollHeight);
+
+  responses.push({ seq: 4, lines: ["next"] });
+  await vm.runInContext('pollLogs()', context);
+  assert.deepEqual(requests.splice(0), ["/api/logs?since=3"]);
+  assert(view.textContent.endsWith("\nnext"));
+
+  responses.push({ seq: 1, lines: [] }, new Error("temporarily offline"));
+  await vm.runInContext('pollLogs()', context);
+  assert.equal(vm.runInContext('logSeq', context), 4);
+  assert.deepEqual(requests.splice(0), ["/api/logs?since=4", "/api/logs?since=0"]);
+
+  responses.push({ seq: 0, lines: [] }, { seq: 0, lines: [] });
+  await vm.runInContext('pollLogs()', context);
+  assert.equal(vm.runInContext('logSeq', context), 0);
+  assert(view.textContent.endsWith("\nnext"));
+  assert.deepEqual(timers, [2000, 2000, 2000, 2000]);
+}
+checkLogPolling().catch(error => { console.error(error); process.exitCode = 1; });

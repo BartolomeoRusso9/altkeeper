@@ -305,7 +305,7 @@ fn discord_configured() -> bool {
 }
 
 fn send_discord_failure(error: &str) -> Result<(), String> {
-    let message = format!("AltKeeper: automatic renewal failed after retries.\\n{}",
+    let message = format!("AltKeeper: automatic renewal failed after retries.\n{}",
         error.chars().take(240).collect::<String>());
     send_discord_message(&message)
 }
@@ -463,11 +463,11 @@ pub async fn serve(
     tokio::spawn(async {
         loop {
             match profile::cleanup_backups_if_due(SystemTime::now()) {
-                Ok(Some(removed)) => println!(
+                Ok(Some(removed)) => crate::log::line(&format!(
                     "[backup-cleanup] Monthly sweep: removed {removed} profiles expired over 30 days ago"
-                ),
+                )),
                 Ok(None) => {}
-                Err(e) => eprintln!("[backup-cleanup] Failed: {e}"),
+                Err(e) => crate::log::err(&format!("[backup-cleanup] Failed: {e}")),
             }
             tokio::time::sleep(Duration::from_secs(24 * 60 * 60)).await;
         }

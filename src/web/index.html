@@ -892,7 +892,8 @@ $("btn-resend").onclick = () => act(() => api("/api/login/resend", {}), "code-er
 let logSeq = 0;
 async function pollLogs() {
   try {
-    const r = await api("/api/logs?since=" + logSeq);
+    let r = await api("/api/logs?since=" + logSeq);
+    if (r.seq < logSeq) r = await api("/api/logs?since=0");
     if (r.lines.length) {
       const v = $("logs-view");
       const atEnd = v.scrollTop + v.clientHeight >= v.scrollHeight - 4;

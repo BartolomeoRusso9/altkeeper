@@ -55,10 +55,14 @@ fn check_updates(proxy: &EventLoopProxy<UserEvent>, manual: bool) {
     if let Err(e) = &latest {
         crate::log::err(&format!("[update] {e}"));
     }
-    let latest = latest.ok().flatten();
-    if manual && latest.is_none() {
-        toast(&format!("AltKeeperPlus {} is up to date.", env!("CARGO_PKG_VERSION")));
+    if manual {
+        match &latest {
+            Ok(None) => toast(&format!("AltKeeperPlus {} is up to date.", env!("CARGO_PKG_VERSION"))),
+            Err(e) => toast(&format!("Update check failed: {e}")),
+            Ok(Some(_)) => {}
+        }
     }
+    let latest = latest.ok().flatten();
     let _ = proxy.send_event(UserEvent::Updates(latest));
 }
 
@@ -352,6 +356,7 @@ pub fn run(bind: SocketAddr, dir: &Path, start: impl FnOnce(EventLoopProxy<UserE
     });
     let check_proxy = proxy.clone();
     let mut pending: Option<crate::update::Release> = None;
+    let mut staging = false;
     let mut announced = String::new();
     start(proxy);
 
@@ -378,8 +383,9 @@ pub fn run(bind: SocketAddr, dir: &Path, start: impl FnOnce(EventLoopProxy<UserE
                 } else if e.id == check.id() {
                     let p = check_proxy.clone();
                     std::thread::spawn(move || check_updates(&p, true));
-                } else if e.id == update_now.id() {
+                } else if e.id == update_now.id() && !staging {
                     if let Some(r) = pending.clone() {
+                        staging = true;
                         update_now.set_enabled(false);
                         update_now.set_text("Downloading the update...");
                         let (p, exe) = (check_proxy.clone(), exe.clone());
@@ -399,7 +405,7 @@ pub fn run(bind: SocketAddr, dir: &Path, start: impl FnOnce(EventLoopProxy<UserE
                 let _ = tray.set_icon(Some(logo(reachable)));
                 let _ = tray.set_tooltip(Some(tip));
             }
-            Event::UserEvent(UserEvent::Updates(latest)) => {
+            Event::UserEvent(UserEvent::Updates(latest)) if !staging => {
                 if let Some(r) = &latest {
                     update_now.set_text(format!("Update now to {}", r.tag));
                     update_now.set_enabled(true);
@@ -439,6 +445,7 @@ pub fn run(bind: SocketAddr, dir: &Path, start: impl FnOnce(EventLoopProxy<UserE
                 }
             }
             Event::UserEvent(UserEvent::UpdateFailed(e)) => {
+                staging = false;
                 crate::log::err(&format!("[update] {e}"));
                 toast(&format!("Update failed: {e}"));
                 update_now.set_text("Update now (try again)");
