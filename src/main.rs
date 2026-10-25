@@ -487,7 +487,7 @@ async fn main() -> Result<(), String> {
             }
             let rt = tokio::runtime::Handle::current();
             tokio::task::block_in_place(|| {
-                tray::run(format!("http://{bind}/"), &dir, |proxy| {
+                tray::run(bind, &dir, |proxy| {
                     rt.spawn(async move {
                         if let Err(e) = web::serve(bind, None, phone).await {
                             let _ = proxy.send_event(tray::UserEvent::ServerFailed(e));

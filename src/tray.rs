@@ -2,8 +2,10 @@
 //! `altkeeper tray`: AltServer e la pagina girano come con `serve --altserver`, senza terminale.
 //! Chiudere la finestra la nasconde soltanto; il programma si ferma solo con "Quit".
 
-use std::io;
+use std::io::{self, Read as _, Write as _};
+use std::net::{SocketAddr, TcpStream};
 use std::path::Path;
+use std::time::{Duration, Instant};
 
 use tao::event::{Event, WindowEvent};
 use tao::event_loop::{ControlFlow, EventLoopBuilder, EventLoopProxy, EventLoopWindowTarget};
@@ -22,6 +24,7 @@ pub enum UserEvent {
     Tray(TrayIconEvent),
     Menu(MenuEvent),
     ServerFailed(String),
+    Status { reachable: bool, tip: String },
 }
 
 /// Stacca il processo dal terminale: lanciato con un doppio clic, la finestra nera si chiude.
@@ -45,6 +48,7 @@ pub fn dot(rgb: [u8; 3]) -> Icon {
 }
 
 pub const GREEN: [u8; 3] = [52, 168, 83];
+pub const GREY: [u8; 3] = [140, 140, 140];
 
 fn run_key() -> io::Result<RegKey> {
     RegKey::predef(HKEY_CURRENT_USER).create_subkey(RUN_KEY).map(|(k, _)| k)
@@ -83,6 +87,123 @@ fn ensure_autostart_default_as(name: &str, state_dir: &Path, exe: &Path, dir: &P
     }
 }
 
+/// Testo del tooltip: quante app e la scadenza più vicina (`days` = giorni rimasti per app).
+pub fn summary(days: &[i64]) -> String {
+    let Some(&min) = days.iter().min() else {
+        return "AltKeeperPlus: no apps".into();
+    };
+    let n = days.len();
+    let apps = if n == 1 { "1 app".to_string() } else { format!("{n} apps") };
+    let next = match min {
+        ..0 => "one has expired".to_string(),
+        0 => "one expires today".to_string(),
+        1 => "next expiry in 1 day".to_string(),
+        d => format!("next expiry in {d} days"),
+    };
+    format!("AltKeeperPlus: {apps}, {next}")
+}
+
+#[derive(Debug, PartialEq)]
+pub enum Note {
+    Renewed(Vec<String>),
+    Installed,
+    Failed(String),
+}
+
+/// Dalle righe di log, gli avvisi da mostrare. I profili installati di seguito diventano un
+/// avviso solo.
+pub fn notes(lines: &[String]) -> Vec<Note> {
+    let mut out = Vec::new();
+    for line in lines {
+        let msg = line.split_once("] ").map_or(line.as_str(), |(_, m)| m);
+        if let Some(bundle) = msg.strip_prefix("[altserver] profile installed: ") {
+            if let Some(Note::Renewed(v)) = out.last_mut() {
+                v.push(bundle.to_string());
+            } else {
+                out.push(Note::Renewed(vec![bundle.to_string()]));
+            }
+        } else if msg == "[altserver] app installed" || msg == "[web] Installation completed." {
+            out.push(Note::Installed);
+        } else if let Some(e) = msg
+            .strip_prefix("[altserver] install failed: ")
+            .or_else(|| msg.strip_prefix("[web] Error: "))
+        {
+            out.push(Note::Failed(e.to_string()));
+        }
+    }
+    out
+}
+
+/// Al massimo un avviso di errore ogni 10 minuti (AltStore riprova da solo).
+#[derive(Default)]
+pub struct FailGate {
+    last: Option<Instant>,
+}
+
+impl FailGate {
+    pub fn allow(&mut self, now: Instant) -> bool {
+        let ok = self.last.is_none_or(|t| now.duration_since(t) >= Duration::from_secs(600));
+        if ok {
+            self.last = Some(now);
+        }
+        ok
+    }
+}
+
+fn toast(text: &str) {
+    use tauri_winrt_notification::Toast;
+    let _ = Toast::new(Toast::POWERSHELL_APP_ID).title("AltKeeperPlus").text1(text).show();
+}
+
+/// Guarda le righe di log nuove e mostra gli avvisi.
+fn watch_log() {
+    let mut seq = crate::log::since(u64::MAX).0;
+    let mut gate = FailGate::default();
+    loop {
+        std::thread::sleep(Duration::from_secs(2));
+        let (latest, lines) = crate::log::since(seq);
+        seq = latest;
+        for note in notes(&lines) {
+            match note {
+                Note::Renewed(b) => toast(&format!("Profiles installed: {}", b.join(", "))),
+                Note::Installed => toast("App installed on the iPhone."),
+                Note::Failed(e) if gate.allow(Instant::now()) => toast(&format!("Failed: {e}")),
+                Note::Failed(_) => {}
+            }
+        }
+    }
+}
+
+/// GET minimale verso la pagina locale; `None` se non risponde.
+fn http_get(addr: SocketAddr, path: &str) -> Option<String> {
+    let mut s = TcpStream::connect_timeout(&addr, Duration::from_secs(5)).ok()?;
+    s.set_read_timeout(Some(Duration::from_secs(60))).ok()?;
+    write!(s, "GET {path} HTTP/1.0\r\nHost: {addr}\r\n\r\n").ok()?;
+    let mut body = String::new();
+    s.read_to_string(&mut body).ok()?;
+    body.split_once("\r\n\r\n").map(|(_, b)| b.to_string())
+}
+
+/// Ogni 5 minuti legge lo stato dalla pagina (che riguarda il telefono se il dato è vecchio)
+/// e aggiorna colore e tooltip dell'icona.
+fn watch_state(addr: SocketAddr, proxy: EventLoopProxy<UserEvent>) {
+    std::thread::sleep(Duration::from_secs(5));
+    for round in 0.. {
+        if let Some(v) = http_get(addr, "/api/state")
+            .and_then(|b| serde_json::from_str::<serde_json::Value>(&b).ok())
+        {
+            let reachable = v["phone"]["reachable"].as_bool() == Some(true);
+            let days: Vec<i64> = v["apps"]
+                .as_array()
+                .map(|a| a.iter().filter_map(|x| x["days"].as_i64()).collect())
+                .unwrap_or_default();
+            let _ = proxy.send_event(UserEvent::Status { reachable, tip: summary(&days) });
+        }
+        // Il primo controllo del telefono parte con la prima richiesta: si riguarda presto.
+        std::thread::sleep(Duration::from_secs(if round == 0 { 60 } else { 300 }));
+    }
+}
+
 fn show(
     slot: &mut Option<(Window, WebView)>,
     target: &EventLoopWindowTarget<UserEvent>,
@@ -108,9 +229,11 @@ fn show(
     };
     match WebViewBuilder::new().with_url(url).build(&window) {
         Ok(webview) => *slot = Some((window, webview)),
-        Err(e) => crate::log::err(&format!(
-            "[tray] cannot show the page (is Microsoft Edge WebView2 installed?): {e}"
-        )),
+        Err(e) => {
+            let msg = format!("Cannot show the page (is Microsoft Edge WebView2 installed?): {e}");
+            crate::log::err(&format!("[tray] {msg}"));
+            message_box(&format!("{msg}\n\nThe page is also at {url}"));
+        }
     }
 }
 
@@ -130,7 +253,8 @@ fn dot_rgba(rgb: [u8; 3]) -> Vec<u8> {
 
 /// Avvia il ciclo degli eventi con l'icona; `start` riceve il proxy per segnalare errori del
 /// server. Non ritorna: "Quit" chiude il processo.
-pub fn run(url: String, dir: &Path, start: impl FnOnce(EventLoopProxy<UserEvent>)) -> ! {
+pub fn run(bind: SocketAddr, dir: &Path, start: impl FnOnce(EventLoopProxy<UserEvent>)) -> ! {
+    let url = format!("http://{bind}/");
     let event_loop = EventLoopBuilder::<UserEvent>::with_user_event().build();
     let proxy = event_loop.create_proxy();
     let p = proxy.clone();
@@ -159,14 +283,28 @@ pub fn run(url: String, dir: &Path, start: impl FnOnce(EventLoopProxy<UserEvent>
         &PredefinedMenuItem::separator(),
         &quit,
     ]);
-    let _tray = TrayIconBuilder::new()
-        .with_menu(Box::new(menu))
-        .with_menu_on_left_click(false)
-        .with_tooltip("AltKeeperPlus")
-        .with_icon(dot(GREEN))
-        .build()
-        .expect("tray icon");
+    // All'avvio con Windows l'area di notifica può non essere ancora pronta: si riprova per un
+    // minuto prima di arrendersi.
+    let build = || {
+        TrayIconBuilder::new()
+            .with_menu(Box::new(menu.clone()))
+            .with_menu_on_left_click(false)
+            .with_tooltip("AltKeeperPlus")
+            .with_icon(dot(GREY))
+            .build()
+    };
+    let tray = (0..30)
+        .find_map(|_| {
+            build().map_err(|_| std::thread::sleep(Duration::from_secs(2))).ok()
+        })
+        .unwrap_or_else(|| {
+            message_box("AltKeeperPlus cannot create its tray icon. Start it again.");
+            std::process::exit(1)
+        });
 
+    std::thread::spawn(watch_log);
+    let p = proxy.clone();
+    std::thread::spawn(move || watch_state(bind, p));
     start(proxy);
 
     let dir = dir.to_path_buf();
@@ -194,6 +332,10 @@ pub fn run(url: String, dir: &Path, start: impl FnOnce(EventLoopProxy<UserEvent>
                     std::process::exit(0);
                 }
             }
+            Event::UserEvent(UserEvent::Status { reachable, tip }) => {
+                let _ = tray.set_icon(Some(dot(if reachable { GREEN } else { GREY })));
+                let _ = tray.set_tooltip(Some(tip));
+            }
             Event::UserEvent(UserEvent::ServerFailed(msg)) => {
                 crate::log::err(&msg);
                 message_box(&format!("AltKeeperPlus cannot start:\n\n{msg}"));
@@ -212,6 +354,49 @@ pub fn run(url: String, dir: &Path, start: impl FnOnce(EventLoopProxy<UserEvent>
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn summary_text() {
+        assert_eq!(summary(&[]), "AltKeeperPlus: no apps");
+        assert_eq!(summary(&[1]), "AltKeeperPlus: 1 app, next expiry in 1 day");
+        assert_eq!(summary(&[6, 4, 5]), "AltKeeperPlus: 3 apps, next expiry in 4 days");
+        assert_eq!(summary(&[0, 3]), "AltKeeperPlus: 2 apps, one expires today");
+        assert_eq!(summary(&[-2]), "AltKeeperPlus: 1 app, one has expired");
+    }
+
+    #[test]
+    fn notes_from_log_lines() {
+        let lines: Vec<String> = [
+            "[2026-10-25 10:00:00] [altserver] profile installed: com.a.T",
+            "[2026-10-25 10:00:01] [altserver] profile installed: com.b.T",
+            "[2026-10-25 10:00:02] [altserver] connected",
+            "[2026-10-25 10:00:03] [altserver] app installed",
+            "[2026-10-25 10:00:04] [altserver] install failed: Socket(Kind(UnexpectedEof))",
+            "[2026-10-25 10:00:05] [web] Installation completed.",
+            "[2026-10-25 10:00:06] [web] Error: Apple ID sign-in failed: x",
+        ]
+        .map(String::from)
+        .to_vec();
+        assert_eq!(
+            notes(&lines),
+            vec![
+                Note::Renewed(vec!["com.a.T".into(), "com.b.T".into()]),
+                Note::Installed,
+                Note::Failed("Socket(Kind(UnexpectedEof))".into()),
+                Note::Installed,
+                Note::Failed("Apple ID sign-in failed: x".into()),
+            ]
+        );
+    }
+
+    #[test]
+    fn failed_toast_rate_limited() {
+        let t0 = std::time::Instant::now();
+        let mut gate = FailGate::default();
+        assert!(gate.allow(t0));
+        assert!(!gate.allow(t0 + std::time::Duration::from_secs(60)));
+        assert!(gate.allow(t0 + std::time::Duration::from_secs(11 * 60)));
+    }
 
     const TEST_VALUE: &str = "AltKeeperPlus-test";
 
