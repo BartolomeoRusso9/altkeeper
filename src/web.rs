@@ -1851,6 +1851,30 @@ mod tests {
     }
 
     #[test]
+    fn production_bundle_names_render_as_two_apps_not_six_profiles() {
+        let team = "SAVEDTEAM1";
+        let all = vec![
+            profile("a", team, "com.google.ios.youtube", 6),
+            profile("b", team, "com.google.ios.youtube.PXUL22799Q.OpenYouTube.Extension", 5),
+            profile("c", team, "com.kdt.livecontainer", 6),
+            profile("d", team, "com.kdt.livecontainer.PXUL22799Q.LaunchAppExtension", 6),
+            profile("e", team, "com.kdt.livecontainer.PXUL22799Q.LiveProcess", 2),
+            profile("f", team, "com.kdt.livecontainer.PXUL22799Q.ShareExtension", 6),
+        ];
+        let apps = app_views(&all, team);
+        assert_eq!(apps.len(), 2);
+        let youtube = apps.iter().find(|a| a.bundle == "com.google.ios.youtube").unwrap();
+        assert_eq!(youtube.members.len(), 2);
+        assert_eq!(youtube.days, 5);
+        let live = apps.iter().find(|a| a.bundle == "com.kdt.livecontainer").unwrap();
+        assert_eq!(live.members.len(), 4);
+        assert_eq!(live.days, 2);
+        let views = profile_views(&all, team);
+        assert_eq!(views.iter().filter(|p| p.root == youtube.bundle).count(), 2);
+        assert_eq!(views.iter().filter(|p| p.root == live.bundle).count(), 4);
+    }
+
+    #[test]
     fn errori_in_parole_semplici() {
         assert!(friendly_error("manca il pairing remoto rp-pairing.plist: crealo").contains("missing"));
         assert!(friendly_error("pairing con l'iPhone non riuscito (Socket(... early eof ...))")
