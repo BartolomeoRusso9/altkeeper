@@ -540,6 +540,7 @@ pub async fn sign_ipa(
     device_name: &str,
     udid: &str,
     ipa: &Path,
+    selected_extensions: Option<&[String]>,
 ) -> Result<SignedApp, String> {
     let filename = ipa
         .file_name()
@@ -569,6 +570,7 @@ pub async fn sign_ipa(
             None::<fn(f32) -> std::future::Ready<()>>,
             None,
             None,
+            selected_extensions,
         )
         .await
         .map_err(|e| {
