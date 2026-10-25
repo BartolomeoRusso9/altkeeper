@@ -45,7 +45,8 @@ pub fn inspect_ipa_extensions(path: &Path) -> Result<Vec<IpaExtensionInfo>, Repo
     let mut ids = HashSet::new();
     for i in 0..archive.len() {
         let mut entry = archive.by_index(i)?;
-        let parts: Vec<_> = entry.name().split('/').collect();
+        let entry_name = entry.name().to_owned();
+        let parts: Vec<_> = entry_name.split('/').collect();
         if parts.len() != 5 || parts[0] != "Payload"
             || !parts[1].ends_with(".app") || parts[2] != "PlugIns"
             || !parts[3].ends_with(".appex") || parts[4] != "Info.plist"
