@@ -68,7 +68,7 @@ struct Ctx {
 }
 
 fn log(msg: &str) {
-    println!("[altserver] {msg}");
+    crate::log::line(&format!("[altserver] {msg}"));
 }
 
 // ---------------------------------------------------------------------------------------------

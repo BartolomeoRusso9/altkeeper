@@ -25,6 +25,7 @@ mod apple;
 mod dnssd;
 mod env;
 mod fsperm;
+mod log;
 mod phone;
 mod profile;
 mod web;
@@ -436,6 +437,7 @@ async fn main() -> Result<(), String> {
             if let Some(dir) = opt("--dir") {
                 std::env::set_current_dir(&dir).map_err(|e| format!("--dir {dir}: {e}"))?;
             }
+            log::init(Path::new("."));
             let phone = phone_addr(opt("--phone"))?;
             web::check_options(bind, &pin)?;
             apple::anisette_url(env::var("ANISETTE_URL").as_deref())?;
@@ -451,10 +453,11 @@ async fn main() -> Result<(), String> {
             if let Some(dir) = opt("--dir") {
                 std::env::set_current_dir(&dir).map_err(|e| format!("--dir {dir}: {e}"))?;
             }
+            log::init(Path::new("."));
             apple::anisette_url(env::var("ANISETTE_URL").as_deref())?;
             let port = altserver::start(altserver_port(opt("--port"))?, phone_addr(opt("--phone"))?)?;
             start_dnssd(&opt, port)?;
-            println!("AltServer running. Ctrl-C to stop it.");
+            log::line("AltServer running. Ctrl-C to stop it.");
             tokio::select! {
                 r = tokio::signal::ctrl_c() => r.map_err(dbg)?,
                 _ = terminated() => {}

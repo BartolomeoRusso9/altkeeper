@@ -195,10 +195,10 @@ pub fn start(zone: Zone, bind: SocketAddr) -> Result<u16, String> {
     let port = socket.local_addr().map_err(|e| e.to_string())?.port();
 
     // Quello che serve nel messaggio va letto ora: subito dopo `zone` passa al thread.
-    println!(
+    crate::log::line(&format!(
         "[dns-sd] port {port}: publishing {} -> {}:{}",
         zone.instance, zone.address, zone.port
-    );
+    ));
 
     std::thread::spawn(move || {
         let mut buf = [0u8; 512];

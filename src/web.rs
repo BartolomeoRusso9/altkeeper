@@ -97,6 +97,7 @@ impl App {
     }
 
     fn push_line(&self, s: &str) {
+        crate::log::line(&format!("[web] {s}"));
         let mut g = self.lock();
         g.job.lines.push(s.to_string());
         if g.job.lines.len() > MAX_JOB_LINES {
@@ -207,14 +208,14 @@ pub async fn serve(
     let listener = tokio::net::TcpListener::bind(bind)
         .await
         .map_err(|e| format!("cannot listen on {bind}: {e}"))?;
-    println!(
+    crate::log::line(&format!(
         "Web UI at http://{bind} ({})",
         if app.pin.is_some() {
             "PIN protected: any user name works"
         } else {
             "only reachable from this computer"
         }
-    );
+    ));
     axum::serve(listener, router).await.map_err(|e| format!("{e:?}"))
 }
 
