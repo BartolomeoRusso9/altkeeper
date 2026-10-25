@@ -995,6 +995,7 @@ struct UploadedIpa(PathBuf);
 struct PendingIpa {
     upload: UploadedIpa,
     extensions: Vec<isideload::sideload::application::IpaExtensionInfo>,
+    source_bundle_id: String,
     token: String,
     created_at: u64,
 }
@@ -1139,14 +1140,21 @@ async fn install(
             ok: None,
         };
     }
-    spawn_job(guard, move |app| run_install(app, uploaded, None));
+    spawn_job(guard, move |app| run_install(app, uploaded, None, None));
     json_ok()
+}
+
+#[derive(Deserialize, Default)]
+struct InspectInstallQuery {
+    #[serde(default)]
+    customize: bool,
 }
 
 /// Keep old clients' /api/install route intact. The web UI uses inspect/confirm
 /// to avoid signing or registering unwanted app extensions.
 async fn inspect_install(
     State(app): State<Arc<App>>,
+    axum::extract::Query(query): axum::extract::Query<InspectInstallQuery>,
     mut multipart: Multipart,
 ) -> (StatusCode, Json<Value>) {
     match apple::read_account(Path::new(".")) {
@@ -1162,34 +1170,38 @@ async fn inspect_install(
     };
     // Cancel any previous selection as soon as a replacement IPA is accepted.
     *app.pending_ipa.lock().unwrap_or_else(|e| e.into_inner()) = None;
-    let extensions = match isideload::sideload::application::inspect_ipa_extensions(&uploaded.0) {
+    let manifest = match isideload::sideload::application::inspect_ipa(&uploaded.0) {
         Ok(entries) => entries,
         Err(e) => return json_err(StatusCode::UNPROCESSABLE_ENTITY,
             &format!("Cannot inspect the IPA: {e}")),
     };
-    if extensions.is_empty() {
+    if manifest.extensions.is_empty() && !query.customize {
         app.lock().job = JobView {
             kind: "install".into(), running: true,
             lines: vec!["IPA uploaded (no extensions). Signing and installing…".into()],
             ok: None,
         };
-        spawn_job(guard, move |app| run_install(app, uploaded, None));
+        spawn_job(guard, move |app| run_install(app, uploaded, None, None));
         return (StatusCode::OK, Json(json!({ "installing": true })));
     }
     // For the rare archive containing many extensions, cap the preview surface.
-    if extensions.len() > 100 {
+    if manifest.extensions.len() > 100 {
         return json_err(StatusCode::UNPROCESSABLE_ENTITY, "IPA contains too many extensions.");
     }
     let token = uploaded.0.file_stem()
         .and_then(|s| s.to_str()).unwrap_or("").to_string();
-    let preview = extensions.iter().map(|ext| json!({
+    let preview = manifest.extensions.iter().map(|ext| json!({
         "bundle_id": ext.bundle_id, "name": ext.name,
     })).collect::<Vec<_>>();
     let mut pending = app.pending_ipa.lock().unwrap_or_else(|e| e.into_inner());
-    *pending = Some(PendingIpa { upload: uploaded, extensions, token: token.clone(),
-        created_at: now() });
+    *pending = Some(PendingIpa {
+        upload: uploaded, extensions: manifest.extensions,
+        source_bundle_id: manifest.bundle_id.clone(),
+        token: token.clone(), created_at: now(),
+    });
     (StatusCode::OK, Json(json!({
         "needs_selection": true, "token": token, "extensions": preview,
+        "app_name": manifest.name, "bundle_id": manifest.bundle_id,
         "max_app_ids": 1 + preview.len(),
     })))
 }
@@ -1198,6 +1210,36 @@ async fn inspect_install(
 struct ConfirmInstallReq {
     token: String,
     keep_extensions: Vec<String>,
+    #[serde(default)]
+    display_name: Option<String>,
+    #[serde(default)]
+    bundle_id: Option<String>,
+}
+
+/// Overrides are only accepted for new installs, never a refresh.
+struct NewInstallIdentity {
+    display_name: Option<String>,
+    bundle_id: Option<String>,
+    source_bundle_id: String,
+}
+
+fn validated_install_identity(
+    name: Option<String>, bundle: Option<String>, original: &str,
+) -> Result<Option<NewInstallIdentity>, String> {
+    let name = name.map(|s| s.trim().to_string()).filter(|s| !s.is_empty());
+    let bundle = bundle.map(|s| s.trim().to_string()).filter(|s| !s.is_empty());
+    if name.as_ref().is_some_and(|n| n.chars().count() > 40 || n.chars().any(char::is_control)) {
+        return Err("App name must be at most 40 characters with no control characters.".into());
+    }
+    if bundle.as_ref().is_some_and(|id| !isideload::sideload::application::valid_custom_bundle_id(id)) {
+        return Err("Custom Bundle ID must be reverse-DNS format (e.g. com.example.clone).".into());
+    }
+    if bundle.as_deref() == Some(original) {
+        return Err("Custom Bundle ID must differ from the original ID.".into());
+    }
+    if name.is_none() && bundle.is_none() { return Ok(None); }
+    Ok(Some(NewInstallIdentity { display_name: name, bundle_id: bundle,
+        source_bundle_id: original.to_string() }))
 }
 
 async fn confirm_install(
@@ -1225,6 +1267,12 @@ async fn confirm_install(
     {
         return json_err(StatusCode::BAD_REQUEST, "Unknown or duplicate extension selection.");
     }
+    let identity = match validated_install_identity(
+        req.display_name, req.bundle_id, &prepared.source_bundle_id,
+    ) {
+        Ok(v) => v,
+        Err(msg) => return json_err(StatusCode::BAD_REQUEST, &msg),
+    };
     let prepared = pending.take().expect("checked pending");
     drop(pending);
     app.lock().job = JobView {
@@ -1234,7 +1282,7 @@ async fn confirm_install(
         ok: None,
     };
     spawn_job(guard, move |app| run_install(app, prepared.upload,
-        Some(req.keep_extensions)));
+        Some(req.keep_extensions), identity));
     json_ok()
 }
 
@@ -1455,8 +1503,11 @@ async fn run_remove_profile(app: Arc<App>, uuid: String) {
     run_check(app).await;
 }
 
-async fn run_install(app: Arc<App>, upload: UploadedIpa, selected_extensions: Option<Vec<String>>) {
-    let result = install_ipa(&app, &upload, selected_extensions.as_deref()).await;
+async fn run_install(
+    app: Arc<App>, upload: UploadedIpa,
+    selected_extensions: Option<Vec<String>>, identity: Option<NewInstallIdentity>,
+) {
+    let result = install_ipa(&app, &upload, selected_extensions.as_deref(), identity.as_ref()).await;
     let ok = result.is_ok();
     if let Err(e) = result {
         app.push_line(&format!("Error: {}", short_error(&e)));
@@ -1473,6 +1524,7 @@ async fn run_install(app: Arc<App>, upload: UploadedIpa, selected_extensions: Op
 
 async fn install_ipa(
     app: &Arc<App>, upload: &UploadedIpa, selected_extensions: Option<&[String]>,
+    identity: Option<&NewInstallIdentity>,
 ) -> Result<(), String> {
     let account = apple::load_account(Path::new("."))?;
     let mut session = apple::open_session_web(
@@ -1483,6 +1535,9 @@ async fn install_ipa(
     )
     .await?;
     let team = apple::pick_team(&mut session, account.team_id.as_deref(), false).await?;
+    let expected_id = identity.map(|id| format!(
+        "{}.{}", id.bundle_id.as_deref().unwrap_or(&id.source_bundle_id), team.team_id
+    ));
 
     app.push_line("Connecting to the iPhone to read its device identity…");
 
@@ -1490,7 +1545,13 @@ async fn install_ipa(
         let _work = crate::altserver::phone_lock();
 
         let (_, mut link) = phone::connect_auto(app.phone, PAIRING_FILE, |_: &str| {}).await?;
-
+        if let Some(target) = expected_id.as_ref() {
+            let installed = phone::with_timeout("Installed app lookup", std::time::Duration::from_secs(20),
+                link.installed_app_ids()).await?;
+            if installed.contains(target) {
+                return Err(format!("Cannot customize an installed app ({target}). Choose a different Bundle ID for a separate new install."));
+            }
+        }
         link.device_identity()
             .await
             .map_err(|e| format!("Cannot query iPhone identity: {e}"))?
@@ -1505,11 +1566,22 @@ async fn install_ipa(
         &udid,
         &upload.0,
         selected_extensions,
+        identity.and_then(|i| i.display_name.as_deref()),
+        identity.and_then(|i| i.bundle_id.as_deref()),
     )
     .await?;
 
     let _work = crate::altserver::phone_lock();
     let (via, mut link) = phone::connect_auto(app.phone, PAIRING_FILE, |_: &str| {}).await?;
+    // Check once more immediately before installation to avoid replacing an app
+    // that appeared while the IPA was signing.
+    if let Some(target) = expected_id.as_ref() {
+        let installed = phone::with_timeout("Installed app lookup", std::time::Duration::from_secs(20),
+            link.installed_app_ids()).await?;
+        if installed.contains(target) {
+            return Err(format!("Custom install would replace an existing app ({target}); blocked."));
+        }
+    }
     app.push_line(&if via == phone::Via::Usb {
         "Installing the signed app over USB…".to_string()
     } else {
