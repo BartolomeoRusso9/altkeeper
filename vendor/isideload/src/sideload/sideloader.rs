@@ -75,6 +75,9 @@ impl<C: MaxCertsCallback> Sideloader<C> {
         progress_callback: Option<F>,
         pairing_file: Option<&[u8]>,
         device_udid: Option<&str>,
+        selected_extensions: Option<&[String]>,
+        display_name: Option<&str>,
+        custom_bundle_id: Option<&str>,
     ) -> Result<(PathBuf, Option<SpecialApp>), Report>
     where
         F: Fn(f32) -> Fut,
@@ -100,7 +103,15 @@ impl<C: MaxCertsCallback> Sideloader<C> {
         }
 
         let mut app = Application::new(app_path)?;
+        if let Some(selected) = selected_extensions {
+            app.retain_extensions(selected)?;
+        }
+        // Detect special app type before changing its identity.
         let special = app.get_special_app();
+        if custom_bundle_id.is_some() && special.is_some() {
+            bail!("Custom Bundle IDs are disabled for special apps (AltStore, SideStore, LiveContainer).");
+        }
+        app.apply_install_identity(display_name, custom_bundle_id)?;
 
         let main_bundle_id = app.main_bundle_id()?;
         let main_app_name = app.main_app_name()?;
@@ -273,6 +284,9 @@ impl<C: MaxCertsCallback> Sideloader<C> {
                 progress_callback,
                 pairing_file,
                 Some(&device_info.udid),
+                None,
+                None,
+                None,
             )
             .await?;
 

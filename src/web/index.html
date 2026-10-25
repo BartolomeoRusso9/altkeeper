@@ -1,11 +1,13 @@
 <!doctype html>
-<html lang="en">
+<html lang="ko">
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <meta name="color-scheme" content="light dark">
 <title>AltKeeper</title>
-<link rel="icon" href="data:,">
+<meta name="theme-color" content="#0a6cff">
+<link rel="apple-touch-icon" sizes="180x180" href="/apple-touch-icon.png">
+<link rel="icon" type="image/png" sizes="32x32" href="/favicon-32.png">
 <style>
   :root {
     --bg: #f4f5f7; --card: #ffffff; --text: #1b1f24; --muted: #5b6673; --line: #dfe3e8;
@@ -35,6 +37,52 @@
   }
   .card h2 { font-size: 1.05rem; margin: 0 0 10px; }
   .row { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; }
+  .item-head { display: flex; align-items: center; gap: 10px; flex-wrap: nowrap; }
+  .item-head .item-info { align-self: center; }
+  .locale-toolbar { display: flex; justify-content: flex-end; align-items: center; gap: 8px; margin: 0 0 8px; }
+  .locale-toolbar label { margin: 0; font-size: .85rem; color: var(--muted); }
+  .locale-toolbar select { min-width: 112px; text-align: center; }
+  /* Responsive action groups: keep labels centered, groups left-aligned. */
+  .action-row { justify-content: flex-start; align-items: stretch; flex-wrap: nowrap; }
+  .action-row > button {
+    flex: 1 1 0; min-width: 0; max-width: 184px; min-height: 54px;
+    padding: 6px 8px; text-align: center; white-space: normal;
+    word-break: keep-all; overflow-wrap: anywhere;
+  }
+  #btn-check, #btn-change, #btn-install, #btn-login, #btn-code, #btn-resend {
+    width: 184px; min-height: 54px; padding: 6px 10px;
+  }
+  #code-form .row { justify-content: flex-start; flex-wrap: nowrap; gap: 8px; }
+  #code-form .row > button { flex: 1 1 0; width: auto; min-width: 0; max-width: 184px; }
+
+  .item-head button { width: 106px; flex: 0 0 106px; }
+  .ext-option { display: flex; align-items: center; gap: 10px; padding: 10px 3px;
+    border-bottom: 1px solid var(--line); font-weight: 400; }
+  .ext-option input { width: 18px; height: 18px; }
+  .ext-option span { min-width: 0; overflow-wrap: anywhere; }
+  .ext-option small { display: block; color: var(--muted); font-size: .76rem; }
+  #extension-choice h3 { font-size: 1rem; margin: 0 0 8px; }
+
+  .app-name { overflow-wrap: anywhere; }
+  .item-info { flex: 1 1 0; min-width: 0; overflow-wrap: anywhere; }
+  .item-head button { white-space: nowrap; }
+  .nested { padding: 9px 12px; border-radius: 10px; background: var(--bg); margin-top: 9px; }
+  .nested > div + div { border-top: 1px solid var(--line); padding-top: 8px; margin-top: 8px; }
+  .mini { font-size: .82rem; padding: 7px 10px; }
+  select, input[type=time] { font: inherit; padding: 9px; border: 1px solid var(--line);
+    border-radius: 10px; background: var(--bg); color: var(--text); }
+  @media(max-width:420px) {
+    .item-head { gap: 6px; }
+    .item-head button { width: 90px; flex-basis: 90px; padding: 8px 3px; font-size: .77rem; white-space: normal; }
+    /* Three equal-width buttons still fit iPhone 13 mini's 375px viewport. */
+    .action-row { gap: 6px; }
+    .action-row > button {
+      flex: 1 1 0; width: auto; min-width: 0; max-width: 184px;
+      padding: 8px 4px; font-size: .8rem; line-height: 1.25;
+    }
+    #code-form .row > button { padding: 8px 5px; font-size: .85rem; }
+    #btn-check, #btn-change, #btn-install, #btn-login { max-width: 100%; }
+  }
   .grow { flex: 1 1 auto; }
   .pill {
     display: inline-block; padding: 3px 11px; border-radius: 999px; font-weight: 600;
@@ -59,7 +107,8 @@
   li.urgent .bar > span { background: var(--urgent); }
   li.soon .when { color: var(--soon); } li.urgent .when { color: var(--urgent); }
   button {
-    font: inherit; font-weight: 600; border-radius: 10px; padding: 10px 14px; cursor: pointer;
+    display: inline-flex; align-items: center; justify-content: center; text-align: center;
+    min-height: 42px; line-height: 1.25; font: inherit; font-weight: 600; border-radius: 10px; padding: 10px 12px; cursor: pointer;
     border: 1px solid var(--line); background: var(--card); color: var(--text);
   }
   button.primary { background: var(--accent); color: var(--accent-text); border-color: var(--accent); }
@@ -83,51 +132,138 @@
 </head>
 <body>
 <main>
+  <div class="locale-toolbar">
+    <label for="language-select" data-i18n="Language">Language</label>
+    <select id="language-select" aria-label="Language"><option value="ko">한국어</option><option value="en">English</option></select>
+  </div>
   <h1>AltKeeper</h1>
-  <p class="sub">Keeps your iPhone apps alive by renewing their profiles.</p>
+  <p class="sub" data-i18n="Keeps your iPhone apps alive by renewing their profiles.">Keeps your iPhone apps alive by renewing their profiles.</p>
 
   <div class="banner bad" id="no-pairing" hidden>
-    iPhone pairing is missing (<code>rp-pairing.plist</code>). Set it up once with a USB cable:
-    follow the guide in the README.
+    <span data-i18n="iPhone pairing is missing">iPhone pairing is missing</span> (<code>rp-pairing.plist</code>). <span data-i18n="Set it up once with a USB cable: follow the guide in the README.">Set it up once with a USB cable: follow the guide in the README.</span>
   </div>
 
   <section class="card" aria-live="polite">
-    <h2>iPhone</h2>
+    <h2 data-i18n="iPhone">iPhone</h2>
     <div class="row">
-      <span class="pill" id="phone-pill">Checking…</span>
+      <span class="pill" id="phone-pill" data-i18n="Checking…">Checking…</span>
       <span class="muted grow" id="phone-addr"></span>
-      <button id="btn-check" type="button">Check again</button>
+      <button id="btn-check" type="button" data-i18n="Check again">Check again</button>
     </div>
     <div class="banner bad" id="phone-error" hidden></div>
   </section>
 
   <section class="card">
-    <h2>Your apps</h2>
+    <h2 data-i18n="Your apps">Your apps</h2>
     <p class="muted" id="apps-empty" hidden></p>
     <ul class="plain" id="apps"></ul>
-    <div class="row" style="margin-top:14px">
-      <button class="primary" id="btn-due" type="button">Renew expiring apps</button>
-      <button id="btn-all" type="button">Renew all now</button>
+    <div class="row action-row" style="margin-top:14px">
+      <button class="primary" id="btn-due" type="button" data-i18n="Renew expiring apps">Renew expiring apps</button>
+      <button id="btn-all" type="button" data-i18n="Renew all now">Renew all now</button>
+      <button id="btn-preview" type="button" data-i18n="Preview renewals">Preview renewals</button>
     </div>
     <p class="muted" id="renew-hint" style="margin:8px 0 0"></p>
-    <div id="job" hidden>
-      <div class="banner" id="job-status"></div>
-      <pre class="log" id="job-log"></pre>
+    <div class="nested" id="renew-preview" hidden></div>
+    <div id="app-job-slot">
+      <div id="job" hidden>
+        <div class="banner" id="job-status"></div>
+        <pre class="log" id="job-log"></pre>
+      </div>
     </div>
   </section>
 
   <section class="card">
-    <h2>Install an app from this PC</h2>
-    <p class="muted">Choose an IPA. AltKeeper signs it with the configured Apple ID and installs it over Wi-Fi. The Apple ID password must be saved on the server.</p>
+    <h2 data-i18n="Automatic renewal">Automatic renewal</h2>
+    <p class="muted" data-i18n="Runs once daily while this server is online. Renews expiring installed apps. If installed-app lookup fails, it falls back to all saved-team profiles. Default is OFF.">Runs once daily while this server is online. Renews expiring installed apps. If installed-app lookup fails, it falls back to all saved-team profiles. Default is OFF.</p>
+    <div class="row">
+      <span class="pill" id="auto-pill" data-i18n="OFF">OFF</span>
+      <span class="muted grow" id="auto-next" data-i18n="Automatic renewal disabled">Automatic renewal disabled</span>
+    </div>
+    <div class="row">
+      <div>
+        <label for="auto-time" data-i18n="Daily time (KST)">Daily time (KST)</label>
+        <input type="time" id="auto-time" value="06:00" style="max-width:150px">
+      </div>
+      <div>
+        <label for="auto-days" data-i18n="Renew when days remaining">Renew when days remaining</label>
+        <select id="auto-days">
+          <option value="1" data-i18n="1 day">1 day</option><option value="2" data-i18n="2 days">2 days</option>
+          <option value="3" selected data-i18n="3 days">3 days</option><option value="4" data-i18n="4 days">4 days</option>
+          <option value="5" data-i18n="5 days">5 days</option><option value="6" data-i18n="6 days">6 days</option>
+        </select>
+      </div>
+    </div>
+    <p class="muted" data-i18n="If a scheduled renewal fails: retry after 30 minutes, up to twice more. Send Discord notification only after the final failure (or an unretryable authentication error).">If a scheduled renewal fails: retry after 30 minutes, up to twice more. Send Discord notification only after the final failure (or an unretryable authentication error).</p>
+    <div class="row action-row" style="margin-top:10px">
+      <button class="primary" id="auto-enable" type="button" data-i18n="Enable auto-renew">Enable auto-renew</button>
+      <button id="auto-disable" type="button" hidden data-i18n="Turn off">Turn off</button>
+    </div>
+    <div class="banner bad" id="auto-error" hidden></div>
+    <div class="divider"></div>
+    <label for="discord-webhook" data-i18n="Discord failure notifications">Discord failure notifications</label>
+    <div class="row">
+      <span class="pill" id="discord-pill" data-i18n="Not configured">Not configured</span>
+      <span class="muted" data-i18n="Only sent when automatic renewal fails after retries.">Only sent when automatic renewal fails after retries.</span>
+    </div>
+    <input type="password" id="discord-webhook" placeholder="https://discord.com/api/webhooks/..." autocomplete="off">
+    <div class="row action-row" style="margin-top:10px">
+      <button id="discord-save" type="button" data-i18n="Save webhook">Save webhook</button>
+      <button id="discord-clear" type="button" data-i18n="Clear webhook">Clear webhook</button>
+      <button id="discord-test" type="button" data-i18n="Send test notification">Send test notification</button>
+    </div>
+    <div class="banner bad" id="discord-error" hidden></div>
+    <div class="banner" id="discord-test-result" role="status" aria-live="polite" hidden></div>
+  </section>
+
+  <section class="card">
+    <h2 data-i18n="Provisioning profiles on iPhone">Provisioning profiles on iPhone</h2>
+    <p class="muted" data-i18n="Old profiles may remain after renewal. Deleting a profile still needed by an installed app can stop it opening. A verified server-side backup is saved before removal.">Old profiles may remain after renewal. Deleting a profile still needed by an installed app can stop it opening. A verified server-side backup is saved before removal.</p>
+    <p class="muted" id="profiles-empty" hidden></p>
+    <ul class="plain" id="profiles"></ul>
+  </section>
+
+  <section class="card">
+    <h2 data-i18n="Saved profile backups">Saved profile backups</h2>
+    <p class="muted" data-i18n="Restore a backed-up profile by UUID. Restoring does not extend its original expiry date. The backup is retained.">Restore a backed-up profile by UUID. Restoring does not extend its original expiry date. The backup is retained.</p>
+    <p class="muted" id="backups-empty"></p>
+    <ul class="plain" id="backups"></ul>
+  </section>
+
+  <section class="card">
+    <h2 data-i18n="Install an app from this PC">Install an app from this PC</h2>
+    <p class="muted" data-i18n="Choose an IPA. AltKeeper signs it with the configured Apple ID and installs it over Wi-Fi. The Apple ID password must be saved on the server.">Choose an IPA. AltKeeper signs it with the configured Apple ID and installs it over Wi-Fi. The Apple ID password must be saved on the server.</p>
     <form id="install-form">
-      <label for="ipa-file">IPA file</label>
+      <label for="ipa-file" data-i18n="IPA file">IPA file</label>
       <input id="ipa-file" type="file" accept=".ipa,application/octet-stream">
+      <label for="install-display-name" data-i18n="New app name (optional)">New app name (optional)</label>
+      <input id="install-display-name" type="text" maxlength="40" autocomplete="off"
+        placeholder="e.g. YouTube Clone">
+      <label for="install-bundle-id" data-i18n="New Bundle ID (optional)">New Bundle ID (optional)</label>
+      <input id="install-bundle-id" type="text" maxlength="160" autocapitalize="off" spellcheck="false"
+        autocomplete="off" placeholder="e.g. com.example.youtubeclone">
+      <p class="muted" data-i18n="These settings are for new installations only. Existing apps and automatic renewal are never modified. A new Bundle ID allows a separate copy; the Apple team suffix is added automatically.">These settings are for new installations only. Existing apps and automatic renewal are never modified. A new Bundle ID allows a separate copy; the Apple team suffix is added automatically.</p>
       <div class="row" style="margin-top:10px">
-        <button class="primary" id="btn-install" type="submit">Sign and install</button>
+        <button class="primary" id="btn-install" type="submit" data-i18n="Sign and install">Sign and install</button>
         <span class="muted" id="install-hint"></span>
       </div>
     </form>
+    <div class="nested" id="extension-choice" hidden>
+      <h3 data-i18n="Confirm new installation">Confirm new installation</h3>
+      <p class="muted" id="install-original" aria-live="polite"></p>
+      <div id="extension-options">
+        <p class="muted" data-i18n="Unchecked extensions are removed before signing. Some apps require extensions to function. All are selected by default.">Unchecked extensions are removed before signing. Some apps require extensions to function. All are selected by default.</p>
+        <div id="extension-list"></div>
+        <p class="muted" id="extension-summary" aria-live="polite"></p>
+        <p class="muted" data-i18n="App ID count is an upper bound; already-registered IDs may be reused. Live Apple quota is not checked here.">App ID count is an upper bound; already-registered IDs may be reused. Live Apple quota is not checked here.</p>
+      </div>
+      <div class="row action-row" style="margin-top:12px">
+        <button type="button" id="ext-all" data-i18n="Select all">Select all</button>
+        <button type="button" id="ext-none" data-i18n="Select none">Select none</button>
+        <button type="button" class="primary" id="ext-confirm" data-i18n="Sign and install selected">Sign and install selected</button>
+      </div>
+    </div>
     <div class="banner bad" id="install-error" hidden></div>
+    <div id="install-job-slot"></div>
   </section>
 
   <section class="card">
@@ -135,54 +271,78 @@
     <div id="account-info" hidden>
       <div class="row">
         <span class="grow"><strong id="acc-id"></strong><br><span class="muted" id="acc-pw"></span></span>
-        <button id="btn-change" type="button">Change account</button>
+        <button id="btn-change" type="button" data-i18n="Change account">Change account</button>
       </div>
     </div>
     <form id="login-form" autocomplete="off" hidden>
-      <label for="apple-id">Apple ID (email)</label>
+      <label for="apple-id" data-i18n="Apple ID (email)">Apple ID (email)</label>
       <input id="apple-id" type="email" autocomplete="username" inputmode="email" autocapitalize="off" spellcheck="false">
-      <label for="apple-pw">Password</label>
+      <label for="apple-pw" data-i18n="Password">Password</label>
       <input id="apple-pw" type="password" autocomplete="current-password" autocapitalize="off" spellcheck="false">
-      <label class="check"><input type="checkbox" id="show-pw"> Show password</label>
+      <label class="check"><input type="checkbox" id="show-pw"> <span data-i18n="Show password">Show password</span></label>
       <label class="check"><input type="checkbox" id="save-pw" checked>
-        <span>Save the password on this server for automatic renewals<br>
-        <span class="muted">It is stored as plain text in a private server file.</span></span></label>
-      <button class="primary" id="btn-login" type="submit">Sign in</button>
-      <p class="muted">Try only once at a time: repeated failures may cause Apple to block sign-ins temporarily.</p>
+        <span><span data-i18n="Save the password on this server for automatic renewals">Save the password on this server for automatic renewals</span>
+        <span class="muted" data-i18n="It is stored as plain text in a private server file.">It is stored as plain text in a private server file.</span></span></label>
+      <button class="primary" id="btn-login" type="submit" data-i18n="Sign in">Sign in</button>
+      <p class="muted" data-i18n="Try only once at a time: repeated failures may cause Apple to block sign-ins temporarily.">Try only once at a time: repeated failures may cause Apple to block sign-ins temporarily.</p>
     </form>
     <form id="code-form" autocomplete="off" hidden>
       <div class="banner good">Apple sent a 6-digit code to your devices.</div>
       <div class="banner bad" id="code-error" hidden></div>
-      <label for="code">Code</label>
+      <label for="code" data-i18n="Code">Code</label>
       <input id="code" class="code" type="text" inputmode="numeric" pattern="[0-9]*" maxlength="6" autocomplete="one-time-code">
       <div class="row" style="margin-top:10px">
-        <button class="primary" id="btn-code" type="submit">Submit code</button>
-        <button id="btn-resend" type="button">Resend code</button>
+        <button class="primary" id="btn-code" type="submit" data-i18n="Submit code">Submit code</button>
+        <button id="btn-resend" type="button" data-i18n="Resend code">Resend code</button>
       </div>
     </form>
     <div class="banner" id="login-msg" hidden></div>
   </section>
 
   <section class="card hist">
-    <h2>Recent renewals</h2>
-    <p class="muted" id="hist-empty">Nothing yet. Automatic renewal runs every evening when configured on the server.</p>
+    <h2 data-i18n="Recent renewals">Recent renewals</h2>
+    <p class="muted" id="hist-empty" data-i18n="Nothing yet. Automatic renewal runs every evening when configured on the server.">Nothing yet. Automatic renewal runs every evening when configured on the server.</p>
     <ul class="plain" id="hist"></ul>
   </section>
 
-  <footer>For use on your home network only.</footer>
+  <footer data-i18n="For use on your home network only.">For use on your home network only.</footer>
 </main>
 
 <script>
 "use strict";
 const $ = (id) => document.getElementById(id);
-let state = null, showForm = false, timer = null, sending = false, uploading = false;
+const KO = {"Language":"언어","Keeps your iPhone apps alive by renewing their profiles.":"아이폰 앱의 프로파일을 갱신해 사용 기간을 유지합니다.","iPhone":"아이폰","Checking…":"확인 중…","Check again":"다시 확인","Your apps":"앱 목록","Renew app":"이 앱 갱신","Details":"상세 정보","Less":"접기","Renew expiring apps":"만료 임박 앱 갱신","Renew all now":"전체 갱신","Preview renewals":"갱신 대상 미리보기","Automatic renewal":"자동 갱신","OFF":"꺼짐","ON":"켜짐","Automatic renewal disabled":"자동 갱신이 꺼져 있습니다","Daily time (KST)":"매일 실행 시간 (KST)","Renew when days remaining":"만료까지 남은 기간","1 day":"1일","2 days":"2일","3 days":"3일","4 days":"4일","5 days":"5일","6 days":"6일","Enable auto-renew":"자동 갱신 켜기","Save settings":"설정 저장","Turn off":"끄기","Discord failure notifications":"Discord 실패 알림","Not configured":"설정 안 됨","Configured":"설정됨","Only sent when automatic renewal fails after retries.":"자동 갱신이 최종 실패했을 때만 알림을 보냅니다.","Save webhook":"웹훅 저장","Clear webhook":"웹훅 삭제","Send test notification":"테스트 알림 보내기","Provisioning profiles on iPhone":"아이폰의 프로비저닝 프로파일","Delete profile":"프로파일 삭제","Saved profile backups":"저장된 프로파일 백업","Restore":"복원","Install an app from this PC":"이 PC에서 IPA 설치","IPA file":"IPA 파일","Sign and install":"서명 후 설치","Apple ID (email)":"Apple ID (이메일)","Password":"비밀번호","Show password":"비밀번호 표시","Change account":"계정 변경","Sign in":"로그인","Code":"인증 코드","Submit code":"코드 확인","Resend code":"코드 다시 보내기","Recent renewals":"최근 갱신 기록","For use on your home network only.":"가정 내 네트워크에서만 사용하세요.","Apple sent a 6-digit code to your devices.":"Apple에서 기기로 6자리 인증 코드를 보냈습니다.","Save the password on this server for automatic renewals":"자동 갱신을 위해 서버에 비밀번호 저장","It is stored as plain text in a private server file.":"비밀번호는 접근이 제한된 서버 파일에 평문으로 저장됩니다.","iPhone pairing is missing":"아이폰 페어링 정보가 없습니다","Set it up once with a USB cable: follow the guide in the README.":"USB 케이블로 한 번 페어링하고 README 안내를 따르세요.","Runs once daily while this server is online. Renews expiring installed apps. If installed-app lookup fails, it falls back to all saved-team profiles. Default is OFF.":"서버가 실행 중일 때 하루 한 번 만료가 임박한 앱을 갱신합니다. 설치된 앱을 조회하지 못하면 저장된 Apple Team의 모든 프로파일을 갱신 대상으로 사용합니다. 기본값은 꺼짐입니다.","If a scheduled renewal fails: retry after 30 minutes, up to twice more. Send Discord notification only after the final failure (or an unretryable authentication error).":"예약된 갱신에 실패하면 30분 간격으로 최대 2회 재시도합니다. 모든 시도가 실패했거나 재시도할 수 없는 인증 오류일 때만 Discord 알림을 보냅니다.","Old profiles may remain after renewal. Deleting a profile still needed by an installed app can stop it opening. A verified server-side backup is saved before removal.":"갱신 후에도 이전 프로파일이 남을 수 있습니다. 사용 중인 프로파일을 삭제하면 앱이 실행되지 않을 수 있습니다. 삭제 전에 서버에 검증된 백업을 저장합니다.","Restore a backed-up profile by UUID. Restoring does not extend its original expiry date. The backup is retained.":"UUID로 백업 프로파일을 복원합니다. 복원해도 원래 만료일은 연장되지 않으며, 백업 파일은 유지됩니다.","Choose an IPA. AltKeeper signs it with the configured Apple ID and installs it over Wi-Fi. The Apple ID password must be saved on the server.":"IPA를 선택하면 저장된 Apple ID로 서명한 뒤 Wi-Fi를 통해 아이폰에 설치합니다. Apple ID 비밀번호를 서버에 저장해야 합니다. 설치하는 동안 아이폰 화면을 잠금 해제한 상태로 유지하는 것을 권장합니다.","Try only once at a time: repeated failures may cause Apple to block sign-ins temporarily.":"한 번에 한 번만 로그인하세요. 반복된 실패는 Apple의 일시적인 로그인 제한을 유발할 수 있습니다.","Nothing yet. Automatic renewal runs every evening when configured on the server.":"아직 기록이 없습니다. 자동 갱신을 설정하면 매일 지정된 시간에 실행됩니다.","iPhone reachable":"아이폰 연결됨","iPhone unreachable":"아이폰 연결 안 됨","Not checked yet":"아직 확인하지 않음","Last profile install: ":"마지막 프로파일 설치: ","Profile ":"프로파일 ","Less ▲":"접기 ▲","Details ▼":"상세 정보 ▼","Hide ▲":"접기 ▲","Show ▼":"펼치기 ▼","Unknown bundle":"알 수 없는 Bundle ID","Expires ":"만료일 ","Signing in…":"로그인 중…","Password saved for automatic renewals":"자동 갱신용 비밀번호 저장됨","Password not saved":"비밀번호가 저장되지 않음","Sign in with your Apple ID to see your apps.":"앱 목록을 보려면 Apple ID로 로그인하세요.","Apps cannot be read while the iPhone is unreachable.":"아이폰에 연결할 수 없어 앱 목록을 읽지 못했습니다.","No apps found for this Apple ID.":"이 Apple ID의 앱을 찾지 못했습니다.","Sign in with your Apple ID first.":"먼저 Apple ID로 로그인하세요.","Save the Apple ID password to renew.":"갱신하려면 Apple ID 비밀번호를 저장하세요.","Working…":"작업 중…","No profiles appear due.":"현재 갱신이 필요한 프로파일이 없습니다.","Preview only: final renewal also verifies installed apps on the iPhone. If installed-app lookup fails, all known team profiles are renewed.":"미리보기입니다. 실제 갱신 시 아이폰에 설치된 앱도 확인하며, 설치된 앱을 조회하지 못하면 해당 Apple Team의 모든 프로파일을 갱신합니다.","Next: ":"다음 실행: ","Retry: ":"다음 재시도: ","checking":"확인 중","No provisioning profiles found for this Apple team.":"이 Apple Team의 프로비저닝 프로파일이 없습니다.","No saved profile backups for this Apple team.":"이 Apple Team에 저장된 프로파일 백업이 없습니다.","Uploading…":"업로드 중…","Save the Apple ID password on the server to sign and install.":"서명 및 설치를 위해 서버에 Apple ID 비밀번호를 저장하세요.","The iPhone must be reachable on Wi-Fi.":"아이폰이 Wi-Fi로 연결되어 있어야 합니다.","Another operation is in progress.":"다른 작업이 진행 중입니다.","The Apple ID is used to sign the app.":"저장된 Apple ID로 앱에 서명합니다.","Signing and installing the app. Keep this page open until it finishes…":"앱을 서명하고 설치하는 중입니다. 완료될 때까지 이 페이지를 열어두세요.","Backing up and deleting the selected profile…":"선택한 프로파일을 백업하고 삭제하는 중입니다.","Restoring the selected profile…":"선택한 프로파일을 복원하는 중입니다.","Renewal in progress. Keep this page open until it finishes…":"갱신 중입니다. 완료될 때까지 이 페이지를 열어두세요.","App installed.":"앱이 설치되었습니다.","Profile removed and backed up.":"프로파일을 백업한 후 삭제했습니다.","Profile restored.":"프로파일이 복원되었습니다.","Done.":"완료되었습니다.","It did not complete successfully. Check the last line.":"작업이 완료되지 않았습니다. 로그의 마지막 줄을 확인하세요.","Cannot reach the server: ":"서버에 연결할 수 없습니다: ","Enter the Discord webhook URL.":"Discord 웹훅 URL을 입력하세요.","Test notification sent. Check your Discord channel.":"테스트 알림을 보냈습니다. Discord 채널을 확인하세요.","Configure a Discord webhook first.":"먼저 Discord 웹훅을 설정하세요.","Remove the saved Discord webhook?":"저장된 Discord 웹훅을 삭제할까요?","Renew all apps now? This takes about a minute and usually does not need to be done often.":"모든 앱의 프로파일을 지금 갱신할까요? 자주 실행할 필요는 없습니다.","Choose an IPA file first.":"먼저 IPA 파일을 선택하세요.","Nothing to renew":"갱신할 항목이 없습니다","Installation completed.":"설치가 완료되었습니다.","Select app extensions":"설치할 Extension 선택","Unchecked extensions are removed before signing. Some apps require extensions to function. All are selected by default.":"선택 해제한 Extension은 서명 전에 제거됩니다. 일부 앱은 특정 Extension이 필수이므로 기본값은 전체 선택입니다.","App ID count is an upper bound; already-registered IDs may be reused. Live Apple quota is not checked here.":"표시된 App ID 개수는 최대 예상치입니다. 이미 등록된 ID는 재사용할 수 있으며, Apple의 실시간 잔여 슬롯은 아직 조회하지 않습니다.","Select all":"전체 선택","Select none":"전체 해제","Sign and install selected":"선택 항목 서명 및 설치","Up to {count} App IDs ({extensions} extensions)":"최대 {count}개 App ID (Extension {extensions}개)","Analyzing IPA…":"IPA 분석 중…","Choose another IPA to start over.":"다른 IPA를 선택하면 처음부터 다시 분석합니다.","New app name (optional)":"새 앱 이름 (선택)","New Bundle ID (optional)":"새 Bundle ID (선택)","These settings are for new installations only. Existing apps and automatic renewal are never modified. A new Bundle ID allows a separate copy; the Apple team suffix is added automatically.":"이 설정은 새 앱 설치에만 적용됩니다. 기존 앱과 자동 갱신은 변경하지 않습니다. 다른 Bundle ID를 지정하면 별도 앱으로 설치하며, Apple 팀 접미사는 자동으로 붙습니다.","Confirm new installation":"새 앱 설치 확인"};
+let locale = "ko";
+try { locale = localStorage.getItem("altkeeper-language") === "en" ? "en" : "ko"; } catch (_) {}
+function t(en) { return locale === "ko" ? (KO[en] || en) : en; }
+function applyStatic() {
+  document.documentElement.lang = locale;
+  document.querySelectorAll("[data-i18n]").forEach(el => {
+    el.textContent = t(el.getAttribute("data-i18n"));
+  });
+  $("language-select").value = locale;
+}
+$("language-select").onchange = (event) => {
+  locale = event.target.value === "en" ? "en" : "ko";
+  try { localStorage.setItem("altkeeper-language", locale); } catch (_) {}
+  applyStatic();
+  if (state) render(state);
+};
+applyStatic();
 
-async function api(path, body) {
+let state = null, showForm = false, timer = null, sending = false, uploading = false;
+let pendingInstall = null;
+let expandedApps = new Set(), expandedProfiles = new Set(), showPreview = false;
+let autoDraftDirty = false, autoSavePending = false;
+let refreshInFlight = false, refreshQueued = false;
+
+async function api(path, body, signal) {
   const opt = body === undefined ? {} : {
     method: "POST",
     headers: { "Content-Type": "application/json", "X-Requested-With": "altkeeper" },
     body: JSON.stringify(body),
   };
+  if (signal) opt.signal = signal;
   const r = await fetch(path, opt);
   let j = {};
   try { j = await r.json(); } catch (_) {}
@@ -191,9 +351,51 @@ async function api(path, body) {
 }
 
 function days(n) {
+  if (locale === "ko") {
+    if (n < 0) return (-n) + "일 전 만료";
+    if (n === 0) return "오늘 만료";
+    return n + "일 후 만료";
+  }
   if (n < 0) return "expired " + (-n) + (n === -1 ? " day ago" : " days ago");
   if (n === 0) return "expires today";
   return "expires in " + n + (n === 1 ? " day" : " days");
+}
+function profilesText(n) { return locale === "ko" ? "프로파일 " + n + "개" : n + " profiles"; }
+
+function placeJob(job) {
+  const panel = $("job");
+  const slot = $(job.kind === "install" ? "install-job-slot" : "app-job-slot");
+  if (panel.parentElement !== slot) slot.append(panel);
+}
+
+function installHint(s) {
+  if (uploading) return t("Analyzing IPA…");
+  if (s.busy && s.job.kind === "install") {
+    return s.job.running
+      ? t("Signing and installing the app. Keep this page open until it finishes…")
+      : t("Checking…");
+  }
+  if (!s.account.present) return t("Sign in with your Apple ID first.");
+  if (!s.account.password_saved) return t("Save the Apple ID password on the server to sign and install.");
+  if (s.phone.reachable !== true) return t("The iPhone must be reachable on Wi-Fi.");
+  return s.busy ? t("Another operation is in progress.") : t("The Apple ID is used to sign the app.");
+}
+
+function syncAutoRenewInputs(auto) {
+  if (autoDraftDirty) {
+    // After saving, an earlier state request may still report the old values.
+    // Keep the draft until the server reflects both saved settings.
+    if (!autoSavePending || auto.time !== $("auto-time").value
+        || Number(auto.min_days) !== Number($("auto-days").value)) return;
+    autoDraftDirty = false;
+    autoSavePending = false;
+  }
+  $("auto-time").value = auto.time || "06:00";
+  $("auto-days").value = String(auto.min_days || 3);
+}
+for (const id of ["auto-time", "auto-days"]) {
+  $(id).addEventListener("input", () => { autoDraftDirty = true; autoSavePending = false; });
+  $(id).addEventListener("change", () => { autoDraftDirty = true; autoSavePending = false; });
 }
 
 function li(cls, ...kids) {
@@ -225,68 +427,208 @@ function banner(id, text, cls) {
 
 function render(s) {
   state = s;
+  applyStatic();
   show("no-pairing", !s.pairing);
 
   // iPhone
   const pill = $("phone-pill"), p = s.phone;
-  if (p.checking) { pill.textContent = "Checking…"; pill.className = "pill"; }
-  else if (p.reachable === true) { pill.textContent = "iPhone reachable"; pill.className = "pill ok"; }
-  else if (p.reachable === false) { pill.textContent = "iPhone unreachable"; pill.className = "pill bad"; }
-  else { pill.textContent = "Not checked yet"; pill.className = "pill"; }
+  if (p.checking) { pill.textContent = t("Checking…"); pill.className = "pill"; }
+  else if (p.reachable === true) { pill.textContent = t("iPhone reachable"); pill.className = "pill ok"; }
+  else if (p.reachable === false) { pill.textContent = t("iPhone unreachable"); pill.className = "pill bad"; }
+  else { pill.textContent = t("Not checked yet"); pill.className = "pill"; }
   $("phone-addr").textContent = p.reachable && p.address ? p.address : "";
   const err = p.reachable === false ? p.error : "";
   banner("phone-error", err, "bad");
   $("phone-error").title = p.detail || "";
 
-  // App
+  // One app per host bundle. Members are separate signing profiles.
+  const canRenew = s.account.present && s.account.password_saved && s.account.team && !s.busy;
   const ul = $("apps");
   ul.replaceChildren();
   s.apps.forEach((a) => {
+    const members = a.members || [{bundle:a.bundle,label:a.label,days:a.days,expires:a.expires}];
     const pct = Math.max(4, Math.min(100, Math.round((Math.max(a.days, 0) / 7) * 100)));
     const bar = div("bar", span(""));
     bar.firstChild.style.width = pct + "%";
-    ul.append(li(a.level,
+    const details = div("item-info",
       div("app-name", document.createTextNode(a.label)),
-      div("muted", span(days(a.days), "when"), document.createTextNode(" · " + a.expires.slice(0, 10))),
-      bar));
+      div("muted", span(days(a.days), "when"),
+        document.createTextNode(" · " + (a.expires || "").slice(0, 10) +
+        " · " + profilesText(members.length))));
+    const last = (s.app_status || {})[a.bundle];
+    if (last) {
+      const date = new Date(last.at * 1000).toLocaleString((locale === "ko" ? "ko-KR" : "en-US"), {timeZone:"Asia/Seoul"});
+      details.append(div("muted", document.createTextNode(t("Last profile install: ") +
+        last.status + " · " + date + " KST (" + last.renewed + "/" + last.total + ")")));
+    }
+    const renewBtn = document.createElement("button");
+    renewBtn.type = "button";
+    renewBtn.className = "mini";
+    renewBtn.textContent = t("Renew app");
+    renewBtn.disabled = !canRenew;
+    renewBtn.onclick = () => {
+      if (confirm(locale === "ko" ? a.label + "의 프로파일 " + members.length + "개를 모두 갱신할까요?" : "Renew " + a.label + " and all " + members.length + " profiles now?")) {
+        act(() => api("/api/renew", {mode:"single",bundle:a.bundle}));
+      }
+    };
+    const expandBtn = document.createElement("button");
+    expandBtn.type = "button"; expandBtn.className = "mini";
+    expandBtn.textContent = expandedApps.has(a.bundle) ? t("Less ▲") : t("Details ▼");
+    expandBtn.onclick = () => {
+      if (expandedApps.has(a.bundle)) expandedApps.delete(a.bundle);
+      else expandedApps.add(a.bundle);
+      render(state);
+    };
+    const item = li(a.level,
+      div("item-head", details, renewBtn, expandBtn), bar);
+    if (expandedApps.has(a.bundle)) {
+      const nested = div("nested");
+      members.forEach(m => nested.append(div("",
+        div("app-name", document.createTextNode(m.label)),
+        div("muted", document.createTextNode(days(m.days) + " · " + m.bundle)))));
+      item.append(nested);
+    }
+    ul.append(item);
   });
   const empty = $("apps-empty");
-  if (!s.account.present) { empty.textContent = "Sign in with your Apple ID to see your apps."; empty.hidden = false; }
-  else if (p.reachable === false) { empty.textContent = "Apps cannot be read while the iPhone is unreachable."; empty.hidden = false; }
-  else if (!s.apps.length && p.reachable === true) { empty.textContent = "No apps found for this Apple ID."; empty.hidden = false; }
+  if (!s.account.present) { empty.textContent = t("Sign in with your Apple ID to see your apps."); empty.hidden = false; }
+  else if (p.reachable === false) { empty.textContent = t("Apps cannot be read while the iPhone is unreachable."); empty.hidden = false; }
+  else if (!s.apps.length && p.reachable === true) { empty.textContent = t("No apps found for this Apple ID."); empty.hidden = false; }
   else { empty.hidden = true; }
 
-  // Renewal buttons
-  const canRenew = s.account.present && s.account.password_saved && s.account.team && !s.busy;
   $("btn-due").disabled = !canRenew;
   $("btn-all").disabled = !canRenew;
   $("btn-check").disabled = s.busy;
-  $("renew-hint").textContent = !s.account.present ? "Sign in with your Apple ID first."
-    : !s.account.password_saved ? "The password must be saved to renew: sign in again and leave the checkbox selected."
-    : s.busy ? "Working…" : "";
+  $("renew-hint").textContent = !s.account.present ? t("Sign in with your Apple ID first.")
+    : !s.account.password_saved ? t("Save the Apple ID password to renew.")
+    : s.busy ? t("Working…") : "";
+  show("renew-preview", showPreview);
+  if (showPreview) {
+    const box = $("renew-preview");
+    box.replaceChildren(div("app-name", document.createTextNode(
+      (locale === "ko" ? "갱신 대상 (만료까지 " + (s.auto_renew.min_days || 3) + "일 이하):" : "Potential renewals (expires in " + (s.auto_renew.min_days || 3) + " days or less):"))));
+    const due = s.apps.filter(a => a.days <= (s.auto_renew.min_days || 3));
+    if (!due.length) box.append(div("muted", document.createTextNode(t("No profiles appear due."))));
+    due.forEach(a => box.append(div("muted",
+      document.createTextNode(a.label + " · " + profilesText(a.members.length) + " · " + days(a.days)))));
+    box.append(div("muted", document.createTextNode(
+      t("Preview only: final renewal also verifies installed apps on the iPhone. If installed-app lookup fails, all known team profiles are renewed."))));
+  }
+
+  // Persistent schedule and retry details
+  const auto = s.auto_renew || {enabled:false,time:"06:00",min_days:3,next_run:null};
+  $("auto-pill").textContent = auto.enabled ? t("ON") : t("OFF");
+  $("auto-pill").className = "pill " + (auto.enabled ? "ok" : "");
+  const next = auto.next_run
+    ? new Date(auto.next_run * 1000).toLocaleString(locale === "ko" ? "ko-KR" : "en-US", {
+        timeZone:"Asia/Seoul", year:"numeric", month:"2-digit", day:"2-digit",
+        hour:"2-digit", minute:"2-digit", hour12:false
+      }) : null;
+  $("auto-next").textContent = auto.enabled ? (auto.retry_at ? t("Retry: ") : t("Next: ")) +
+    (next || t("checking")) + " KST" : t("Automatic renewal disabled");
+  syncAutoRenewInputs(auto);
+  $("auto-enable").textContent = auto.enabled ? t("Save settings") : t("Enable auto-renew");
+  $("auto-enable").disabled = !s.account.password_saved || !s.account.team;
+  $("auto-disable").hidden = !auto.enabled;
+  $("discord-pill").textContent = auto.discord_configured ? t("Configured") : t("Not configured");
+  $("discord-pill").className = "pill" + (auto.discord_configured ? " ok" : "");
+  $("discord-clear").disabled = !auto.discord_configured;
+  $("discord-test").disabled = !auto.discord_configured;
+
+  // Show provisioning profiles only when expanded, without moving controls when labels wrap.
+  const pu = $("profiles");
+  pu.replaceChildren();
+  const grouped = new Map();
+  (s.profiles || []).forEach(profile => {
+    const root = profile.root || profile.bundle;
+    if (!grouped.has(root)) grouped.set(root, []);
+    grouped.get(root).push(profile);
+  });
+  grouped.forEach((profiles, root) => {
+    const label = (s.apps.find(a => a.bundle === root) || {}).label || root;
+    const details = div("item-info", div("app-name", document.createTextNode(label)),
+      div("muted", document.createTextNode((locale === "ko" ? "프로파일 " + profiles.length + "개 저장됨" : profiles.length + " saved-on-phone profiles"))));
+    const toggle = document.createElement("button");
+    toggle.type = "button"; toggle.className = "mini";
+    toggle.textContent = expandedProfiles.has(root) ? t("Hide ▲") : t("Show ▼");
+    toggle.onclick = () => {
+      if (expandedProfiles.has(root)) expandedProfiles.delete(root);
+      else expandedProfiles.add(root);
+      render(state);
+    };
+    const item = li("", div("item-head", details, toggle));
+    if (expandedProfiles.has(root)) {
+      const nested = div("nested");
+      profiles.forEach(prof => {
+        const info = div("item-info",
+          div("app-name", document.createTextNode(prof.label)),
+          div("muted", document.createTextNode(days(prof.days) + " · " + prof.expires.slice(0,10))),
+          div("muted", document.createTextNode(t("Profile ") + prof.uuid)));
+        const remove = document.createElement("button");
+        remove.type = "button"; remove.className = "mini";
+        remove.textContent = t("Delete profile");
+        remove.disabled = s.busy || s.phone.reachable !== true;
+        remove.onclick = () => {
+          if (confirm(locale === "ko" ? "프로파일 " + prof.uuid + "을 삭제할까요? 먼저 원본을 백업하며, 사용 중인 프로파일을 삭제하면 앱이 실행되지 않을 수 있습니다." : "Delete profile " + prof.uuid + "? An original verified backup will be saved first. " + "Removing an active profile may prevent the app from opening.")) {
+            act(() => api("/api/profile/remove", {uuid:prof.uuid}));
+          }
+        };
+        nested.append(div("item-head", info, remove));
+      });
+      item.append(nested);
+    }
+    pu.append(item);
+  });
+  const pempty = $("profiles-empty");
+  pempty.textContent = t("No provisioning profiles found for this Apple team.");
+  pempty.hidden = grouped.size > 0 || s.phone.reachable !== true;
+
+  const backups = $("backups");
+  backups.replaceChildren();
+  (s.backups || []).forEach(b => {
+    const info = div("item-info",
+      div("app-name", document.createTextNode(b.bundle || t("Unknown bundle"))),
+      div("muted", document.createTextNode(t("Profile ") + b.uuid)),
+      div("muted", document.createTextNode(t("Expires ") + b.expires.slice(0,10))));
+    const restore = document.createElement("button");
+    restore.type = "button"; restore.className = "mini";
+    restore.textContent = t("Restore");
+    restore.disabled = s.busy;
+    restore.onclick = () => {
+      if (confirm(locale === "ko" ? "프로파일 " + b.uuid + "을 아이폰에 복원할까요? 만료일은 연장되지 않습니다." : "Restore profile " + b.uuid + " to the iPhone? This does not renew the expiry.")) {
+        act(() => api("/api/profile/restore", {uuid:b.uuid}));
+      }
+    };
+    backups.append(li("", div("item-head", info, restore)));
+  });
+  $("backups-empty").hidden = (s.backups || []).length > 0;
+  $("backups-empty").textContent = t("No saved profile backups for this Apple team.");
 
   const canInstall = s.account.present && s.account.password_saved && s.account.team &&
                      p.reachable === true && !s.busy;
-  $("btn-install").disabled = !canInstall || uploading;
-  $("btn-install").textContent = uploading ? "Uploading…" : "Sign and install";
-  $("install-hint").textContent = !s.account.present ? "Sign in with your Apple ID first."
-    : !s.account.password_saved ? "Save the Apple ID password on the server to sign and install."
-    : p.reachable !== true ? "The iPhone must be reachable on Wi-Fi."
-    : s.busy ? "Another operation is in progress." : "The Apple ID is used to sign the app.";
+  $("btn-install").disabled = !canInstall || uploading || !!pendingInstall;
+  $("btn-install").textContent = uploading ? t("Analyzing IPA…") : t("Sign and install");
+  show("extension-choice", !!pendingInstall);
+  $("ext-confirm").disabled = !canInstall || uploading;
+  $("install-hint").textContent = installHint(s);
 
   // Lavoro in corso o appena finito
   const job = s.job;
+  placeJob(job);
   show("job", !!job.kind);
   if (job.kind) {
     const st = $("job-status");
     if (job.running) {
       st.className = "banner";
       st.textContent = job.kind === "install"
-        ? "Signing and installing the app. Keep this page open until it finishes…"
-        : "Renewal in progress. Keep this page open until it finishes…";
+        ? t("Signing and installing the app. Keep this page open until it finishes…")
+        : job.kind === "remove_profile"
+        ? t("Backing up and deleting the selected profile…")
+        : job.kind === "restore_profile" ? t("Restoring the selected profile…")
+        : t("Renewal in progress. Keep this page open until it finishes…");
     }
-    else if (job.ok) { st.className = "banner good"; st.textContent = job.kind === "install" ? "App installed." : "Done."; }
-    else { st.className = "banner bad"; st.textContent = "It did not complete successfully. Check the last line."; }
+    else if (job.ok) { st.className = "banner good"; st.textContent = job.kind === "install" ? t("App installed.") : job.kind === "remove_profile" ? t("Profile removed and backed up.") : job.kind === "restore_profile" ? t("Profile restored.") : t("Done."); }
+    else { st.className = "banner bad"; st.textContent = t("It did not complete successfully. Check the last line."); }
     const log = $("job-log");
     const atEnd = log.scrollTop + log.clientHeight >= log.scrollHeight - 8;
     log.textContent = job.lines.join("\n");
@@ -299,11 +641,11 @@ function render(s) {
   show("account-info", s.account.present && !showForm && !working && !needs);
   if (s.account.present) {
     $("acc-id").textContent = s.account.apple_id || "";
-    $("acc-pw").textContent = s.account.password_saved ? "Password saved for automatic renewals" : "Password not saved";
+    $("acc-pw").textContent = s.account.password_saved ? t("Password saved for automatic renewals") : t("Password not saved");
   }
   show("login-form", (!s.account.present || showForm || working || phase === "failed") && !needs);
   $("btn-login").disabled = working || sending || (s.busy && !working);
-  $("btn-login").textContent = working ? "Signing in…" : "Sign in";
+  $("btn-login").textContent = working ? t("Signing in…") : t("Sign in");
   show("code-form", needs);
   banner("code-error", needs ? s.login.code_error : "", "bad");
   banner("login-msg", phase === "done" || phase === "failed" ? s.login.message : "",
@@ -322,15 +664,31 @@ function render(s) {
 
 async function refresh() {
   clearTimeout(timer);
-  let fast = false;
-  try {
-    render(await api("/api/state"));
-    fast = state.busy || state.phone.checking || state.login.phase === "working" ||
-           state.login.phase === "needs_code" || state.job.running;
-  } catch (e) {
-    banner("phone-error", "Cannot reach the server: " + e.message, "bad");
+  if (refreshInFlight) {
+    refreshQueued = true;
+    return;
   }
-  timer = setTimeout(refresh, fast ? 1500 : 15000);
+  refreshInFlight = true;
+  let fast = false;
+  const controller = new AbortController();
+  const timeout = setTimeout(() => controller.abort(), 10000);
+  try {
+    const latest = await api("/api/state", undefined, controller.signal);
+    // A user action requested a newer snapshot while this one was in flight.
+    if (!refreshQueued) {
+      render(latest);
+      fast = latest.busy || latest.phone.checking || latest.login.phase === "working" ||
+             latest.login.phase === "needs_code" || latest.job.running;
+    }
+  } catch (e) {
+    if (!refreshQueued) banner("phone-error", t("Cannot reach the server: ") + e.message, "bad");
+  } finally {
+    clearTimeout(timeout);
+    refreshInFlight = false;
+    const again = refreshQueued;
+    refreshQueued = false;
+    timer = setTimeout(refresh, again ? 0 : fast ? 1500 : 15000);
+  }
 }
 
 async function act(fn, errId) {
@@ -338,23 +696,140 @@ async function act(fn, errId) {
   refresh();
 }
 
+$("auto-enable").onclick = () => {
+  banner("auto-error", "");
+  act(async () => {
+    await api("/api/auto-renew", {
+      enabled:true, time:$("auto-time").value, min_days:Number($("auto-days").value)
+    });
+    autoSavePending = true;
+  }, "auto-error");
+};
+$("auto-disable").onclick = () => {
+  banner("auto-error", "");
+  act(async () => {
+    await api("/api/auto-renew", {
+      enabled:false, time:$("auto-time").value, min_days:Number($("auto-days").value)
+    });
+    autoSavePending = true;
+  }, "auto-error");
+};
+$("discord-save").onclick = () => {
+  const url = $("discord-webhook").value.trim();
+  banner("discord-error", "");
+  if (!url) return banner("discord-error", t("Enter the Discord webhook URL."), "bad");
+  act(async () => {
+    await api("/api/discord", {webhook:url});
+    $("discord-webhook").value = "";
+  }, "discord-error");
+};
+$("discord-clear").onclick = () => {
+  if (confirm(t("Remove the saved Discord webhook?"))) {
+    act(() => api("/api/discord", {clear:true}), "discord-error");
+  }
+};
+$("discord-test").onclick = async () => {
+  banner("discord-test-result", "");
+  $("discord-test").disabled = true;
+  try {
+    await api("/api/discord/test", {});
+    banner("discord-test-result", t("Test notification sent. Check your Discord channel."), "good");
+  } catch (e) {
+    banner("discord-test-result", e.message, "bad");
+  } finally {
+    refresh();
+  }
+};
+$("btn-preview").onclick = () => {showPreview = !showPreview; if(state)render(state);};
 $("btn-check").onclick = () => act(() => api("/api/check", {}));
 $("btn-due").onclick = () => act(() => api("/api/renew", { mode: "due" }));
 $("btn-all").onclick = () => {
-  if (confirm("Renew all apps now? This takes about a minute and usually does not need to be done often.")) {
+  if (confirm(t("Renew all apps now? This takes about a minute and usually does not need to be done often."))) {
     act(() => api("/api/renew", { mode: "now" }));
   }
 };
+function updateExtensionSummary() {
+  if (!pendingInstall) return;
+  const selected = Array.from($("extension-list").querySelectorAll("input[type=checkbox]"))
+    .filter(input => input.checked).length;
+  const template = t("Up to {count} App IDs ({extensions} extensions)");
+  $("extension-summary").textContent = template.replace("{count}", String(selected + 1))
+    .replace("{extensions}", String(selected));
+}
+function showExtensionOptions(info) {
+  pendingInstall = info;
+  $("extension-options").hidden = info.extensions.length === 0;
+  $("install-original").textContent = (info.app_name || "App") + " · " + (info.bundle_id || "");
+  const list = $("extension-list");
+  list.replaceChildren();
+  info.extensions.forEach(ext => {
+    const input = document.createElement("input");
+    input.type = "checkbox";
+    input.checked = true;
+    input.value = ext.bundle_id;
+    input.onchange = updateExtensionSummary;
+    const label = document.createElement("label");
+    label.className = "ext-option";
+    const text = document.createElement("span");
+    const title = document.createElement("strong");
+    title.textContent = ext.name || ext.bundle_id;
+    const id = document.createElement("small");
+    id.textContent = ext.bundle_id;
+    text.append(title, id);
+    label.append(input, text);
+    list.append(label);
+  });
+  updateExtensionSummary();
+  if (state) render(state);
+}
+$("ext-all").onclick = () => {
+  $("extension-list").querySelectorAll("input[type=checkbox]")
+    .forEach(input => { input.checked = true; });
+  updateExtensionSummary();
+};
+$("ext-none").onclick = () => {
+  $("extension-list").querySelectorAll("input[type=checkbox]")
+    .forEach(input => { input.checked = false; });
+  updateExtensionSummary();
+};
+$("ext-confirm").onclick = async () => {
+  if (!pendingInstall) return;
+  $("ext-confirm").disabled = true;
+  const keep = Array.from($("extension-list").querySelectorAll("input[type=checkbox]"))
+    .filter(input => input.checked).map(input => input.value);
+  try {
+    await api("/api/install/confirm", {
+      token: pendingInstall.token, keep_extensions: keep,
+      display_name: $("install-display-name").value.trim() || null,
+      bundle_id: $("install-bundle-id").value.trim() || null,
+    });
+    pendingInstall = null;
+    $("install-display-name").value = "";
+    $("install-bundle-id").value = "";
+    banner("install-error", "");
+  } catch(e) {
+    banner("install-error", e.message, "bad");
+  } finally {
+    refresh();
+  }
+};
+$("ipa-file").onchange = () => {
+  pendingInstall = null;
+  banner("install-error", "");
+  if (state) render(state);
+};
+
 $("install-form").onsubmit = async (ev) => {
   ev.preventDefault();
   const file = $("ipa-file").files[0];
-  if (!file) { banner("install-error", "Choose an IPA file first.", "bad"); return; }
+  if (!file) { banner("install-error", t("Choose an IPA file first."), "bad"); return; }
   uploading = true;
   if (state) render(state);
   try {
     const form = new FormData();
     form.append("ipa", file);
-    const r = await fetch("/api/install", {
+    const customize = !!($("install-display-name").value.trim() || $("install-bundle-id").value.trim());
+    const r = await fetch("/api/install/inspect?customize=" + String(customize), {
       method: "POST",
       headers: { "X-Requested-With": "altkeeper" },
       body: form,
@@ -363,6 +838,11 @@ $("install-form").onsubmit = async (ev) => {
     try { j = await r.json(); } catch (_) {}
     if (!r.ok) throw new Error(j.error || ("Error " + r.status));
     $("ipa-file").value = "";
+    if (j.needs_selection) showExtensionOptions(j);
+    else {
+      $("install-display-name").value = "";
+      $("install-bundle-id").value = "";
+    }
     $("install-error").hidden = true;
   } catch (e) {
     banner("install-error", e.message, "bad");
@@ -400,3 +880,4 @@ refresh();
 </script>
 </body>
 </html>
+

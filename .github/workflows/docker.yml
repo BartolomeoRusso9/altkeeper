@@ -1,9 +1,9 @@
 # Prova il codice e pubblica l'immagine Docker su GitHub Container Registry (ghcr.io).
 #
-# - Pull request: prova i test e la compilazione dell'immagine (amd64), senza pubblicare.
-# - Push su main: pubblica `latest` e `sha-<commit>` (solo amd64: è la compilazione veloce).
+# - Pull request: esegue i test Linux e Windows, senza pubblicare immagini.
+# - Push su main: pubblica `latest` e `sha-<commit>` per amd64 e arm64.
 # - Tag `vX.Y.Z` (per esempio `git tag v0.2.0 && git push --tags`): pubblica `X.Y.Z`, `X.Y` e
-#   `latest`, per amd64 e arm64 (l'arm64 gira sotto emulazione: richiede parecchi minuti).
+#   `latest`, per amd64 e arm64 (build nativi paralleli, senza QEMU).
 #
 # L'immagine: ghcr.io/<utente>/altkeeper. Se il repo è privato lo è anche il pacchetto: per
 # usarlo da un server serve `docker login ghcr.io` con un token che possa leggere i pacchetti,
@@ -28,6 +28,8 @@ jobs:
       contents: read
     steps:
       - uses: actions/checkout@v7
+      - name: Check localized web UI
+        run: node scripts/check-web-ui.cjs
       - uses: dtolnay/rust-toolchain@stable
       - uses: Swatinem/rust-cache@v2
       - run: cargo test --locked
@@ -44,6 +46,8 @@ jobs:
       contents: read
     steps:
       - uses: actions/checkout@v7
+      - name: Check localized web UI
+        run: node scripts/check-web-ui.cjs
       - uses: dtolnay/rust-toolchain@stable
       - uses: Swatinem/rust-cache@v2
       - run: cargo test --locked
@@ -61,25 +65,79 @@ jobs:
           if ($LASTEXITCODE -ne 0 -or -not ($output -match '^uso: altkeeper')) { throw "Italian CLI help failed: $output" }
 
   image:
-    needs: test
-    runs-on: ubuntu-latest
+    # Build architectures concurrently on native runners; PRs run tests only.
+    if: github.event_name != 'pull_request'
+    needs: [test, test-windows]
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - arch: amd64
+            platform: linux/amd64
+            runner: ubuntu-latest
+          - arch: arm64
+            platform: linux/arm64
+            runner: ubuntu-24.04-arm
+    runs-on: ${{ matrix.runner }}
     permissions:
       contents: read
       packages: write
     steps:
       - uses: actions/checkout@v7
-
-      - uses: docker/setup-qemu-action@v4
+      # No QEMU: Rust is compiled natively for each target.
       - uses: docker/setup-buildx-action@v4
-
-      # Il login serve solo per pubblicare: le pull request non hanno il permesso di scrivere.
       - uses: docker/login-action@v4
-        if: github.event_name != 'pull_request'
         with:
           registry: ghcr.io
           username: ${{ github.actor }}
           password: ${{ secrets.GITHUB_TOKEN }}
+      - id: meta
+        uses: docker/metadata-action@v6
+        with:
+          images: ghcr.io/${{ github.repository }}
+      - id: build
+        uses: docker/build-push-action@v7
+        with:
+          context: .
+          platforms: ${{ matrix.platform }}
+          # Immutable per-arch pushes; only the final manifest receives tags.
+          outputs: type=image,name=ghcr.io/${{ github.repository }},push-by-digest=true,name-canonical=true,push=true
+          labels: ${{ steps.meta.outputs.labels }}
+          cache-from: type=gha,scope=altkeeper-${{ matrix.arch }}
+          cache-to: type=gha,scope=altkeeper-${{ matrix.arch }},mode=max
+      - name: Export image digest
+        run: |
+          mkdir -p "${RUNNER_TEMP}/digests"
+          digest="${{ steps.build.outputs.digest }}"
+          test -n "${digest}"
+          touch "${RUNNER_TEMP}/digests/${digest#sha256:}"
+      - uses: actions/upload-artifact@v4
+        with:
+          name: digests-${{ matrix.arch }}
+          path: ${{ runner.temp }}/digests/*
+          if-no-files-found: error
+          retention-days: 1
 
+  image-manifest:
+    # Publish tags only after both architecture builds succeed.
+    if: github.event_name != 'pull_request'
+    needs: [image]
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      packages: write
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          path: ${{ runner.temp }}/digests
+          pattern: digests-*
+          merge-multiple: true
+      - uses: docker/setup-buildx-action@v4
+      - uses: docker/login-action@v4
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
       - id: meta
         uses: docker/metadata-action@v6
         with:
@@ -89,14 +147,18 @@ jobs:
             type=semver,pattern={{major}}.{{minor}}
             type=raw,value=latest,enable=${{ github.ref == 'refs/heads/main' || startsWith(github.ref, 'refs/tags/v') }}
             type=sha
-
-      - uses: docker/build-push-action@v7
-        with:
-          context: .
-          # I tag di versione pubblicano anche arm64; il resto solo amd64 (più rapido).
-          platforms: ${{ startsWith(github.ref, 'refs/tags/v') && 'linux/amd64,linux/arm64' || 'linux/amd64' }}
-          push: ${{ github.event_name != 'pull_request' }}
-          tags: ${{ steps.meta.outputs.tags }}
-          labels: ${{ steps.meta.outputs.labels }}
-          cache-from: type=gha
-          cache-to: type=gha,mode=max
+      - name: Create multi-platform manifest
+        working-directory: ${{ runner.temp }}/digests
+        env:
+          DOCKER_METADATA_OUTPUT_JSON: ${{ steps.meta.outputs.json }}
+        run: |
+          # Never publish a partial multi-architecture manifest.
+          test "$(find . -maxdepth 1 -type f | wc -l)" -eq 2
+          docker buildx imagetools create \
+            $(jq -cr '.tags | map("-t " + .) | join(" ")' <<< "$DOCKER_METADATA_OUTPUT_JSON") \
+            $(printf 'ghcr.io/${{ github.repository }}@sha256:%s ' *)
+      - name: Inspect published manifest
+        env:
+          DOCKER_METADATA_OUTPUT_JSON: ${{ steps.meta.outputs.json }}
+        run: |
+          docker buildx imagetools inspect "$(jq -r '.tags[0]' <<< "$DOCKER_METADATA_OUTPUT_JSON")"
