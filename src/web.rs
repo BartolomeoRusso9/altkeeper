@@ -516,8 +516,9 @@ async fn guard(State(app): State<Arc<App>>, req: Request, next: Next) -> Respons
     h.insert(
         header::CONTENT_SECURITY_POLICY,
         HeaderValue::from_static(
-            "default-src 'none'; connect-src 'self'; img-src 'self' data:; style-src 'unsafe-inline'; \
-             script-src 'unsafe-inline'; base-uri 'none'; form-action 'none'",
+            "default-src 'none'; connect-src 'self'; img-src 'self' data:; media-src data:; \
+             style-src 'unsafe-inline'; script-src 'unsafe-inline'; \
+             base-uri 'none'; form-action 'none'",
         ),
     );
     res
