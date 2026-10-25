@@ -65,6 +65,9 @@ The exact UI may differ slightly by iOS release.
 
 Open **https://192.168.0.62:8788/** in Safari and enter the same web PIN
 on the new origin if asked. Check the certificate is trusted: no warning.
+The existing HTTP Home Screen shortcut is a **different origin** and will not
+magically switch to HTTPS; if using Home Screen web-app mode, add a **new**
+shortcut from the trusted HTTPS page after verifying Safari works.
 This is what makes `window.isSecureContext` true and exposes the
 `navigator.wakeLock` API.
 
