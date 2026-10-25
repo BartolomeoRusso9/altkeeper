@@ -406,6 +406,7 @@ pub async fn serve(
     phone: Option<SocketAddr>,
 ) -> Result<(), String> {
     check_options(bind, &pin)?;
+    cleanup_orphaned_ipa_uploads();
 
     let app = Arc::new(App {
         pin,
@@ -428,7 +429,7 @@ pub async fn serve(
         .route("/api/discord/test", post(test_discord))
         .route("/api/profile/remove", post(remove_profile))
         .route("/api/profile/restore", post(restore_profile))
-.route(
+        .route(
             "/api/install",
             post(install).layer(DefaultBodyLimit::max(MAX_IPA_BYTES + 1024 * 1024)),
         )
@@ -617,6 +618,7 @@ fn json_ok() -> (StatusCode, Json<Value>) {
 const BUSY_MSG: &str = "Another operation is already running: please wait for it to finish.";
 
 async fn state(State(app): State<Arc<App>>) -> Json<Value> {
+    expire_pending_ipa(&app);
     let account = apple::read_account(Path::new("."));
     let pairing = Path::new(PAIRING_FILE).exists();
 
@@ -967,6 +969,26 @@ async fn remove_profile(
     json_ok()
 }
 
+/// Remove abandoned uploads from previous processes (the active process owns none at startup).
+fn cleanup_orphaned_ipa_uploads() {
+    let dir = Path::new("state/uploads");
+    let Ok(entries) = std::fs::read_dir(dir) else { return; };
+    for entry in entries.flatten() {
+        let name = entry.file_name();
+        let name = name.to_string_lossy();
+        if name.starts_with("install-") && name.ends_with(".ipa") {
+            let _ = std::fs::remove_file(entry.path());
+        }
+    }
+}
+
+fn expire_pending_ipa(app: &App) {
+    let mut pending = app.pending_ipa.lock().unwrap_or_else(|e| e.into_inner());
+    if pending.as_ref().is_some_and(|p| now().saturating_sub(p.created_at) > PENDING_IPA_TTL) {
+        *pending = None;
+    }
+}
+
 struct UploadedIpa(PathBuf);
 
 /// One preflight upload only, auto-expiring and deleted on replacement, abort or restart.
@@ -1138,6 +1160,8 @@ async fn inspect_install(
         Ok(file) => file,
         Err((status, detail)) => return json_err(status, &detail),
     };
+    // Cancel any previous selection as soon as a replacement IPA is accepted.
+    *app.pending_ipa.lock().unwrap_or_else(|e| e.into_inner()) = None;
     let extensions = match isideload::sideload::application::inspect_ipa_extensions(&uploaded.0) {
         Ok(entries) => entries,
         Err(e) => return json_err(StatusCode::UNPROCESSABLE_ENTITY,
