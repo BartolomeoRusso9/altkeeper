@@ -5,7 +5,7 @@ use std::io::{Read, Seek, Write};
 use std::path::Path;
 
 use idevice::{
-    IdeviceService, RsdService,
+    IdeviceService, ReadWrite, RsdService,
     afc::{AfcClient, opcode::AfcFopenMode},
     installation_proxy::InstallationProxyClient,
     rsd::RsdHandshake,
