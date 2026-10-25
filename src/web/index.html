@@ -297,10 +297,16 @@ async function api(path, body) {
 }
 
 function days(n) {
+  if (locale === "ko") {
+    if (n < 0) return (-n) + "일 전 만료";
+    if (n === 0) return "오늘 만료";
+    return n + "일 후 만료";
+  }
   if (n < 0) return "expired " + (-n) + (n === -1 ? " day ago" : " days ago");
   if (n === 0) return "expires today";
   return "expires in " + n + (n === 1 ? " day" : " days");
 }
+function profilesText(n) { return locale === "ko" ? "프로파일 " + n + "개" : n + " profiles"; }
 
 function li(cls, ...kids) {
   const e = document.createElement("li");
@@ -336,10 +342,10 @@ function render(s) {
 
   // iPhone
   const pill = $("phone-pill"), p = s.phone;
-  if (p.checking) { pill.textContent = "Checking…"; pill.className = "pill"; }
-  else if (p.reachable === true) { pill.textContent = "iPhone reachable"; pill.className = "pill ok"; }
-  else if (p.reachable === false) { pill.textContent = "iPhone unreachable"; pill.className = "pill bad"; }
-  else { pill.textContent = "Not checked yet"; pill.className = "pill"; }
+  if (p.checking) { pill.textContent = t("Checking…"); pill.className = "pill"; }
+  else if (p.reachable === true) { pill.textContent = t("iPhone reachable"); pill.className = "pill ok"; }
+  else if (p.reachable === false) { pill.textContent = t("iPhone unreachable"); pill.className = "pill bad"; }
+  else { pill.textContent = t("Not checked yet"); pill.className = "pill"; }
   $("phone-addr").textContent = p.reachable && p.address ? p.address : "";
   const err = p.reachable === false ? p.error : "";
   banner("phone-error", err, "bad");
@@ -358,26 +364,26 @@ function render(s) {
       div("app-name", document.createTextNode(a.label)),
       div("muted", span(days(a.days), "when"),
         document.createTextNode(" · " + (a.expires || "").slice(0, 10) +
-        " · " + members.length + " profiles")));
+        " · " + profilesText(members.length))));
     const last = (s.app_status || {})[a.bundle];
     if (last) {
       const date = new Date(last.at * 1000).toLocaleString("ko-KR", {timeZone:"Asia/Seoul"});
-      details.append(div("muted", document.createTextNode("Last profile install: " +
+      details.append(div("muted", document.createTextNode(t("Last profile install: ") +
         last.status + " · " + date + " KST (" + last.renewed + "/" + last.total + ")")));
     }
     const renewBtn = document.createElement("button");
     renewBtn.type = "button";
     renewBtn.className = "mini";
-    renewBtn.textContent = "Renew app";
+    renewBtn.textContent = t("Renew app");
     renewBtn.disabled = !canRenew;
     renewBtn.onclick = () => {
-      if (confirm("Renew " + a.label + " and all " + members.length + " profiles now?")) {
+      if (confirm(locale === "ko" ? a.label + "의 프로파일 " + members.length + "개를 모두 갱신할까요?" : "Renew " + a.label + " and all " + members.length + " profiles now?")) {
         act(() => api("/api/renew", {mode:"single",bundle:a.bundle}));
       }
     };
     const expandBtn = document.createElement("button");
     expandBtn.type = "button"; expandBtn.className = "mini";
-    expandBtn.textContent = expandedApps.has(a.bundle) ? "Less ▲" : "Details ▼";
+    expandBtn.textContent = expandedApps.has(a.bundle) ? t("Less ▲") : t("Details ▼");
     expandBtn.onclick = () => {
       if (expandedApps.has(a.bundle)) expandedApps.delete(a.bundle);
       else expandedApps.add(a.bundle);
@@ -395,48 +401,47 @@ function render(s) {
     ul.append(item);
   });
   const empty = $("apps-empty");
-  if (!s.account.present) { empty.textContent = "Sign in with your Apple ID to see your apps."; empty.hidden = false; }
-  else if (p.reachable === false) { empty.textContent = "Apps cannot be read while the iPhone is unreachable."; empty.hidden = false; }
-  else if (!s.apps.length && p.reachable === true) { empty.textContent = "No apps found for this Apple ID."; empty.hidden = false; }
+  if (!s.account.present) { empty.textContent = t("Sign in with your Apple ID to see your apps."); empty.hidden = false; }
+  else if (p.reachable === false) { empty.textContent = t("Apps cannot be read while the iPhone is unreachable."); empty.hidden = false; }
+  else if (!s.apps.length && p.reachable === true) { empty.textContent = t("No apps found for this Apple ID."); empty.hidden = false; }
   else { empty.hidden = true; }
 
   $("btn-due").disabled = !canRenew;
   $("btn-all").disabled = !canRenew;
   $("btn-check").disabled = s.busy;
-  $("renew-hint").textContent = !s.account.present ? "Sign in with your Apple ID first."
-    : !s.account.password_saved ? "Save the Apple ID password to renew."
-    : s.busy ? "Working…" : "";
+  $("renew-hint").textContent = !s.account.present ? t("Sign in with your Apple ID first.")
+    : !s.account.password_saved ? t("Save the Apple ID password to renew.")
+    : s.busy ? t("Working…") : "";
   show("renew-preview", showPreview);
   if (showPreview) {
     const box = $("renew-preview");
     box.replaceChildren(div("app-name", document.createTextNode(
-      "Potential renewals (expires in " + (s.auto_renew.min_days || 3) + " days or less):")));
+      (locale === "ko" ? "갱신 대상 (만료까지 " + (s.auto_renew.min_days || 3) + "일 이하):" : "Potential renewals (expires in " + (s.auto_renew.min_days || 3) + " days or less):"))));
     const due = s.apps.filter(a => a.days <= (s.auto_renew.min_days || 3));
-    if (!due.length) box.append(div("muted", document.createTextNode("No profiles appear due.")));
+    if (!due.length) box.append(div("muted", document.createTextNode(t("No profiles appear due."))));
     due.forEach(a => box.append(div("muted",
-      document.createTextNode(a.label + " · " + a.members.length + " profiles · " + days(a.days)))));
+      document.createTextNode(a.label + " · " + profilesText(a.members.length) + " · " + days(a.days)))));
     box.append(div("muted", document.createTextNode(
-      "Preview only: final renewal also verifies installed apps on the iPhone. " +
-      "If installed-app lookup fails, all known team profiles are renewed.")));
+      t("Preview only: final renewal also verifies installed apps on the iPhone. If installed-app lookup fails, all known team profiles are renewed."))));
   }
 
   // Persistent schedule and retry details
   const auto = s.auto_renew || {enabled:false,time:"06:00",min_days:3,next_run:null};
-  $("auto-pill").textContent = auto.enabled ? "ON" : "OFF";
+  $("auto-pill").textContent = auto.enabled ? t("ON") : t("OFF");
   $("auto-pill").className = "pill " + (auto.enabled ? "ok" : "");
   const next = auto.next_run
     ? new Date(auto.next_run * 1000).toLocaleString("ko-KR", {
         timeZone:"Asia/Seoul", year:"numeric", month:"2-digit", day:"2-digit",
         hour:"2-digit", minute:"2-digit", hour12:false
       }) : null;
-  $("auto-next").textContent = auto.enabled ? (auto.retry_at ? "Retry: " : "Next: ") +
-    (next || "checking") + " KST" : "Automatic renewal disabled";
+  $("auto-next").textContent = auto.enabled ? (auto.retry_at ? t("Retry: ") : t("Next: ")) +
+    (next || t("checking")) + " KST" : t("Automatic renewal disabled");
   if (document.activeElement !== $("auto-time")) $("auto-time").value = auto.time || "06:00";
   if (document.activeElement !== $("auto-days")) $("auto-days").value = String(auto.min_days || 3);
-  $("auto-enable").textContent = auto.enabled ? "Save settings" : "Enable auto-renew";
+  $("auto-enable").textContent = auto.enabled ? t("Save settings") : t("Enable auto-renew");
   $("auto-enable").disabled = !s.account.password_saved || !s.account.team;
   $("auto-disable").hidden = !auto.enabled;
-  $("discord-pill").textContent = auto.discord_configured ? "Configured" : "Not configured";
+  $("discord-pill").textContent = auto.discord_configured ? t("Configured") : t("Not configured");
   $("discord-pill").className = "pill" + (auto.discord_configured ? " ok" : "");
   $("discord-clear").disabled = !auto.discord_configured;
   $("discord-test").disabled = !auto.discord_configured;
@@ -453,10 +458,10 @@ function render(s) {
   grouped.forEach((profiles, root) => {
     const label = (s.apps.find(a => a.bundle === root) || {}).label || root;
     const details = div("item-info", div("app-name", document.createTextNode(label)),
-      div("muted", document.createTextNode(profiles.length + " saved-on-phone profiles")));
+      div("muted", document.createTextNode((locale === "ko" ? "프로파일 " + profiles.length + "개 저장됨" : profiles.length + " saved-on-phone profiles"))));
     const toggle = document.createElement("button");
     toggle.type = "button"; toggle.className = "mini";
-    toggle.textContent = expandedProfiles.has(root) ? "Hide ▲" : "Show ▼";
+    toggle.textContent = expandedProfiles.has(root) ? t("Hide ▲") : t("Show ▼");
     toggle.onclick = () => {
       if (expandedProfiles.has(root)) expandedProfiles.delete(root);
       else expandedProfiles.add(root);
@@ -469,14 +474,13 @@ function render(s) {
         const info = div("item-info",
           div("app-name", document.createTextNode(prof.label)),
           div("muted", document.createTextNode(days(prof.days) + " · " + prof.expires.slice(0,10))),
-          div("muted", document.createTextNode("Profile " + prof.uuid)));
+          div("muted", document.createTextNode(t("Profile ") + prof.uuid)));
         const remove = document.createElement("button");
         remove.type = "button"; remove.className = "mini";
-        remove.textContent = "Delete profile";
+        remove.textContent = t("Delete profile");
         remove.disabled = s.busy || s.phone.reachable !== true;
         remove.onclick = () => {
-          if (confirm("Delete profile " + prof.uuid + "? An original verified backup will be saved first. " +
-            "Removing an active profile may prevent the app from opening.")) {
+          if (confirm(locale === "ko" ? "프로파일 " + prof.uuid + "을 삭제할까요? 먼저 원본을 백업하며, 사용 중인 프로파일을 삭제하면 앱이 실행되지 않을 수 있습니다." : "Delete profile " + prof.uuid + "? An original verified backup will be saved first. " + "Removing an active profile may prevent the app from opening.")) {
             act(() => api("/api/profile/remove", {uuid:prof.uuid}));
           }
         };
@@ -487,38 +491,38 @@ function render(s) {
     pu.append(item);
   });
   const pempty = $("profiles-empty");
-  pempty.textContent = "No provisioning profiles found for this Apple team.";
+  pempty.textContent = t("No provisioning profiles found for this Apple team.");
   pempty.hidden = grouped.size > 0 || s.phone.reachable !== true;
 
   const backups = $("backups");
   backups.replaceChildren();
   (s.backups || []).forEach(b => {
     const info = div("item-info",
-      div("app-name", document.createTextNode(b.bundle || "Unknown bundle")),
-      div("muted", document.createTextNode("Profile " + b.uuid)),
-      div("muted", document.createTextNode("Expires " + b.expires.slice(0,10))));
+      div("app-name", document.createTextNode(b.bundle || t("Unknown bundle"))),
+      div("muted", document.createTextNode(t("Profile ") + b.uuid)),
+      div("muted", document.createTextNode(t("Expires ") + b.expires.slice(0,10))));
     const restore = document.createElement("button");
     restore.type = "button"; restore.className = "mini";
-    restore.textContent = "Restore";
+    restore.textContent = t("Restore");
     restore.disabled = s.busy;
     restore.onclick = () => {
-      if (confirm("Restore profile " + b.uuid + " to the iPhone? This does not renew the expiry.")) {
+      if (confirm(locale === "ko" ? "프로파일 " + b.uuid + "을 아이폰에 복원할까요? 만료일은 연장되지 않습니다." : "Restore profile " + b.uuid + " to the iPhone? This does not renew the expiry.")) {
         act(() => api("/api/profile/restore", {uuid:b.uuid}));
       }
     };
     backups.append(li("", div("item-head", info, restore)));
   });
   $("backups-empty").hidden = (s.backups || []).length > 0;
-  $("backups-empty").textContent = "No saved profile backups for this Apple team.";
+  $("backups-empty").textContent = t("No saved profile backups for this Apple team.");
 
   const canInstall = s.account.present && s.account.password_saved && s.account.team &&
                      p.reachable === true && !s.busy;
   $("btn-install").disabled = !canInstall || uploading;
-  $("btn-install").textContent = uploading ? "Uploading…" : "Sign and install";
-  $("install-hint").textContent = !s.account.present ? "Sign in with your Apple ID first."
-    : !s.account.password_saved ? "Save the Apple ID password on the server to sign and install."
-    : p.reachable !== true ? "The iPhone must be reachable on Wi-Fi."
-    : s.busy ? "Another operation is in progress." : "The Apple ID is used to sign the app.";
+  $("btn-install").textContent = uploading ? t("Uploading…") : t("Sign and install");
+  $("install-hint").textContent = !s.account.present ? t("Sign in with your Apple ID first.")
+    : !s.account.password_saved ? t("Save the Apple ID password on the server to sign and install.")
+    : p.reachable !== true ? t("The iPhone must be reachable on Wi-Fi.")
+    : s.busy ? t("Another operation is in progress.") : t("The Apple ID is used to sign the app.");
 
   // Lavoro in corso o appena finito
   const job = s.job;
@@ -528,14 +532,14 @@ function render(s) {
     if (job.running) {
       st.className = "banner";
       st.textContent = job.kind === "install"
-        ? "Signing and installing the app. Keep this page open until it finishes…"
+        ? t("Signing and installing the app. Keep this page open until it finishes…")
         : job.kind === "remove_profile"
-        ? "Backing up and deleting the selected profile…"
-        : job.kind === "restore_profile" ? "Restoring the selected profile…"
-        : "Renewal in progress. Keep this page open until it finishes…";
+        ? t("Backing up and deleting the selected profile…")
+        : job.kind === "restore_profile" ? t("Restoring the selected profile…")
+        : t("Renewal in progress. Keep this page open until it finishes…");
     }
-    else if (job.ok) { st.className = "banner good"; st.textContent = job.kind === "install" ? "App installed." : job.kind === "remove_profile" ? "Profile removed and backed up." : job.kind === "restore_profile" ? "Profile restored." : "Done."; }
-    else { st.className = "banner bad"; st.textContent = "It did not complete successfully. Check the last line."; }
+    else if (job.ok) { st.className = "banner good"; st.textContent = job.kind === "install" ? t("App installed.") : job.kind === "remove_profile" ? t("Profile removed and backed up.") : job.kind === "restore_profile" ? t("Profile restored.") : t("Done."); }
+    else { st.className = "banner bad"; st.textContent = t("It did not complete successfully. Check the last line."); }
     const log = $("job-log");
     const atEnd = log.scrollTop + log.clientHeight >= log.scrollHeight - 8;
     log.textContent = job.lines.join("\n");
@@ -548,11 +552,11 @@ function render(s) {
   show("account-info", s.account.present && !showForm && !working && !needs);
   if (s.account.present) {
     $("acc-id").textContent = s.account.apple_id || "";
-    $("acc-pw").textContent = s.account.password_saved ? "Password saved for automatic renewals" : "Password not saved";
+    $("acc-pw").textContent = s.account.password_saved ? t("Password saved for automatic renewals") : t("Password not saved");
   }
   show("login-form", (!s.account.present || showForm || working || phase === "failed") && !needs);
   $("btn-login").disabled = working || sending || (s.busy && !working);
-  $("btn-login").textContent = working ? "Signing in…" : "Sign in";
+  $("btn-login").textContent = working ? t("Signing in…") : t("Sign in");
   show("code-form", needs);
   banner("code-error", needs ? s.login.code_error : "", "bad");
   banner("login-msg", phase === "done" || phase === "failed" ? s.login.message : "",
@@ -577,7 +581,7 @@ async function refresh() {
     fast = state.busy || state.phone.checking || state.login.phase === "working" ||
            state.login.phase === "needs_code" || state.job.running;
   } catch (e) {
-    banner("phone-error", "Cannot reach the server: " + e.message, "bad");
+    banner("phone-error", t("Cannot reach the server: ") + e.message, "bad");
   }
   timer = setTimeout(refresh, fast ? 1500 : 15000);
 }
@@ -602,14 +606,14 @@ $("auto-disable").onclick = () => {
 $("discord-save").onclick = () => {
   const url = $("discord-webhook").value.trim();
   banner("discord-error", "");
-  if (!url) return banner("discord-error", "Enter the Discord webhook URL.", "bad");
+  if (!url) return banner("discord-error", t("Enter the Discord webhook URL."), "bad");
   act(async () => {
     await api("/api/discord", {webhook:url});
     $("discord-webhook").value = "";
   }, "discord-error");
 };
 $("discord-clear").onclick = () => {
-  if (confirm("Remove the saved Discord webhook?")) {
+  if (confirm(t("Remove the saved Discord webhook?"))) {
     act(() => api("/api/discord", {clear:true}), "discord-error");
   }
 };
@@ -618,7 +622,7 @@ $("discord-test").onclick = async () => {
   $("discord-test").disabled = true;
   try {
     await api("/api/discord/test", {});
-    banner("discord-test-result", "Test notification sent. Check your Discord channel.", "good");
+    banner("discord-test-result", t("Test notification sent. Check your Discord channel."), "good");
   } catch (e) {
     banner("discord-test-result", e.message, "bad");
   } finally {
@@ -629,14 +633,14 @@ $("btn-preview").onclick = () => {showPreview = !showPreview; if(state)render(st
 $("btn-check").onclick = () => act(() => api("/api/check", {}));
 $("btn-due").onclick = () => act(() => api("/api/renew", { mode: "due" }));
 $("btn-all").onclick = () => {
-  if (confirm("Renew all apps now? This takes about a minute and usually does not need to be done often.")) {
+  if (confirm(t("Renew all apps now? This takes about a minute and usually does not need to be done often."))) {
     act(() => api("/api/renew", { mode: "now" }));
   }
 };
 $("install-form").onsubmit = async (ev) => {
   ev.preventDefault();
   const file = $("ipa-file").files[0];
-  if (!file) { banner("install-error", "Choose an IPA file first.", "bad"); return; }
+  if (!file) { banner("install-error", t("Choose an IPA file first."), "bad"); return; }
   uploading = true;
   if (state) render(state);
   try {
