@@ -24,6 +24,16 @@ for (const snippet of [
   '.action-row > button { flex: 0 0 184px; width: 184px;',
   'justify-content: center; text-align: center;',
   'class="row action-row"',
+  'id="extension-choice"',
+  'id="extension-list"',
+  'id="ext-confirm"',
+  'id="ext-all"',
+  'id="ext-none"',
+  '"/api/install/inspect"',
+  '"/api/install/confirm"',
+  'function showExtensionOptions(info)',
+  'function updateExtensionSummary()',
+  'const KO =',
 ]) {
   assert(html.includes(snippet), "Missing localized/responsive UI: " + snippet);
 }
