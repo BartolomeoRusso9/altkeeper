@@ -65,6 +65,141 @@ assert(html.includes('rel="icon"'));
 assert(html.includes('"/api/discord/test"'));
 console.log("Localized dashboard JavaScript syntax, actions, labels and layout OK");
 
+// HTTPS is an additive, private LAN proxy. Do not expose a public wildcard
+// port or change the existing AltKeeper/AltServer service and its credentials.
+{
+  const httpsDir = path.join(__dirname, "../examples/local-https");
+  const compose = fs.readFileSync(path.join(httpsDir, "compose.yml"), "utf8");
+  const caddy = fs.readFileSync(path.join(httpsDir, "Caddyfile"), "utf8");
+  assert(compose.includes("192.168.0.62}:8788:8788"), "proxy must bind only the LAN IP");
+  assert(compose.includes("host.docker.internal:host-gateway"));
+  assert(compose.includes("./caddy-data:/data"), "CA must persist across restarts");
+  assert(!compose.includes("network_mode: host"), "proxy must not take over host networking");
+  assert(caddy.includes("tls internal"), "never use public ACME for LAN HTTPS");
+  assert(caddy.includes("reverse_proxy host.docker.internal:8787"));
+  assert(caddy.includes("auto_https disable_redirects"), "preserve HTTP on :8787");
+}
+
+// Wake Lock is a browser-only opt-in/test feature and automatic only for installs.
+// Never resurrect the abandoned silent video/floating card.
+async function checkWakeLock() {
+  assert(html.includes('id="btn-wake-test"'));
+  assert(html.includes('id="wake-status"'));
+  assert(!html.includes('id="keepawake-test-card"'));
+  assert(!html.includes('id="install-keepawake-video"'));
+  assert(!html.includes("data:video/mp4;base64,"));
+  const source = embedded[1];
+  const start = source.indexOf("const WAKE_TEST_MS = ");
+  const end = source.indexOf("function days(n) {", start);
+  assert(start >= 0 && end > start, "wake helper source not found");
+  const nodes = {
+    "btn-wake-test": { disabled: false, textContent: "", onclick: null },
+    "wake-status": { textContent: "" },
+  };
+  const listeners = {};
+  let hidden = false, now = 50000, releaseCount = 0, requestCount = 0;
+  let nextTimer = 1;
+  const intervals = new Map();
+  const windowMock = {
+    isSecureContext: false,
+    addEventListener(type, callback) { listeners[type] = callback; },
+  };
+  const navigatorMock = {
+    wakeLock: {
+      request(type) {
+        assert.equal(type, "screen");
+        requestCount++;
+        const sentinel = {
+          released: false, onRelease: null,
+          addEventListener(type, fn) { assert.equal(type, "release"); this.onRelease = fn; },
+          release() {
+            if (!this.released) { this.released = true; releaseCount++; this.onRelease?.(); }
+            return Promise.resolve();
+          },
+        };
+        return Promise.resolve(sentinel);
+      },
+    },
+  };
+  const ctx = vm.createContext({
+    document: {
+      get hidden() { return hidden; },
+      getElementById(id) { return nodes[id]; },
+      addEventListener(type, callback) { listeners[type] = callback; },
+    },
+    window: windowMock, navigator: navigatorMock,
+    Date: { now: () => now },
+    setInterval(fn, delay) {
+      assert.equal(delay, 1000);
+      const key = nextTimer++;
+      intervals.set(key, fn);
+      return key;
+    },
+    clearInterval(key) { intervals.delete(key); },
+  });
+  vm.runInContext('const $ = id => document.getElementById(id);\n'
+    + 'function t(x) {return x;}\nlet state = null;\n'
+    + source.slice(start, end), ctx);
+  const call = cmd => vm.runInContext(cmd, ctx);
+  const settle = async () => { await Promise.resolve(); await Promise.resolve(); };
+  // In HTTP / other nonsecure contexts never issue a wake request.
+  call("syncWakeLock()");
+  assert.equal(requestCount, 0);
+  assert.equal(nodes["btn-wake-test"].disabled, true);
+  assert(nodes["wake-status"].textContent.includes("HTTPS"));
+
+  // Manual five-minute test is client-only and is not an app install.
+  windowMock.isSecureContext = true;
+  nodes["btn-wake-test"].onclick();
+  await settle();
+  assert.equal(requestCount, 1);
+  assert.equal(intervals.size, 1);
+  assert(nodes["wake-status"].textContent.includes("Wake lock active"));
+  nodes["btn-wake-test"].onclick();
+  await settle();
+  assert.equal(intervals.size, 0);
+  assert.equal(releaseCount, 1);
+  call('state = {job:{kind:"renew",running:true}}; syncWakeLock()');
+  assert.equal(requestCount, 1, "renewals must never hold a wake lock");
+
+  // Installation acquires automatically, then releases on completion/failure.
+  call('state = {job:{kind:"install",running:true}}; syncWakeLock()');
+  await settle();
+  assert.equal(requestCount, 2);
+  assert.equal(nodes["btn-wake-test"].disabled, true);
+  call('state = {job:{kind:"install",running:false,ok:false}}; syncWakeLock()');
+  await settle();
+  assert.equal(releaseCount, 2);
+
+  // Backgrounding an in-progress install releases the lock.
+  call('state = {job:{kind:"install",running:true}}; syncWakeLock()');
+  await settle();
+  assert.equal(requestCount, 3);
+  hidden = true;
+  listeners.visibilitychange();
+  await settle();
+  assert.equal(releaseCount, 3);
+  hidden = false;
+  listeners.visibilitychange();
+  await settle();
+  assert.equal(requestCount, 4);
+  call('state = {job:{kind:"renew",running:true}}; syncWakeLock()');
+  await settle();
+
+  // Expiration uses real elapsed time, not timer count, and does not
+  // interfere with server jobs.
+  call('state = {job:{kind:"",running:false}}');
+  nodes["btn-wake-test"].onclick();
+  await settle();
+  assert.equal(intervals.size, 1);
+  now += 300001;
+  for (const tick of [...intervals.values()]) tick();
+  await settle();
+  assert.equal(intervals.size, 0);
+  assert(nodes["wake-status"].textContent === "");
+}
+checkWakeLock().catch(error => { console.error(error); process.exitCode = 1; });
+
 // Installation progress stays next to the IPA controls, including its final
 // failure/success. A later renewal moves the same panel back without copying
 // log nodes or losing the reader's scroll position.
