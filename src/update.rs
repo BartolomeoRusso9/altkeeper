@@ -1,6 +1,7 @@
 //! Controllo degli aggiornamenti sulle release GitHub del fork (e, come promemoria, su quelle
 //! del progetto originale). Solo Windows: lo usa l'icona nella barra di sistema.
 
+use std::path::Path;
 use std::time::Duration;
 
 use serde_json::Value;
@@ -92,10 +93,131 @@ pub fn upstream_newer() -> Result<Option<String>, String> {
         .map(|sha| sha.chars().take(7).collect()))
 }
 
+/// Nome dell'exe precedente dopo un aggiornamento, finché quello nuovo non parte bene.
+pub const OLD_EXE: &str = "altkeeper.old.exe";
+const NEW_EXE: &str = "altkeeper.new.exe";
+const FAILED_EXE: &str = "altkeeper.failed.exe";
+
+/// Il file `.sha256` (hash esadecimale, eventualmente seguito dal nome) corrisponde a `bytes`?
+pub fn verify(bytes: &[u8], sha_file: &str) -> bool {
+    use sha2::{Digest, Sha256};
+    let want = sha_file.split_whitespace().next().unwrap_or("").to_ascii_lowercase();
+    let got: String = Sha256::digest(bytes).iter().map(|b| format!("{b:02x}")).collect();
+    !want.is_empty() && want == got
+}
+
+/// Mette `bytes` al posto di `exe` (che può essere in esecuzione: Windows lo lascia rinominare)
+/// e tiene il vecchio come `altkeeper.old.exe`. Con un hash sbagliato non tocca niente.
+pub fn install_new(exe: &Path, bytes: &[u8], sha_file: &str) -> Result<(), String> {
+    if !verify(bytes, sha_file) {
+        return Err("the downloaded update does not match its SHA-256: nothing changed".into());
+    }
+    let (new, old) = (exe.with_file_name(NEW_EXE), exe.with_file_name(OLD_EXE));
+    std::fs::write(&new, bytes).map_err(|e| format!("cannot write {}: {e}", new.display()))?;
+    let _ = std::fs::remove_file(&old);
+    std::fs::rename(exe, &old).map_err(|e| format!("cannot move the current exe: {e}"))?;
+    if let Err(e) = std::fs::rename(&new, exe) {
+        let _ = std::fs::rename(&old, exe);
+        return Err(format!("cannot put the new exe in place: {e}"));
+    }
+    Ok(())
+}
+
+/// Scarica la release, la controlla e la mette al posto di `exe`.
+pub fn stage(rel: &Release, exe: &Path) -> Result<(), String> {
+    let c = client()?;
+    let get = |url: &str| {
+        c.get(url)
+            .timeout(Duration::from_secs(300))
+            .send()
+            .and_then(|r| r.error_for_status())
+            .and_then(|r| r.bytes())
+            .map_err(|e| format!("download failed: {e}"))
+    };
+    let sha = get(&rel.sha_url)?;
+    let bytes = get(&rel.exe_url)?;
+    install_new(exe, &bytes, &String::from_utf8_lossy(&sha))
+}
+
+/// Il nuovo exe non è partito: rimette quello vecchio. `false` se non c'era niente da rimettere.
+pub fn rollback(exe: &Path) -> bool {
+    let old = exe.with_file_name(OLD_EXE);
+    if !old.exists() {
+        return false;
+    }
+    let failed = exe.with_file_name(FAILED_EXE);
+    let _ = std::fs::remove_file(&failed);
+    let _ = std::fs::rename(exe, &failed);
+    std::fs::rename(&old, exe).is_ok()
+}
+
+/// Dopo un avvio riuscito i file dell'aggiornamento non servono più.
+pub fn cleanup(exe: &Path) {
+    for name in [OLD_EXE, FAILED_EXE, NEW_EXE] {
+        let _ = std::fs::remove_file(exe.with_file_name(name));
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
     use serde_json::json;
+    use std::path::PathBuf;
+
+    fn temp_exe(name: &str) -> PathBuf {
+        let d = std::env::temp_dir().join(format!("altkeeper-upd-{name}-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&d);
+        std::fs::create_dir_all(&d).unwrap();
+        let exe = d.join("altkeeper.exe");
+        std::fs::write(&exe, b"old").unwrap();
+        exe
+    }
+
+    #[test]
+    fn verify_checks_the_sha256_file() {
+        // sha256("new")
+        let sha = "11507a0e2f5e69d5dfa40a62a1bd7b6ee57e6bcd85c67c9b8431b36fff21c437";
+        assert!(verify(b"new", &format!("{sha}  altkeeper.exe\n")));
+        assert!(verify(b"new", &sha.to_uppercase()));
+        assert!(!verify(b"tampered", sha));
+        assert!(!verify(b"new", ""));
+    }
+
+    #[test]
+    fn update_rejects_bad_hash() {
+        let exe = temp_exe("badhash");
+        assert!(install_new(&exe, b"new", "00").is_err());
+        assert_eq!(std::fs::read(&exe).unwrap(), b"old");
+        assert!(!exe.with_file_name(OLD_EXE).exists());
+    }
+
+    #[test]
+    fn update_offline_is_noop() {
+        rustls::crypto::ring::default_provider().install_default().ok();
+        let exe = temp_exe("offline");
+        let r = Release {
+            tag: "v9.9.9".into(),
+            exe_url: "http://127.0.0.1:9/altkeeper.exe".into(),
+            sha_url: "http://127.0.0.1:9/altkeeper.exe.sha256".into(),
+            page: String::new(),
+        };
+        assert!(stage(&r, &exe).is_err());
+        assert_eq!(std::fs::read(&exe).unwrap(), b"old");
+    }
+
+    #[test]
+    fn swap_and_rollback() {
+        let exe = temp_exe("swap");
+        let sha = "11507a0e2f5e69d5dfa40a62a1bd7b6ee57e6bcd85c67c9b8431b36fff21c437";
+        install_new(&exe, b"new", sha).unwrap();
+        assert_eq!(std::fs::read(&exe).unwrap(), b"new");
+        assert_eq!(std::fs::read(exe.with_file_name(OLD_EXE)).unwrap(), b"old");
+
+        assert!(rollback(&exe));
+        assert_eq!(std::fs::read(&exe).unwrap(), b"old");
+        assert!(!exe.with_file_name(OLD_EXE).exists());
+        assert!(!rollback(&exe)); // niente da rimettere
+    }
 
     #[test]
     fn version_ordering() {

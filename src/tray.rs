@@ -26,6 +26,26 @@ pub enum UserEvent {
     ServerFailed(String),
     Status { reachable: bool, tip: String },
     Updates { fork: Option<crate::update::Release>, upstream: Option<String> },
+    Restart,
+    UpdateFailed(String),
+}
+
+/// Aspetta (al massimo 20 s) che il processo `pid` finisca: dopo un aggiornamento la versione
+/// vecchia deve liberare le porte prima che la nuova le apra.
+pub fn wait_for_exit(pid: u32) {
+    use windows_sys::Win32::Foundation::CloseHandle;
+    use windows_sys::Win32::System::Threading::{
+        OpenProcess, PROCESS_SYNCHRONIZE, WaitForSingleObject,
+    };
+    unsafe {
+        let h = OpenProcess(PROCESS_SYNCHRONIZE, 0, pid);
+        if !h.is_null() {
+            if WaitForSingleObject(h, 20_000) != 0 {
+                crate::log::err("[update] the previous version is still running after 20 s");
+            }
+            CloseHandle(h);
+        }
+    }
 }
 
 fn open_in_browser(url: &str) {
@@ -368,8 +388,16 @@ pub fn run(bind: SocketAddr, dir: &Path, start: impl FnOnce(EventLoopProxy<UserE
                     let p = check_proxy.clone();
                     std::thread::spawn(move || check_updates(&p, true));
                 } else if e.id == update_now.id() {
-                    if let Some(r) = &pending {
-                        open_in_browser(&r.page);
+                    if let Some(r) = pending.clone() {
+                        update_now.set_enabled(false);
+                        update_now.set_text("Downloading the update...");
+                        let (p, exe) = (check_proxy.clone(), exe.clone());
+                        std::thread::spawn(move || {
+                            let _ = p.send_event(match crate::update::stage(&r, &exe) {
+                                Ok(()) => UserEvent::Restart,
+                                Err(e) => UserEvent::UpdateFailed(e),
+                            });
+                        });
                     }
                 } else if e.id == upstream.id() {
                     open_in_browser(crate::update::UPSTREAM_COMMITS);
@@ -399,6 +427,37 @@ pub fn run(bind: SocketAddr, dir: &Path, start: impl FnOnce(EventLoopProxy<UserE
                     upstream.set_text(format!("Upstream has new changes ({tag}): sync the fork"));
                     upstream.set_enabled(true);
                 }
+            }
+            Event::UserEvent(UserEvent::Restart) => {
+                crate::log::line("[update] restarting with the new version");
+                crate::altserver::stop();
+                let spawned = std::process::Command::new(&exe)
+                    .arg("tray")
+                    .arg("--dir")
+                    .arg(&dir)
+                    .arg("--replacing")
+                    .arg(std::process::id().to_string())
+                    .spawn();
+                match spawned {
+                    Ok(_) => std::process::exit(0),
+                    // AltServer è già fermo: meglio chiudere in modo visibile che restare
+                    // aperti senza servire AltStore.
+                    Err(e) => {
+                        crate::update::rollback(&exe);
+                        crate::log::err(&format!("[update] cannot start the new version: {e}"));
+                        message_box(&format!(
+                            "The update could not start ({e}). The previous version was kept.\n\n\
+                             Start AltKeeperPlus again."
+                        ));
+                        std::process::exit(1);
+                    }
+                }
+            }
+            Event::UserEvent(UserEvent::UpdateFailed(e)) => {
+                crate::log::err(&format!("[update] {e}"));
+                toast(&format!("Update failed: {e}"));
+                update_now.set_text("Update now (try again)");
+                update_now.set_enabled(true);
             }
             Event::UserEvent(UserEvent::ServerFailed(msg)) => {
                 crate::log::err(&msg);

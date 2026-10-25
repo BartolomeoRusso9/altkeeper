@@ -475,6 +475,12 @@ async fn main() -> Result<(), String> {
             if !flag("--console") {
                 tray::hide_console();
             }
+            // Avviato da un aggiornamento: prima si aspetta che la versione vecchia liberi le porte.
+            let replacing = opt("--replacing").and_then(|p| p.parse::<u32>().ok());
+            if let Some(pid) = replacing {
+                tray::wait_for_exit(pid);
+            }
+            let exe = std::env::current_exe().map_err(dbg)?;
             let bind: SocketAddr = "127.0.0.1:8787".parse().map_err(dbg)?;
             let phone = phone_addr(opt("--phone"))?;
             let start = || -> Result<(), String> {
@@ -484,9 +490,16 @@ async fn main() -> Result<(), String> {
             };
             if let Err(e) = start() {
                 log::err(&e);
+                // La versione nuova non parte: si rimette quella vecchia e si riavvia quella.
+                if replacing.is_some() && update::rollback(&exe) {
+                    log::err("[update] the new version did not start, going back to the old one");
+                    let _ = std::process::Command::new(&exe).arg("tray").arg("--dir").arg(&dir).spawn();
+                    return Err(e);
+                }
                 tray::message_box(&format!("AltKeeperPlus cannot start:\n\n{e}"));
                 return Err(e);
             }
+            update::cleanup(&exe);
             let rt = tokio::runtime::Handle::current();
             tokio::task::block_in_place(|| {
                 tray::run(bind, &dir, |proxy| {
