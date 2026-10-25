@@ -1607,8 +1607,10 @@ async fn install_ipa(
     }
     app.push_line(&if via == phone::Via::Usb {
         "Installing the signed app over USB…".to_string()
+    } else if crate::install_archive::use_archive_on_wifi() {
+        "Packing the signed app into an IPA and installing over Wi-Fi…".to_string()
     } else {
-        "Installing the signed app over Wi-Fi…".to_string()
+        "Installing the signed app over Wi-Fi (legacy directory mode)…".to_string()
     });
     // Il telefono manda decine di notifiche con la stessa percentuale: una riga ogni 10%.
     let last_logged = std::sync::atomic::AtomicI64::new(-1);
