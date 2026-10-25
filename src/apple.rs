@@ -541,6 +541,8 @@ pub async fn sign_ipa(
     udid: &str,
     ipa: &Path,
     selected_extensions: Option<&[String]>,
+    display_name: Option<&str>,
+    custom_bundle_id: Option<&str>,
 ) -> Result<SignedApp, String> {
     let filename = ipa
         .file_name()
@@ -571,6 +573,8 @@ pub async fn sign_ipa(
             None,
             None,
             selected_extensions,
+            display_name,
+            custom_bundle_id,
         )
         .await
         .map_err(|e| {
