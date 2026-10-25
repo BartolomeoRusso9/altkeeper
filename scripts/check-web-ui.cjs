@@ -7,6 +7,12 @@ const path = require("node:path");
 // This dashboard is shipped as include_str!(\"web/index.html\"), not a separate JS file.
 // Compile its exact embedded script to catch JavaScript regressions that cargo test misses.
 const html = fs.readFileSync(path.join(__dirname, "../src/web/index.html"), "utf8");
+// The embedded MP4 uses a data: URL. With default-src 'none', a missing
+// media-src directive blocks playback completely even though the test UI works.
+const server = fs.readFileSync(path.join(__dirname, "../src/web.rs"), "utf8");
+assert(server.includes("default-src 'none'"), "strict default CSP must remain in place");
+assert(server.includes("media-src data:;"), "allow only embedded media for the install keepawake video");
+assert(!server.includes("media-src *"), "do not accidentally allow arbitrary media origins");
 const embedded = html.match(/<script>([\s\S]*?)<\/script>/);
 assert(embedded, "embedded dashboard JavaScript missing");
 new vm.Script(embedded[1], { filename: "src/web/index.html" });
