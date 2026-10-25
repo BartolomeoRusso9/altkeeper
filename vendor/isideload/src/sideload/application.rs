@@ -169,7 +169,8 @@ fn localized_name_bytes(original: &[u8], name: &str) -> Result<Vec<u8>, Report> 
     if le || be {
         let mut out = if le { vec![0xff, 0xfe] } else { vec![0xfe, 0xff] };
         for c in updated.encode_utf16() {
-            out.extend_from_slice(if le { &c.to_le_bytes() } else { &c.to_be_bytes() });
+            let encoded = if le { c.to_le_bytes() } else { c.to_be_bytes() };
+            out.extend_from_slice(&encoded);
         }
         Ok(out)
     } else {
