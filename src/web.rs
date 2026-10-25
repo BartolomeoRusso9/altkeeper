@@ -186,7 +186,7 @@ impl Default for AutoRenewConfig {
     fn default() -> Self {
         Self {
             enabled: false,
-            time: "21:17".into(),
+            time: "06:00".into(),
             last_attempt_day: None,
         }
     }
@@ -1394,19 +1394,19 @@ fn append_log(lines: &[String], ok: bool) {
 mod tests {
     #[test]
     fn auto_renew_kst_time_validation_and_next_run() {
-        assert_eq!(parse_kst_time("21:17"), Some(21 * 3600 + 17 * 60));
+        assert_eq!(parse_kst_time("06:00"), Some(6 * 3600));
         for invalid in ["24:00", "21:60", "9:01", "abc", "21:17:00"] {
             assert_eq!(parse_kst_time(invalid), None);
         }
-        // Day 20 in KST: scheduled for 21:17, 20:00 currently.
+        // Day 20 in KST: scheduled for 06:00, 05:00 currently.
         let day = 20_u64;
-        let now_secs = day * DAY_SECS + 20 * 3600 - KST_OFFSET_SECS;
-        let mut conf = AutoRenewConfig { enabled: true, time: "21:17".into(), last_attempt_day: None };
+        let now_secs = day * DAY_SECS + 5 * 3600 - KST_OFFSET_SECS;
+        let mut conf = AutoRenewConfig { enabled: true, time: "06:00".into(), last_attempt_day: None };
         assert_eq!(next_auto_run(&conf, now_secs),
-            Some(day * DAY_SECS + 21 * 3600 + 17 * 60 - KST_OFFSET_SECS));
+            Some(day * DAY_SECS + 6 * 3600 - KST_OFFSET_SECS));
         conf.last_attempt_day = Some(day);
         assert_eq!(next_auto_run(&conf, now_secs),
-            Some((day + 1) * DAY_SECS + 21 * 3600 + 17 * 60 - KST_OFFSET_SECS));
+            Some((day + 1) * DAY_SECS + 6 * 3600 - KST_OFFSET_SECS));
         conf.enabled = false;
         assert_eq!(next_auto_run(&conf, now_secs), None);
     }
