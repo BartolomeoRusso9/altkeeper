@@ -586,7 +586,9 @@ pub async fn sign_ipa(
                     "App signing failed: this Apple ID already has a certificate (AltStore/SideStore). To replace it, set ALTKEEPER_REVOKE_CERTS=1 and retry; other apps will then need refreshing.".to_string()
                 )
             } else {
-                crate::tr!(format!("firma dell'app non riuscita: {e}"), format!("App signing failed: {e}"))
+                // Keep the complete report; its first line may only be a
+                // heading, with the useful cause on subsequent lines.
+                crate::tr!(format!("firma dell'app non riuscita: {detail}"), format!("App signing failed: {detail}"))
             }
         })?;
     Ok(SignedApp {
@@ -594,3 +596,4 @@ pub async fn sign_ipa(
         cleanup_dir,
     })
 }
+

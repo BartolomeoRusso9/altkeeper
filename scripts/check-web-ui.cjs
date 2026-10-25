@@ -65,6 +65,33 @@ assert(html.includes('rel="icon"'));
 assert(html.includes('"/api/discord/test"'));
 console.log("Localized dashboard JavaScript syntax, actions, labels and layout OK");
 
+// Installation progress stays next to the IPA controls, including its final
+// failure/success. A later renewal moves the same panel back without copying
+// log nodes or losing the reader's scroll position.
+{
+  const nodes = { "app-job-slot": {}, "install-job-slot": {}, "job": { scrollTop: 42 } };
+  for (const id of ["app-job-slot", "install-job-slot"]) {
+    nodes[id].append = panel => { panel.parentElement = nodes[id]; };
+  }
+  nodes.job.parentElement = nodes["app-job-slot"];
+  const context = vm.createContext({ $: id => nodes[id], t: x => x, uploading: false });
+  for (const name of ["placeJob", "installHint"]) {
+    const fn = embedded[1].match(new RegExp("function " + name + "\\([^)]*\\) \\{[\\s\\S]*?\\r?\\n\\}"));
+    assert(fn, "missing installation UI helper: " + name);
+    vm.runInContext(fn[0], context);
+  }
+  vm.runInContext('placeJob({kind:"install",running:true})', context);
+  assert.equal(nodes.job.parentElement, nodes["install-job-slot"]);
+  vm.runInContext('placeJob({kind:"install",running:false,ok:false})', context);
+  assert.equal(nodes.job.parentElement, nodes["install-job-slot"]);
+  assert.equal(nodes.job.scrollTop, 42);
+  vm.runInContext('placeJob({kind:"renew",running:true})', context);
+  assert.equal(nodes.job.parentElement, nodes["app-job-slot"]);
+  const hint = vm.runInContext('installHint({busy:true,job:{kind:"install",running:true}})', context);
+  assert(hint.includes("Signing and installing"));
+  assert.equal(vm.runInContext('installHint({busy:true,job:{kind:"install",running:false}})', context), "Checking…");
+}
+
 // Exercise the actual dashboard functions with controlled responses. An edit
 // must survive polling, and a snapshot started before an action must not paint
 // over the newer state once another refresh has been requested.

@@ -1773,6 +1773,15 @@ fn friendly_error(err: &str) -> String {
 }
 
 fn short_error(err: &str) -> String {
+    // Signing reports can start with an empty heading and put the actual
+    // certificate/IPA/App ID cause below it. Do not discard those lines.
+    let trimmed = err.trim_start();
+    if let Some(detail) = trimmed.strip_prefix("firma dell'app non riuscita:")
+        .or_else(|| trimmed.strip_prefix("App signing failed:"))
+    {
+        let detail = detail.split_whitespace().collect::<Vec<_>>().join(" ");
+        return format!("App signing failed: {detail}").chars().take(1200).collect();
+    }
     let one_line = err
         .lines()
         .map(str::trim)
@@ -1983,6 +1992,16 @@ fn append_log(lines: &[String], ok: bool) {
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn signing_error_keeps_cause_after_an_empty_first_line() {
+        let cause = "Failed to retrieve certificate identity: test cause";
+        for prefix in ["firma dell'app non riuscita:", "App signing failed:"] {
+            let error = short_error(&format!("{prefix} \r\n    {cause}\n"));
+            assert_eq!(error, format!("App signing failed: {cause}"));
+        }
+        assert_eq!(short_error(&format!("App signing failed:\n{}", "x".repeat(2000))).chars().count(), 1200);
+    }
+
     #[test]
     fn state_does_not_hold_ui_lock_while_waiting_for_schedule() {
         let app = Arc::new(App {

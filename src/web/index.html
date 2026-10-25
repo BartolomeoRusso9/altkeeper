@@ -164,9 +164,11 @@
     </div>
     <p class="muted" id="renew-hint" style="margin:8px 0 0"></p>
     <div class="nested" id="renew-preview" hidden></div>
-    <div id="job" hidden>
-      <div class="banner" id="job-status"></div>
-      <pre class="log" id="job-log"></pre>
+    <div id="app-job-slot">
+      <div id="job" hidden>
+        <div class="banner" id="job-status"></div>
+        <pre class="log" id="job-log"></pre>
+      </div>
     </div>
   </section>
 
@@ -261,6 +263,7 @@
       </div>
     </div>
     <div class="banner bad" id="install-error" hidden></div>
+    <div id="install-job-slot"></div>
   </section>
 
   <section class="card">
@@ -358,6 +361,25 @@ function days(n) {
   return "expires in " + n + (n === 1 ? " day" : " days");
 }
 function profilesText(n) { return locale === "ko" ? "프로파일 " + n + "개" : n + " profiles"; }
+
+function placeJob(job) {
+  const panel = $("job");
+  const slot = $(job.kind === "install" ? "install-job-slot" : "app-job-slot");
+  if (panel.parentElement !== slot) slot.append(panel);
+}
+
+function installHint(s) {
+  if (uploading) return t("Analyzing IPA…");
+  if (s.busy && s.job.kind === "install") {
+    return s.job.running
+      ? t("Signing and installing the app. Keep this page open until it finishes…")
+      : t("Checking…");
+  }
+  if (!s.account.present) return t("Sign in with your Apple ID first.");
+  if (!s.account.password_saved) return t("Save the Apple ID password on the server to sign and install.");
+  if (s.phone.reachable !== true) return t("The iPhone must be reachable on Wi-Fi.");
+  return s.busy ? t("Another operation is in progress.") : t("The Apple ID is used to sign the app.");
+}
 
 function syncAutoRenewInputs(auto) {
   if (autoDraftDirty) {
@@ -588,13 +610,11 @@ function render(s) {
   $("btn-install").textContent = uploading ? t("Analyzing IPA…") : t("Sign and install");
   show("extension-choice", !!pendingInstall);
   $("ext-confirm").disabled = !canInstall || uploading;
-  $("install-hint").textContent = !s.account.present ? t("Sign in with your Apple ID first.")
-    : !s.account.password_saved ? t("Save the Apple ID password on the server to sign and install.")
-    : p.reachable !== true ? t("The iPhone must be reachable on Wi-Fi.")
-    : s.busy ? t("Another operation is in progress.") : t("The Apple ID is used to sign the app.");
+  $("install-hint").textContent = installHint(s);
 
   // Lavoro in corso o appena finito
   const job = s.job;
+  placeJob(job);
   show("job", !!job.kind);
   if (job.kind) {
     const st = $("job-status");
