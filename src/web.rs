@@ -1215,6 +1215,14 @@ mod tests {
         assert!(mine(&v).is_empty());
     }
 
+    #[tokio::test]
+    async fn serve_reports_busy_port() {
+        let taken = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+        let addr = taken.local_addr().unwrap();
+        let err = serve(addr, None, None).await.unwrap_err();
+        assert!(err.starts_with(&format!("cannot listen on {addr}")), "{err}");
+    }
+
     #[test]
     fn short_error_keeps_the_first_line() {
         assert_eq!(
