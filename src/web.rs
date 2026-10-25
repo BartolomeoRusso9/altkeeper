@@ -2054,6 +2054,26 @@ mod tests {
     }
 
     #[test]
+    fn new_install_identity_validation_keeps_name_and_id_independent() {
+        assert!(validated_install_identity(None, None, "com.example.app").unwrap().is_none());
+        let renamed = validated_install_identity(Some("복제 앱".into()), None, "com.example.app")
+            .unwrap().unwrap();
+        assert_eq!(renamed.display_name.as_deref(), Some("복제 앱"));
+        assert!(renamed.bundle_id.is_none());
+        assert_eq!(renamed.source_bundle_id, "com.example.app");
+        let cloned = validated_install_identity(None, Some("com.example.clone".into()),
+            "com.example.app").unwrap().unwrap();
+        assert!(cloned.display_name.is_none());
+        assert_eq!(cloned.bundle_id.as_deref(), Some("com.example.clone"));
+        assert!(validated_install_identity(None, Some("com.example.app".into()),
+            "com.example.app").is_err());
+        assert!(validated_install_identity(None, Some("bad bundle id".into()),
+            "com.example.app").is_err());
+        assert!(validated_install_identity(Some("x".repeat(41)), None,
+            "com.example.app").is_err());
+    }
+
+    #[test]
     fn etichette_e_livelli() {
         assert_eq!(label_of("com.spotify.client.TEAM", "TEAM"), "com.spotify.client");
         assert_eq!(label_of("com.altro", "TEAM"), "com.altro");
