@@ -121,6 +121,16 @@ fn prepare_signed_app_archive(app_path: &Path) -> Result<NamedTempFile, String> 
     Ok(temporary)
 }
 
+fn signed_bundle_id(app_path: &Path) -> Result<String, String> {
+    let info = plist::Value::from_file(app_path.join("Info.plist")).map_err(err)?;
+    info.as_dictionary()
+        .and_then(|values| values.get("CFBundleIdentifier"))
+        .and_then(plist::Value::as_string)
+        .filter(|id| !id.is_empty())
+        .map(str::to_owned)
+        .ok_or_else(|| format!("Signed app {} has no CFBundleIdentifier", app_path.display()))
+}
+
 /// Transfer a single IPA over AFC, then have installation_proxy unpack/install it.
 /// 0–70% reflects actual IPA bytes uploaded, 70–100% device installation.
 pub(crate) async fn install_signed_app_rsd(
@@ -129,6 +139,7 @@ pub(crate) async fn install_signed_app_rsd(
     app_path: &Path,
     progress: &(impl Fn(u64) + Send + Sync),
 ) -> Result<(), String> {
+    let bundle_id = signed_bundle_id(app_path)?;
     let local_path = app_path.to_owned();
     let archive = tokio::task::spawn_blocking(move || prepare_signed_app_archive(&local_path))
         .await
@@ -142,6 +153,10 @@ pub(crate) async fn install_signed_app_rsd(
     let mut afc = AfcClient::connect_rsd(adapter, handshake)
         .await
         .map_err(err)?;
+    // idevice's IPA helper creates PublicStaging if it does not exist.
+    if afc.get_file_info("PublicStaging").await.is_err() {
+        afc.mk_dir("PublicStaging").await.map_err(err)?;
+    }
     let mut target = afc.open(remote_path.clone(), AfcFopenMode::WrOnly)
         .await
         .map_err(err)?;
@@ -162,7 +177,9 @@ pub(crate) async fn install_signed_app_rsd(
         .await
         .map_err(err)?;
     let mut options = plist::Dictionary::new();
-    options.insert("PackageType".into(), plist::Value::String("Developer".into()));
+    // IPA installs use CFBundleIdentifier; PackageType=Developer is for a
+    // staged .app directory, not a compressed IPA package.
+    options.insert("CFBundleIdentifier".into(), plist::Value::String(bundle_id));
     install.install_with_callback(
         remote_path,
         Some(plist::Value::Dictionary(options)),
@@ -209,6 +226,19 @@ mod tests {
         zip.by_name("Payload/Demo.app/Current")
             .unwrap().read_to_string(&mut target).unwrap();
         assert_eq!(target, "Demo");
+    }
+
+    #[test]
+    fn uses_post_signing_bundle_id_for_ipa_install() {
+        let root = tempfile::tempdir().unwrap();
+        let app = root.path().join("Customized.app");
+        fs::create_dir(&app).unwrap();
+        let mut info = plist::Dictionary::new();
+        info.insert("CFBundleIdentifier".into(),
+            plist::Value::String("com.example.custom.TEAM1234".into()));
+        plist::Value::Dictionary(info)
+            .to_file_xml(app.join("Info.plist")).unwrap();
+        assert_eq!(signed_bundle_id(&app).unwrap(), "com.example.custom.TEAM1234");
     }
 
     #[test]
