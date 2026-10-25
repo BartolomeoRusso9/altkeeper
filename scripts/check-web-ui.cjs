@@ -91,7 +91,7 @@ async function checkDashboardState() {
   const source = embedded[1];
   // Run only the draft declaration/helper/listeners: the full browser render
   // needs many unrelated DOM controls.
-  const helper = source.match(/function syncAutoRenewInputs\(auto\) \{[\s\S]*?\n\}\nfor \(const id of \["auto-time", "auto-days"\]\) \{[\s\S]*?\n\}/);
+  const helper = source.match(/function syncAutoRenewInputs\(auto\) \{[\s\S]*?\r?\n\}\r?\nfor \(const id of \["auto-time", "auto-days"\]\) \{[\s\S]*?\r?\n\}/);
   assert(helper);
   vm.runInContext('const $ = id => document.getElementById(id); let autoDraftDirty = false, autoSavePending = false;\n' + helper[0], context);
   vm.runInContext('syncAutoRenewInputs({time:"21:17",min_days:3})', context);
@@ -108,8 +108,8 @@ async function checkDashboardState() {
   assert.equal(controls["auto-time"].value, "22:30");
   assert.equal(vm.runInContext('autoDraftDirty', context), false, "server confirmation clears the draft");
 
-  const api = source.match(/async function api\(path, body, signal\) \{[\s\S]*?\n\}/);
-  const refresh = source.match(/async function refresh\(\) \{[\s\S]*?\n\}/);
+  const api = source.match(/async function api\(path, body, signal\) \{[\s\S]*?\r?\n\}/);
+  const refresh = source.match(/async function refresh\(\) \{[\s\S]*?\r?\n\}/);
   assert(api && refresh);
   vm.runInContext('let timer = null, refreshInFlight = false, refreshQueued = false;\n' + api[0] + '\n' + refresh[0], context);
   const snapshot = version => ({ version, busy:false, phone:{checking:false}, login:{phase:""}, job:{running:false} });
