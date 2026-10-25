@@ -78,12 +78,22 @@ struct AppView {
     days: i64,
     expires: String,
     level: &'static str,
+    members: Vec<MemberView>,
+}
+
+#[derive(Clone, PartialEq, Debug)]
+struct MemberView {
+    bundle: String,
+    label: String,
+    days: i64,
+    expires: String,
 }
 
 #[derive(Clone, PartialEq, Debug)]
 struct ProfileView {
     uuid: String,
     bundle: String,
+    root: String,
     label: String,
     days: i64,
     expires: String,
@@ -544,9 +554,12 @@ async fn state(State(app): State<Arc<App>>) -> Json<Value> {
         "apps": g.snapshot.apps.iter().map(|a| json!({
             "bundle": a.bundle, "label": a.label, "days": a.days,
             "expires": a.expires, "level": a.level,
+            "members": a.members.iter().map(|m| json!({
+                "bundle":m.bundle,"label":m.label,"days":m.days,"expires":m.expires
+            })).collect::<Vec<_>>(),
         })).collect::<Vec<_>>(),
         "profiles": g.snapshot.profiles.iter().map(|p| json!({
-            "uuid": p.uuid, "bundle": p.bundle, "label": p.label,
+            "uuid": p.uuid, "bundle": p.bundle, "root": p.root, "label": p.label,
             "days": p.days, "expires": p.expires,
         })).collect::<Vec<_>>(),
         "job": {
@@ -1121,42 +1134,62 @@ fn level_for(days: i64) -> &'static str {
     }
 }
 
-/// Le app del team, una riga per bundle (il profilo più recente), dalla più urgente.
+/// Display one host app with all its latest extension profiles nested below.
 fn app_views(profiles: &[profile::PhoneProfile], team: &str) -> Vec<AppView> {
     let mine = profiles.iter().filter(|p| p.team_id.as_deref() == Some(team));
-    let mut views: Vec<AppView> = profile::latest_by_bundle(mine)
-        .into_iter()
-        .filter_map(|p| {
-            let bundle = p.bundle_id.clone()?;
-            let days = p.days_left().unwrap_or(-1);
-            Some(AppView {
-                label: label_of(&bundle, team),
-                bundle,
-                days,
-                expires: p.expires_text(),
-                level: level_for(days),
-            })
-        })
-        .collect();
-    views.sort_by(|a, b| a.days.cmp(&b.days).then_with(|| a.label.cmp(&b.label)));
+    let latest = profile::latest_by_bundle(mine);
+    let bundles: Vec<&str> = latest.iter().filter_map(|p| p.bundle_id.as_deref()).collect();
+    let mut groups: std::collections::BTreeMap<String, Vec<MemberView>> =
+        std::collections::BTreeMap::new();
+    for p in latest {
+        let Some(bundle) = p.bundle_id.as_deref() else { continue; };
+        let root = profile::group_root(bundle, &bundles, team).to_owned();
+        groups.entry(root).or_default().push(MemberView {
+            bundle: bundle.to_owned(),
+            label: label_of(bundle, team),
+            days: p.days_left().unwrap_or(-1),
+            expires: p.expires_text(),
+        });
+    }
+    let mut views = Vec::new();
+    for (bundle, mut members) in groups {
+        members.sort_by(|a,b| a.bundle.cmp(&b.bundle));
+        let earliest = members.iter().min_by_key(|m| m.days).unwrap();
+        views.push(AppView {
+            label: label_of(&bundle, team),
+            bundle,
+            days: earliest.days,
+            expires: earliest.expires.clone(),
+            level: level_for(earliest.days),
+            members,
+        });
+    }
+    views.sort_by(|a,b| a.days.cmp(&b.days).then_with(|| a.label.cmp(&b.label)));
     views
 }
 
 fn profile_views(profiles: &[profile::PhoneProfile], team: &str) -> Vec<ProfileView> {
+    let bundles: Vec<&str> = profiles.iter()
+        .filter(|p| p.team_id.as_deref() == Some(team))
+        .filter_map(|p| p.bundle_id.as_deref())
+        .collect();
     let mut views: Vec<_> = profiles.iter()
         .filter(|p| p.team_id.as_deref() == Some(team))
         .filter_map(|p| {
             let bundle = p.bundle_id.clone()?;
+            let root = profile::group_root(&bundle, &bundles, team).to_owned();
             Some(ProfileView {
                 uuid: p.uuid.clone(),
                 label: label_of(&bundle, team),
                 bundle,
+                root,
                 days: p.days_left().unwrap_or(-1),
                 expires: p.expires_text(),
             })
         })
         .collect();
-    views.sort_by(|a, b| a.label.cmp(&b.label).then_with(|| b.expires.cmp(&a.expires)));
+    views.sort_by(|a,b| a.root.cmp(&b.root).then_with(|| a.label.cmp(&b.label))
+        .then_with(|| b.expires.cmp(&a.expires)));
     views
 }
 
@@ -1513,6 +1546,24 @@ mod tests {
         assert_eq!(v[0].days, 6);
         assert_eq!(v[1].label, "com.b");
         assert!(v.iter().all(|a| a.level == "ok"));
+        assert_eq!(v[0].members.len(), 1);
+    }
+
+    #[test]
+    fn hosts_group_extensions_and_take_earliest_expiration() {
+        let p = vec![
+            profile("a", "TEAM", "com.kdt.livecontainer", 6),
+            profile("b", "TEAM", "com.kdt.livecontainer.TEAM.LiveProcess", 1),
+            profile("c", "TEAM", "com.kdt.livecontainer.TEAM.ShareExtension", 5),
+            profile("d", "TEAM", "com.google.ios.youtube", 6),
+        ];
+        let apps = app_views(&p, "TEAM");
+        assert_eq!(apps.len(), 2);
+        let live = apps.iter().find(|a| a.bundle == "com.kdt.livecontainer").unwrap();
+        assert_eq!(live.members.len(), 3);
+        assert_eq!(live.days, 1);
+        let profiles = profile_views(&p, "TEAM");
+        assert!(profiles.iter().filter(|p| p.root == "com.kdt.livecontainer").count() == 3);
     }
 
     #[test]
