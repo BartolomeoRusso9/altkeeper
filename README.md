@@ -333,6 +333,20 @@ The image holds nothing secret: pairing, account and state live in the `/data` v
 uses the host network, because it needs Bonjour to find the iPhone and to be found by AltStore;
 ports 8787 (web) and 49500 (AltServer) must be free.
 
+
+**Fast IPA upload over Wi-Fi (experimental):** After signing, AltKeeper repackages the
+signed `.app` (including any custom name/Bundle ID and selected extensions) into one
+temporary IPA, stages that file over AFC, then asks iOS to install it. This avoids
+thousands of remote AFC operations for apps with many small files. The temporary
+IPA is removed automatically; peak memory is bounded by streaming both packaging
+and upload. USB installs keep the existing directory-based path.
+
+For an immediate rollback on Linux, set `ALTKEEPER_INSTALL_MODE=directory` in the
+AltKeeper container's `environment:` in `docker-compose.yml`, then recreate
+the container. This restores the previous Wi-Fi directory-transfer behavior
+without re-signing existing apps. Test on a disposable app first; compatibility
+with a real iPhone must be confirmed before considering it production-verified.
+
 A GitHub Actions workflow (`.github/workflows/docker.yml`) runs the tests on Linux and Windows,
 checks `--help` in both CLI languages, and publishes the image to `ghcr.io/<user>/altkeeper` on
 pushes to `main` (amd64) and on `vX.Y.Z` tags (amd64 and arm64). If the repository is private, the
