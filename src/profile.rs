@@ -33,6 +33,25 @@ impl PhoneProfile {
     }
 }
 
+/// Associate extension bundles with their host app only when the embedded
+/// Team ID marks them as extensions of an existing, exact host bundle.
+/// Never infer a parent from arbitrary dotted reverse-DNS prefixes.
+pub fn group_root<'a>(bundle: &'a str, bundles: &[&'a str], team: &str) -> &'a str {
+    bundles.iter().copied()
+        .filter(|candidate| {
+            *candidate != bundle
+                && bundle.starts_with(&format!("{candidate}.{team}."))
+        })
+        .max_by_key(|candidate| candidate.len())
+        .unwrap_or(bundle)
+}
+
+pub fn members_of_group<'a>(root: &str, bundles: &'a [&'a str], team: &str) -> Vec<&'a str> {
+    bundles.iter().copied()
+        .filter(|b| group_root(b, bundles, team) == root)
+        .collect()
+}
+
 /// Per ogni bundle vale il profilo che scade più tardi: dopo un rinnovo quelli vecchi restano
 /// sul telefono. I profili senza bundle ID restano ciascuno per conto suo.
 pub fn latest_by_bundle<'a>(
@@ -240,6 +259,20 @@ mod tests {
         assert_eq!(cleanup_expired_backups(&dir, SystemTime::now()).unwrap(), 0);
     }
 
+    #[test]
+    fn extension_groups_do_not_swallow_unrelated_apps() {
+        let bundles = [
+            "com.google.ios.youtube",
+            "com.google.ios.youtube.TEAM.OpenYouTube.Extension",
+            "com.kdt.livecontainer",
+            "com.kdt.livecontainer.TEAM.LiveProcess",
+            "com.google.ios.youtube.another.app",
+        ];
+        assert_eq!(group_root(bundles[1], &bundles, "TEAM"), bundles[0]);
+        assert_eq!(group_root(bundles[3], &bundles, "TEAM"), bundles[2]);
+        assert_eq!(group_root(bundles[4], &bundles, "TEAM"), bundles[4]);
+        assert_eq!(members_of_group(bundles[2], &bundles, "TEAM").len(), 2);
+    }
     #[test]
     fn senza_profili_non_c_e_niente() {
         assert!(latest_by_bundle(&[]).is_empty());
