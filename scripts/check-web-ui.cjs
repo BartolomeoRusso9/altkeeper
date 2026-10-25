@@ -239,7 +239,7 @@ async function checkLogCopy() {
   await vm.runInContext('copyLogs()', context);
   assert.deepEqual(copied, ["KST log sample"]);
   assert.equal(removed, 1, "HTTP clipboard fallback must remove the temporary field");
-  assert.equal(notices.at(-1)[2], "ok");
+  assert.equal(notices.at(-1)[2], "good");
   context.document.execCommand = () => false;
   await vm.runInContext('copyLogs()', context);
   assert.equal(removed, 2);
@@ -249,7 +249,7 @@ async function checkLogCopy() {
   await vm.runInContext('copyLogs()', context);
   assert.equal(copied.length, 2);
   assert.equal(removed, 2, "HTTPS should use the Clipboard API directly");
-  assert.equal(notices.at(-1)[2], "ok");
+  assert.equal(notices.at(-1)[2], "good");
 }
 Promise.all([checkLogPolling(), checkLogCopy()]).then(() => {
   console.log("Server log restart recovery, retention, scrolling and HTTP/HTTPS copy OK");
