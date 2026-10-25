@@ -330,13 +330,15 @@ applyStatic();
 let state = null, showForm = false, timer = null, sending = false, uploading = false;
 let pendingInstall = null;
 let expandedApps = new Set(), expandedProfiles = new Set(), showPreview = false;
+let autoDraftDirty = false, refreshInFlight = false, refreshQueued = false;
 
-async function api(path, body) {
+async function api(path, body, signal) {
   const opt = body === undefined ? {} : {
     method: "POST",
     headers: { "Content-Type": "application/json", "X-Requested-With": "altkeeper" },
     body: JSON.stringify(body),
   };
+  if (signal) opt.signal = signal;
   const r = await fetch(path, opt);
   let j = {};
   try { j = await r.json(); } catch (_) {}
@@ -355,6 +357,16 @@ function days(n) {
   return "expires in " + n + (n === 1 ? " day" : " days");
 }
 function profilesText(n) { return locale === "ko" ? "프로파일 " + n + "개" : n + " profiles"; }
+
+function syncAutoRenewInputs(auto) {
+  if (autoDraftDirty) return;
+  $("auto-time").value = auto.time || "06:00";
+  $("auto-days").value = String(auto.min_days || 3);
+}
+for (const id of ["auto-time", "auto-days"]) {
+  $(id).addEventListener("input", () => { autoDraftDirty = true; });
+  $(id).addEventListener("change", () => { autoDraftDirty = true; });
+}
 
 function li(cls, ...kids) {
   const e = document.createElement("li");
@@ -484,8 +496,7 @@ function render(s) {
       }) : null;
   $("auto-next").textContent = auto.enabled ? (auto.retry_at ? t("Retry: ") : t("Next: ")) +
     (next || t("checking")) + " KST" : t("Automatic renewal disabled");
-  if (document.activeElement !== $("auto-time")) $("auto-time").value = auto.time || "06:00";
-  if (document.activeElement !== $("auto-days")) $("auto-days").value = String(auto.min_days || 3);
+  syncAutoRenewInputs(auto);
   $("auto-enable").textContent = auto.enabled ? t("Save settings") : t("Enable auto-renew");
   $("auto-enable").disabled = !s.account.password_saved || !s.account.team;
   $("auto-disable").hidden = !auto.enabled;
@@ -625,15 +636,31 @@ function render(s) {
 
 async function refresh() {
   clearTimeout(timer);
-  let fast = false;
-  try {
-    render(await api("/api/state"));
-    fast = state.busy || state.phone.checking || state.login.phase === "working" ||
-           state.login.phase === "needs_code" || state.job.running;
-  } catch (e) {
-    banner("phone-error", t("Cannot reach the server: ") + e.message, "bad");
+  if (refreshInFlight) {
+    refreshQueued = true;
+    return;
   }
-  timer = setTimeout(refresh, fast ? 1500 : 15000);
+  refreshInFlight = true;
+  let fast = false;
+  const controller = new AbortController();
+  const timeout = setTimeout(() => controller.abort(), 10000);
+  try {
+    const latest = await api("/api/state", undefined, controller.signal);
+    // A user action requested a newer snapshot while this one was in flight.
+    if (!refreshQueued) {
+      render(latest);
+      fast = latest.busy || latest.phone.checking || latest.login.phase === "working" ||
+             latest.login.phase === "needs_code" || latest.job.running;
+    }
+  } catch (e) {
+    if (!refreshQueued) banner("phone-error", t("Cannot reach the server: ") + e.message, "bad");
+  } finally {
+    clearTimeout(timeout);
+    refreshInFlight = false;
+    const again = refreshQueued;
+    refreshQueued = false;
+    timer = setTimeout(refresh, again ? 0 : fast ? 1500 : 15000);
+  }
 }
 
 async function act(fn, errId) {
@@ -643,15 +670,21 @@ async function act(fn, errId) {
 
 $("auto-enable").onclick = () => {
   banner("auto-error", "");
-  act(() => api("/api/auto-renew", {
-    enabled:true, time:$("auto-time").value, min_days:Number($("auto-days").value)
-  }), "auto-error");
+  act(async () => {
+    await api("/api/auto-renew", {
+      enabled:true, time:$("auto-time").value, min_days:Number($("auto-days").value)
+    });
+    autoDraftDirty = false;
+  }, "auto-error");
 };
 $("auto-disable").onclick = () => {
   banner("auto-error", "");
-  act(() => api("/api/auto-renew", {
-    enabled:false, time:$("auto-time").value, min_days:Number($("auto-days").value)
-  }), "auto-error");
+  act(async () => {
+    await api("/api/auto-renew", {
+      enabled:false, time:$("auto-time").value, min_days:Number($("auto-days").value)
+    });
+    autoDraftDirty = false;
+  }, "auto-error");
 };
 $("discord-save").onclick = () => {
   const url = $("discord-webhook").value.trim();
@@ -819,3 +852,4 @@ refresh();
 </script>
 </body>
 </html>
+
