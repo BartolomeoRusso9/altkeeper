@@ -19,7 +19,7 @@ use std::time::{Duration, SystemTime, UNIX_EPOCH};
 use axum::{
     Json, Router,
     extract::{DefaultBodyLimit, Multipart, Request, State},
-    http::{HeaderMap, HeaderValue, Method, StatusCode, header},
+    http::{HeaderMap, HeaderValue, Method, StatusCode, Uri, header},
     middleware::{self, Next},
     response::{Html, IntoResponse, Response},
     routing::{get, post},
@@ -128,6 +128,7 @@ impl App {
     }
 
     fn push_line(&self, s: &str) {
+        crate::log::line(&format!("[web] {s}"));
         let mut g = self.lock();
         g.job.lines.push(s.to_string());
         if g.job.lines.len() > MAX_JOB_LINES {
@@ -256,14 +257,14 @@ fn load_auto_renew() -> AutoRenewConfig {
         Ok(raw) => raw,
         Err(e) if e.kind() == std::io::ErrorKind::NotFound => return AutoRenewConfig::default(),
         Err(e) => {
-            eprintln!("[auto-renew] Cannot read config ({e}); automatic renewal disabled");
+            crate::log::err(&format!("[auto-renew] Cannot read config ({e}); automatic renewal disabled"));
             return AutoRenewConfig::default();
         }
     };
     match serde_json::from_str::<AutoRenewConfig>(&raw) {
         Ok(config) if parse_kst_time(&config.time).is_some() && (1..=6).contains(&config.min_days) => config,
         _ => {
-            eprintln!("[auto-renew] Invalid schedule config; automatic renewal disabled");
+            crate::log::err("[auto-renew] Invalid schedule config; automatic renewal disabled");
             AutoRenewConfig::default()
         }
     }
@@ -305,7 +306,7 @@ fn discord_configured() -> bool {
 }
 
 fn send_discord_failure(error: &str) -> Result<(), String> {
-    let message = format!("AltKeeper: automatic renewal failed after retries.\\n{}",
+    let message = format!("AltKeeper: automatic renewal failed after retries.\n{}",
         error.chars().take(240).collect::<String>());
     send_discord_message(&message)
 }
@@ -361,7 +362,7 @@ async fn auto_renew_loop(app: Arc<App>) {
                     }
                     updated.retry_at = None;
                     if let Err(err) = save_auto_renew(&updated) {
-                        eprintln!("[auto-renew] Could not persist attempt: {err}");
+                        crate::log::err(&format!("[auto-renew] Could not persist attempt: {err}"));
                     } else {
                         let threshold = updated.min_days as i64;
                         let attempt = updated.retry_count + 1;
@@ -422,6 +423,7 @@ pub async fn serve(
         .route("/apple-touch-icon.png", get(apple_touch_icon))
         .route("/favicon-32.png", get(favicon_32))
         .route("/api/state", get(state))
+        .route("/api/logs", get(logs))
         .route("/api/check", post(check))
         .route("/api/renew", post(renew))
         .route("/api/auto-renew", post(update_auto_renew))
@@ -447,7 +449,7 @@ pub async fn serve(
     let listener = tokio::net::TcpListener::bind(bind)
         .await
         .map_err(|e| crate::tr!(format!("non riesco ad ascoltare su {bind}: {e}"), format!("cannot listen on {bind}: {e}")))?;
-    println!("{}", crate::tr!(
+    crate::log::line(&crate::tr!(
         format!("Interfaccia web su http://{bind} ({})", if app.pin.is_some() {
             "protetta da PIN: il nome utente può essere qualsiasi"
         } else { "raggiungibile solo da questo computer" }),
@@ -462,11 +464,11 @@ pub async fn serve(
     tokio::spawn(async {
         loop {
             match profile::cleanup_backups_if_due(SystemTime::now()) {
-                Ok(Some(removed)) => println!(
+                Ok(Some(removed)) => crate::log::line(&format!(
                     "[backup-cleanup] Monthly sweep: removed {removed} profiles expired over 30 days ago"
-                ),
+                )),
                 Ok(None) => {}
-                Err(e) => eprintln!("[backup-cleanup] Failed: {e}"),
+                Err(e) => crate::log::err(&format!("[backup-cleanup] Failed: {e}")),
             }
             tokio::time::sleep(Duration::from_secs(24 * 60 * 60)).await;
         }
@@ -616,6 +618,17 @@ fn json_ok() -> (StatusCode, Json<Value>) {
 }
 
 const BUSY_MSG: &str = "Another operation is already running: please wait for it to finish.";
+
+/// Le righe di log dopo `?since=N` (0 = tutte quelle in memoria), per la sezione Logs.
+async fn logs(uri: Uri) -> Json<Value> {
+    let since = uri
+        .query()
+        .and_then(|q| q.split('&').find_map(|kv| kv.strip_prefix("since=")))
+        .and_then(|v| v.parse().ok())
+        .unwrap_or(0);
+    let (seq, lines) = crate::log::since(since);
+    Json(json!({ "seq": seq, "lines": lines }))
+}
 
 async fn state(State(app): State<Arc<App>>) -> Json<Value> {
     expire_pending_ipa(&app);
@@ -1435,7 +1448,7 @@ async fn run_renew(
             }
         }
         if let Err(e) = save_auto_renew(&updated) {
-            eprintln!("[auto-renew] Could not persist retry state: {e}");
+            crate::log::err(&format!("[auto-renew] Could not persist retry state: {e}"));
             retry_message = None;
         } else {
             *config = updated;
@@ -1994,6 +2007,31 @@ fn append_log(lines: &[String], ok: bool) {
 
 #[cfg(test)]
 mod tests {
+    #[tokio::test]
+    async fn api_logs_returns_new_lines() {
+        let mine = |v: &Value| -> Vec<String> {
+            v["lines"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .filter_map(|l| l.as_str())
+                .filter(|l| l.contains("logs-api-test"))
+                .map(String::from)
+                .collect()
+        };
+        let (before, _) = crate::log::since(u64::MAX);
+        crate::log::line("logs-api-test a");
+        crate::log::line("logs-api-test b");
+        let Json(v) = logs(format!("/api/logs?since={before}").parse().unwrap()).await;
+        let got = mine(&v);
+        assert_eq!(got.len(), 2);
+        assert!(got[0].ends_with("] logs-api-test a"));
+        let seq = v["seq"].as_u64().unwrap();
+        let Json(v) = logs(format!("/api/logs?since={seq}").parse().unwrap()).await;
+        assert!(mine(&v).is_empty());
+    }
+
+
     #[test]
     fn signing_error_keeps_cause_after_an_empty_first_line() {
         let cause = "Failed to retrieve certificate identity: test cause";
@@ -2400,4 +2438,5 @@ esito: 0
         assert!(parse_history("righe senza intestazione\n", 5).is_empty());
     }
 }
+
 

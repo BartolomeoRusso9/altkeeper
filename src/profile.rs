@@ -158,7 +158,9 @@ pub fn cleanup_expired_backups(dir: &Path, now: SystemTime) -> io::Result<usize>
         let Some(stem) = path.file_stem().and_then(|s| s.to_str()) else {
             continue;
         };
-        let data = fs::read(&path)?;
+        let Ok(data) = fs::read(&path) else {
+            continue;
+        };
         let Some(p) = parse(&data) else {
             continue;
         };
@@ -284,6 +286,27 @@ mod tests {
         assert_eq!(cleanup_expired_backups(&dir, SystemTime::now()).unwrap(), 0);
     }
 
+    #[cfg(unix)]
+    #[test]
+    fn cleanup_retains_unreadable_backups_and_continues() {
+        use std::os::unix::fs::PermissionsExt;
+
+        let dir = tempfile::tempdir().unwrap();
+        let now = SystemTime::now();
+        let unreadable = dir.path().join("unreadable.mobileprovision");
+        let expired = dir.path().join("expired.mobileprovision");
+        let expiry = Some(now - Duration::from_secs(31 * 86400));
+        fs::write(&unreadable, backup_xml("unreadable", expiry)).unwrap();
+        fs::write(&expired, backup_xml("expired", expiry)).unwrap();
+        fs::set_permissions(&unreadable, fs::Permissions::from_mode(0o000)).unwrap();
+        // Root bypasses mode bits; CI runs this test as an unprivileged user.
+        if fs::read(&unreadable).is_ok() { return; }
+
+        assert_eq!(cleanup_expired_backups(dir.path(), now).unwrap(), 1);
+        assert!(unreadable.exists());
+        assert!(!expired.exists());
+    }
+
     #[test]
     fn extension_groups_do_not_swallow_unrelated_apps() {
         let bundles = [
@@ -382,3 +405,4 @@ mod tests {
         assert!(latest_by_bundle(&[]).is_empty());
     }
 }
+

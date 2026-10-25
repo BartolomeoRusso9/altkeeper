@@ -706,3 +706,24 @@ Built on [`idevice`](https://github.com/jkcoxson/idevice) (Jackson Coxson) and
 follows what [AltSign](https://github.com/rileytestut/AltSign) (Riley Testut) does, and the AltServer
 messages follow [AltStore](https://github.com/altstoreio/AltStore)'s server protocol.
 This project is licensed under the [MIT license](LICENSE).
+
+
+### Server logs and upstream reliability fixes
+
+The dashboard's **Server logs** card shows the latest 2,000 server lines, with
+KST timestamps, **Copy logs** (also on LAN HTTP), and **Clear view**. Clearing
+the view only clears the browser display. The authenticated `/api/logs?since=N`
+endpoint returns incremental lines; after a server restart the browser reloads
+the available startup lines. Hidden tabs pause log polling.
+
+Server output is also appended to `altkeeper.log` in the configured data directory.
+The file rotates at 5 MiB and keeps one previous file (`altkeeper.log.1`). Both
+files use private permissions. The existing PIN protection applies to log access.
+
+Unreadable profile backups are retained and skipped during monthly cleanup, so
+one unreadable backup does not stop the sweep. New-install display-name changes
+skip symbolic links and non-regular localized files. Discord failure notifications
+use a real newline between the heading and error detail.
+
+Selectively ported from `BartolomeoRusso9/altkeeper` PR #18 and fix commit
+`58fb793`; the Korean/English dashboard and Asia/Seoul renewal schedule remain.

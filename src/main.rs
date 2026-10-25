@@ -27,6 +27,7 @@ mod env;
 mod fsperm;
 mod i18n;
 mod install_archive;
+mod log;
 mod phone;
 mod profile;
 mod terminal;
@@ -585,6 +586,7 @@ async fn run() -> Result<(), String> {
             }
             let phone = phone_addr(opt("--phone"))?;
             web::check_options(bind, &pin)?;
+            log::init(Path::new("."));
             apple::anisette_url(env::var("ANISETTE_URL").as_deref())?;
             if flag("--altserver") {
                 let port = altserver::start(altserver_port(opt("--altserver-port"))?, phone)?;
@@ -598,10 +600,11 @@ async fn run() -> Result<(), String> {
             if let Some(dir) = opt("--dir") {
                 std::env::set_current_dir(&dir).map_err(|e| crate::tr!(format!("--dir {dir}: {e}"), format!("--dir {dir}: {e}")))?;
             }
+            log::init(Path::new("."));
             apple::anisette_url(env::var("ANISETTE_URL").as_deref())?;
             let port = altserver::start(altserver_port(opt("--port"))?, phone_addr(opt("--phone"))?)?;
             start_dnssd(&opt, port)?;
-            println!("{}", crate::tr!("AltServer attivo. Ctrl-C per fermarlo.", "AltServer running. Press Ctrl-C to stop."));
+            log::line(crate::tr!("AltServer attivo. Ctrl-C per fermarlo.", "AltServer running. Press Ctrl-C to stop."));
             tokio::select! {
                 r = tokio::signal::ctrl_c() => r.map_err(dbg)?,
                 _ = terminated() => {}
@@ -654,4 +657,5 @@ mod cli_tests {
         }
     }
 }
+
 

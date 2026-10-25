@@ -326,8 +326,9 @@ impl Application {
                 let entry = entry?;
                 let localized = entry.path();
                 if localized.extension().is_none_or(|ext| ext != "lproj") { continue; }
+                if !entry.metadata().is_ok_and(|meta| meta.is_dir()) { continue; }
                 let path = localized.join("InfoPlist.strings");
-                if !isideload_vfs::fs::metadata(&path).is_ok() { continue; }
+                if !isideload_vfs::fs::symlink_metadata(&path).is_ok_and(|meta| meta.is_file()) { continue; }
                 let old = isideload_vfs::fs::read(&path)?;
                 if old.len() > 1024 * 1024 {
                     bail!(SideloadError::InvalidBundle("Localized display-name file too large".into()));
@@ -622,3 +623,4 @@ impl std::fmt::Display for SpecialApp {
         }
     }
 }
+

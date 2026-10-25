@@ -67,7 +67,7 @@ struct Ctx {
 }
 
 fn log(msg: &str) {
-    println!("[altserver] {msg}");
+    crate::log::line(&format!("[altserver] {msg}"));
 }
 
 // ---------------------------------------------------------------------------------------------
@@ -721,3 +721,4 @@ mod tests {
         assert_eq!(out[0]["errorCode"], ERR_INVALID_REQUEST);
     }
 }
+

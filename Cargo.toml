@@ -26,6 +26,7 @@ isideload = { version = "0.4.6", default-features = false, features = [
   "fs-storage",
   "tokio-mt",
 ] }
+chrono = { version = "0.4", default-features = false, features = ["std"] }
 mdns-sd = "0.21.4"
 plist = "1"
 rpassword = "7"
@@ -47,3 +48,4 @@ isideload = { path = "vendor/isideload" }
 opt-level = "s"
 lto = true
 strip = true
+

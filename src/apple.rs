@@ -196,7 +196,7 @@ pub async fn anisette_for_altstore(dir: &Path) -> Result<serde_json::Value, Stri
     match anisette_for_altstore_once(dir).await {
         Err(e) if needs_reprovision(&e) => {
             if retire_anisette_state(dir)? {
-                println!("{}", crate::tr!(
+                crate::log::line(&crate::tr!(
                     format!("[anisette] il server non riconosce l'identità salvata ({e}); la metto da parte in state/anisette_state.stale e ne creo una nuova"),
                     format!("[anisette] server did not recognize the saved identity ({e}); moved it to state/anisette_state.stale and provisioning a new one")
                 ));
