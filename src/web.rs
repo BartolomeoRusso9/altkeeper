@@ -30,6 +30,8 @@ use serde_json::{Value, json};
 use crate::{PAIRING_FILE, apple, phone, profile};
 
 const INDEX_HTML: &str = include_str!("web/index.html");
+const APPLE_TOUCH_ICON: &[u8] = include_bytes!("web/apple-touch-icon.png");
+const FAVICON_32: &[u8] = include_bytes!("web/favicon-32.png");
 const RENEW_LOG: &str = "renew.log";
 const AUTO_RENEW_CONFIG: &str = "state/auto-renew.json";
 const DISCORD_WEBHOOK_FILE: &str = "state/discord-webhook";
@@ -301,14 +303,18 @@ fn discord_configured() -> bool {
 }
 
 fn send_discord_failure(error: &str) -> Result<(), String> {
+    let message = format!("AltKeeper: automatic renewal failed after retries.\\n{}",
+        error.chars().take(240).collect::<String>());
+    send_discord_message(&message)
+}
+
+fn send_discord_message(message: &str) -> Result<(), String> {
     use std::io::Write;
     let url = std::fs::read_to_string(DISCORD_WEBHOOK_FILE).map_err(crate::phone::dbg)?;
     let url = url.trim();
     if !validate_discord_webhook(url) { return Err("Invalid Discord webhook configuration".into()); }
     // Pass the sensitive webhook URL via stdin (curl config), not process arguments.
-    let msg = format!("AltKeeper: automatic renewal failed after retries.\\n{}",
-        error.chars().take(240).collect::<String>());
-    let body = json!({ "content": msg }).to_string();
+    let body = json!({ "content": message }).to_string();
     let mut child = std::process::Command::new("curl")
         .args(["--fail", "--silent", "--show-error", "--max-time", "12",
             "--request", "POST", "--header", "Content-Type: application/json",
@@ -409,11 +415,14 @@ pub async fn serve(
     });
     let router = Router::new()
         .route("/", get(index))
+        .route("/apple-touch-icon.png", get(apple_touch_icon))
+        .route("/favicon-32.png", get(favicon_32))
         .route("/api/state", get(state))
         .route("/api/check", post(check))
         .route("/api/renew", post(renew))
         .route("/api/auto-renew", post(update_auto_renew))
         .route("/api/discord", post(update_discord))
+        .route("/api/discord/test", post(test_discord))
         .route("/api/profile/remove", post(remove_profile))
         .route("/api/profile/restore", post(restore_profile))
         .route(
@@ -461,11 +470,16 @@ pub async fn serve(
 // ---------------------------------------------------------------------------------------------
 
 async fn guard(State(app): State<Arc<App>>, req: Request, next: Next) -> Response {
-    if app.pin.is_none() && !host_is_local(req.headers()) {
+    // iOS Safari can fetch favorite icons separately from the authenticated tab,
+    // so only these two fixed, non-sensitive PNGs are served without the PIN.
+    let public_icon = req.method() == Method::GET
+        && matches!(req.uri().path(), "/apple-touch-icon.png" | "/favicon-32.png");
+    if !public_icon && app.pin.is_none() && !host_is_local(req.headers()) {
         return (StatusCode::FORBIDDEN, "host non ammesso").into_response();
     }
-    if let Some(pin) = &app.pin {
-        if !basic_password_ok(req.headers(), pin) {
+    if !public_icon {
+        if let Some(pin) = &app.pin {
+            if !basic_password_ok(req.headers(), pin) {
             // Rallenta chi prova PIN a caso.
             tokio::time::sleep(Duration::from_secs(1)).await;
             let mut res = (StatusCode::UNAUTHORIZED, "serve il PIN").into_response();
@@ -474,6 +488,7 @@ async fn guard(State(app): State<Arc<App>>, req: Request, next: Next) -> Respons
                 HeaderValue::from_static("Basic realm=\"altkeeper\""),
             );
             return res;
+            }
         }
     }
     if req.method() == Method::POST
@@ -483,14 +498,16 @@ async fn guard(State(app): State<Arc<App>>, req: Request, next: Next) -> Respons
     }
     let mut res = next.run(req).await;
     let h = res.headers_mut();
-    h.insert(header::CACHE_CONTROL, HeaderValue::from_static("no-store"));
+    h.insert(header::CACHE_CONTROL, HeaderValue::from_static(
+        if public_icon { "public, max-age=86400" } else { "no-store" }
+    ));
     h.insert(header::X_CONTENT_TYPE_OPTIONS, HeaderValue::from_static("nosniff"));
     h.insert(header::X_FRAME_OPTIONS, HeaderValue::from_static("DENY"));
     h.insert(header::REFERRER_POLICY, HeaderValue::from_static("no-referrer"));
     h.insert(
         header::CONTENT_SECURITY_POLICY,
         HeaderValue::from_static(
-            "default-src 'none'; connect-src 'self'; style-src 'unsafe-inline'; \
+            "default-src 'none'; connect-src 'self'; img-src 'self' data:; style-src 'unsafe-inline'; \
              script-src 'unsafe-inline'; base-uri 'none'; form-action 'none'",
         ),
     );
@@ -571,6 +588,13 @@ pub(crate) fn b64_decode(s: &str) -> Option<Vec<u8>> {
 async fn index() -> Html<&'static str> {
     Html(INDEX_HTML)
 }
+
+fn png_response(bytes: &'static [u8]) -> Response {
+    ([(header::CONTENT_TYPE, "image/png")], bytes).into_response()
+}
+
+async fn apple_touch_icon() -> Response { png_response(APPLE_TOUCH_ICON) }
+async fn favicon_32() -> Response { png_response(FAVICON_32) }
 
 fn json_err(status: StatusCode, msg: &str) -> (StatusCode, Json<Value>) {
     (status, Json(json!({ "error": msg })))
@@ -778,6 +802,23 @@ async fn update_discord(
         return json_err(StatusCode::INTERNAL_SERVER_ERROR, "Could not save webhook");
     }
     json_ok()
+}
+
+/// User-initiated delivery check; never creates or renews a profile.
+async fn test_discord() -> (StatusCode, Json<Value>) {
+    if !discord_configured() {
+        return json_err(StatusCode::BAD_REQUEST, "Configure a Discord webhook first.");
+    }
+    // curl is synchronous; leave Tokio free while we wait for Discord.
+    let sent = tokio::task::spawn_blocking(|| {
+        send_discord_message(
+            "AltKeeper test notification: Discord webhook is working. No renewal was performed."
+        )
+    }).await;
+    match sent {
+        Ok(Ok(())) => json_ok(),
+        _ => json_err(StatusCode::BAD_GATEWAY, "Discord test delivery failed. Check webhook permissions and network access."),
+    }
 }
 
 #[derive(Deserialize)]
@@ -1726,6 +1767,14 @@ mod tests {
             Some((day + 1) * DAY_SECS + 6 * 3600 - KST_OFFSET_SECS));
         conf.enabled = false;
         assert_eq!(next_auto_run(&conf, now_secs), None);
+    }
+
+    #[test]
+    fn safari_icons_are_real_pngs() {
+        for icon in [APPLE_TOUCH_ICON, FAVICON_32] {
+            assert!(icon.starts_with(b"\\x89PNG\\r\\n\\x1a\\n"));
+            assert!(icon.len() > 100);
+        }
     }
 
     #[test]
