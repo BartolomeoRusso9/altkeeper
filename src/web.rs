@@ -1144,17 +1144,11 @@ async fn install(
     json_ok()
 }
 
-#[derive(Deserialize, Default)]
-struct InspectInstallQuery {
-    #[serde(default)]
-    customize: bool,
-}
-
 /// Keep old clients' /api/install route intact. The web UI uses inspect/confirm
 /// to avoid signing or registering unwanted app extensions.
 async fn inspect_install(
     State(app): State<Arc<App>>,
-    axum::extract::Query(query): axum::extract::Query<InspectInstallQuery>,
+    uri: axum::http::Uri,
     mut multipart: Multipart,
 ) -> (StatusCode, Json<Value>) {
     match apple::read_account(Path::new(".")) {
@@ -1175,7 +1169,9 @@ async fn inspect_install(
         Err(e) => return json_err(StatusCode::UNPROCESSABLE_ENTITY,
             &format!("Cannot inspect the IPA: {e}")),
     };
-    if manifest.extensions.is_empty() && !query.customize {
+    let customize = uri.query().is_some_and(|q|
+        q.split('&').any(|part| part == "customize=true"));
+    if manifest.extensions.is_empty() && !customize {
         app.lock().job = JobView {
             kind: "install".into(), running: true,
             lines: vec!["IPA uploaded (no extensions). Signing and installing…".into()],
