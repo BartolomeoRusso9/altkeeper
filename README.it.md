@@ -106,6 +106,15 @@ i JSON o la pagina web. I comandi del menu 2FA restano `d`, `r` (se disponibile)
 
 ### 1. Ottieni il programma
 
+**Già compilato:** ogni [release su GitHub](https://github.com/BartolomeoRusso9/altkeeper/releases) ha
+`altkeeper-<versione>-linux-x86_64.tar.gz`, `-linux-aarch64`, `-macos-aarch64` (Apple Silicon) e
+`-macos-x86_64` (Intel), ciascuno con il suo file `.sha256` (verifica con `sha256sum -c`). Decomprimi e
+usa il binario `altkeeper`. Le build Linux richiedono glibc 2.35 o più recente; su sistemi più vecchi
+o Alpine usa Docker o compila da te. Le build macOS non sono firmate: se Gatekeeper le blocca, lancia
+`xattr -d com.apple.quarantine altkeeper`. Si aggiorna da solo solo l'`.exe` di Windows.
+
+**Oppure compilalo tu:**
+
 ```sh
 git clone https://github.com/BartolomeoRusso9/altkeeper
 cd altkeeper
@@ -358,9 +367,9 @@ end-to-end.
    recenti. `--console` tiene la console, `--dir` sceglie la cartella dei dati (di default quella
    dell'`.exe`).
 
-   L'icona controlla anche, una volta al giorno, le release GitHub del fork; *Update now* scarica il
+   L'icona controlla anche, una volta al giorno, le release GitHub; *Update now* scarica il
    nuovo `altkeeper.exe`, ne verifica lo SHA-256, si riavvia e torna alla versione vecchia se la
-   nuova non parte. Le release le compila `.github/workflows/release.yml` quando pubblichi un tag
+   nuova non parte. Le release (Windows, Linux e macOS) le compila `.github/workflows/release.yml` quando pubblichi un tag
    uguale alla `version` di `Cargo.toml` (per esempio `v0.3.0`).
 
    Ogni riga del server (AltServer, pagina web, DNS-SD) viene scritta con data e ora anche in

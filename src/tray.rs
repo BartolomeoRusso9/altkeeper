@@ -25,7 +25,7 @@ pub enum UserEvent {
     Menu(MenuEvent),
     ServerFailed(String),
     Status { reachable: bool, tip: String },
-    Updates { fork: Option<crate::update::Release>, upstream: Option<String> },
+    Updates(Option<crate::update::Release>),
     Restart,
     UpdateFailed(String),
 }
@@ -48,23 +48,18 @@ pub fn wait_for_exit(pid: u32) {
     }
 }
 
-fn open_in_browser(url: &str) {
-    let _ = std::process::Command::new("explorer").arg(url).spawn();
-}
-
-/// Controlla fork e progetto originale; `manual` = chiesto dal menu, quindi si risponde anche
-/// quando non c'è niente di nuovo.
+/// Controlla le release; `manual` = chiesto dal menu, quindi si risponde anche quando non c'è
+/// niente di nuovo.
 fn check_updates(proxy: &EventLoopProxy<UserEvent>, manual: bool) {
-    let fork = crate::update::check();
-    let upstream = crate::update::upstream_newer();
-    for e in [fork.as_ref().err(), upstream.as_ref().err()].into_iter().flatten() {
+    let latest = crate::update::check();
+    if let Err(e) = &latest {
         crate::log::err(&format!("[update] {e}"));
     }
-    let (fork, upstream) = (fork.ok().flatten(), upstream.ok().flatten());
-    if manual && fork.is_none() {
+    let latest = latest.ok().flatten();
+    if manual && latest.is_none() {
         toast(&format!("AltKeeperPlus {} is up to date.", env!("CARGO_PKG_VERSION")));
     }
-    let _ = proxy.send_event(UserEvent::Updates { fork, upstream });
+    let _ = proxy.send_event(UserEvent::Updates(latest));
 }
 
 /// Stacca il processo dal terminale: lanciato con un doppio clic, la finestra nera si chiude.
@@ -313,7 +308,6 @@ pub fn run(bind: SocketAddr, dir: &Path, start: impl FnOnce(EventLoopProxy<UserE
         CheckMenuItem::new("Start with Windows", true, autostart_enabled_as(RUN_VALUE), None);
     let check = MenuItem::new("Check for updates", true, None);
     let update_now = MenuItem::new("Up to date", false, None);
-    let upstream = MenuItem::new("Upstream: nothing new", false, None);
     let quit = MenuItem::new("Quit", true, None);
     let menu = Menu::new();
     let _ = menu.append_items(&[
@@ -323,7 +317,6 @@ pub fn run(bind: SocketAddr, dir: &Path, start: impl FnOnce(EventLoopProxy<UserE
         &autostart,
         &check,
         &update_now,
-        &upstream,
         &PredefinedMenuItem::separator(),
         &quit,
     ]);
@@ -397,8 +390,6 @@ pub fn run(bind: SocketAddr, dir: &Path, start: impl FnOnce(EventLoopProxy<UserE
                             });
                         });
                     }
-                } else if e.id == upstream.id() {
-                    open_in_browser(crate::update::UPSTREAM_COMMITS);
                 } else if e.id == quit.id() {
                     crate::altserver::stop();
                     std::process::exit(0);
@@ -408,8 +399,8 @@ pub fn run(bind: SocketAddr, dir: &Path, start: impl FnOnce(EventLoopProxy<UserE
                 let _ = tray.set_icon(Some(logo(reachable)));
                 let _ = tray.set_tooltip(Some(tip));
             }
-            Event::UserEvent(UserEvent::Updates { fork, upstream: up }) => {
-                if let Some(r) = &fork {
+            Event::UserEvent(UserEvent::Updates(latest)) => {
+                if let Some(r) = &latest {
                     update_now.set_text(format!("Update now to {}", r.tag));
                     update_now.set_enabled(true);
                     if announced != r.tag {
@@ -420,11 +411,7 @@ pub fn run(bind: SocketAddr, dir: &Path, start: impl FnOnce(EventLoopProxy<UserE
                         announced = r.tag.clone();
                     }
                 }
-                pending = fork.or(pending.take());
-                if let Some(tag) = up {
-                    upstream.set_text(format!("Upstream has new changes ({tag}): sync the fork"));
-                    upstream.set_enabled(true);
-                }
+                pending = latest.or(pending.take());
             }
             Event::UserEvent(UserEvent::Restart) => {
                 crate::log::line("[update] restarting with the new version");

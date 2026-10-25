@@ -103,6 +103,15 @@ and server logs, **not** the HTML web page, protocol or JSON. The same 2FA menu 
 
 ### 1. Get the program
 
+**Prebuilt:** each [GitHub release](https://github.com/BartolomeoRusso9/altkeeper/releases) has
+`altkeeper-<version>-linux-x86_64.tar.gz`, `-linux-aarch64`, `-macos-aarch64` (Apple Silicon) and
+`-macos-x86_64` (Intel), each with a `.sha256` file (check with `sha256sum -c`). Unpack it and use the
+`altkeeper` binary inside. The Linux builds need glibc 2.35 or newer; on older systems or Alpine, use
+Docker or build it yourself. The macOS builds are not signed: if Gatekeeper blocks it, run
+`xattr -d com.apple.quarantine altkeeper`. Only the Windows `.exe` updates itself.
+
+**Or build it yourself:**
+
 ```sh
 git clone https://github.com/BartolomeoRusso9/altkeeper
 cd altkeeper
@@ -437,10 +446,10 @@ prove Windows 11, other shell hosts, AltServer installation or unattended renewa
    WebView2 runtime, which Windows 11 and recent Windows 10 already have. `--console` keeps the
    console, `--dir` chooses the data folder (default: the folder of the `.exe`).
 
-   The icon also checks the GitHub releases of the fork once a day; *Update now* downloads the new
+   The icon also checks the GitHub releases once a day; *Update now* downloads the new
    `altkeeper.exe`, verifies its SHA-256, restarts, and goes back to the old version if the new
-   one does not start. Releases are built by `.github/workflows/release.yml` when you push a tag
-   equal to the `version` in `Cargo.toml` (for example `v0.3.0`).
+   one does not start. Releases (Windows, Linux and macOS) are built by `.github/workflows/release.yml` when you push a
+   tag equal to the `version` in `Cargo.toml` (for example `v0.3.0`).
 
    Every server line (AltServer, web page, DNS-SD) is also written, with date and time, to
    `altkeeper.log` (rotated at 5 MB) and shown in the **Logs** section of the web page.

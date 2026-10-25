@@ -1,5 +1,9 @@
-# Compila altkeeper.exe per Windows e lo pubblica in una GitHub Release, con il suo SHA-256.
-# L'aggiornamento dall'icona nella barra di sistema scarica proprio questi due file.
+# Compila AltKeeper per Windows, Linux e macOS e pubblica tutto in una GitHub Release.
+#
+# - Windows: `altkeeper.exe` + `altkeeper.exe.sha256`. L'aggiornamento dall'icona nella barra di
+#   sistema scarica proprio questi due file: i nomi non vanno cambiati.
+# - Linux (x86-64 e arm64) e macOS (Apple Silicon e Intel): `altkeeper-<tag>-<sistema>-<arch>.tar.gz`
+#   con il suo `.sha256`. Sono download manuali: l'auto-aggiornamento è solo per Windows.
 #
 # Si lancia con un tag, per esempio: git tag v0.3.1 && git push origin v0.3.1
 # Il numero del tag deve coincidere con `version` in Cargo.toml.
@@ -10,29 +14,92 @@ on:
     tags: ["v*"]
 
 jobs:
-  windows:
-    runs-on: windows-latest
+  build:
+    strategy:
+      fail-fast: true
+      matrix:
+        include:
+          - name: windows
+            runner: windows-latest
+            test: true
+          # ubuntu-22.04: glibc 2.35, così il binario gira anche su distribuzioni non recentissime.
+          - name: linux-x86_64
+            runner: ubuntu-22.04
+            test: true
+          - name: linux-aarch64
+            runner: ubuntu-22.04-arm
+            test: true
+          - name: macos-aarch64
+            runner: macos-latest
+            test: false
+          - name: macos-x86_64
+            runner: macos-15-intel
+            test: false
+    runs-on: ${{ matrix.runner }}
     permissions:
-      contents: write
+      contents: read
+    defaults:
+      run:
+        shell: bash
     steps:
       - uses: actions/checkout@v7
       - uses: dtolnay/rust-toolchain@stable
       - uses: Swatinem/rust-cache@v2
       - name: Check that the tag matches Cargo.toml
-        shell: pwsh
         run: |
-          $version = (Select-String -Path Cargo.toml -Pattern '^version = "(.+)"').Matches[0].Groups[1].Value
-          if ("v$version" -ne "${{ github.ref_name }}") { throw "tag ${{ github.ref_name }} != Cargo.toml v$version" }
-      - run: cargo test --locked
+          version=$(sed -n 's/^version = "\(.*\)"/\1/p' Cargo.toml | head -n1)
+          if [ "v$version" != "${GITHUB_REF_NAME}" ]; then
+            echo "tag ${GITHUB_REF_NAME} != Cargo.toml v$version"; exit 1
+          fi
+      - name: Test
+        if: matrix.test
+        run: cargo test --locked
       - run: cargo build --release --locked
-      - name: SHA-256
-        shell: pwsh
+      - name: Package (Windows)
+        if: matrix.name == 'windows'
         run: |
-          Copy-Item target/release/altkeeper.exe altkeeper.exe
-          $hash = (Get-FileHash altkeeper.exe -Algorithm SHA256).Hash.ToLower()
-          Set-Content -Path altkeeper.exe.sha256 -Value "$hash  altkeeper.exe" -NoNewline
+          mkdir dist
+          cp target/release/altkeeper.exe dist/altkeeper.exe
+          cd dist
+          hash=$(sha256sum altkeeper.exe | cut -d' ' -f1)
+          printf '%s  altkeeper.exe' "$hash" > altkeeper.exe.sha256
+      - name: Package (Linux, macOS)
+        if: matrix.name != 'windows'
+        run: |
+          pkg="altkeeper-${GITHUB_REF_NAME}-${{ matrix.name }}"
+          mkdir -p "dist/$pkg"
+          cp target/release/altkeeper LICENSE README.md README.it.md "dist/$pkg/"
+          cp -r examples "dist/$pkg/examples"
+          cd dist
+          tar -czf "$pkg.tar.gz" "$pkg"
+          rm -rf "$pkg"
+          if command -v sha256sum >/dev/null; then
+            sha256sum "$pkg.tar.gz" > "$pkg.tar.gz.sha256"
+          else
+            shasum -a 256 "$pkg.tar.gz" > "$pkg.tar.gz.sha256"
+          fi
+      - uses: actions/upload-artifact@v4
+        with:
+          name: dist-${{ matrix.name }}
+          path: dist/*
+          if-no-files-found: error
+          retention-days: 1
+
+  publish:
+    # Una sola release, creata solo se tutte le build sono riuscite.
+    needs: [build]
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          path: dist
+          pattern: dist-*
+          merge-multiple: true
+      - name: List files
+        run: ls -l dist
       - uses: softprops/action-gh-release@v2
         with:
-          files: |
-            altkeeper.exe
-            altkeeper.exe.sha256
+          files: dist/*
+          fail_on_unmatched_files: true

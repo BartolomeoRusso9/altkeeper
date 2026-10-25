@@ -1,17 +1,12 @@
-//! Controllo degli aggiornamenti sulle release GitHub del fork (e, come promemoria, su quelle
-//! del progetto originale). Solo Windows: lo usa l'icona nella barra di sistema.
+//! Controllo e installazione degli aggiornamenti dalle release GitHub di AltKeeper.
+//! Solo Windows: lo usa l'icona nella barra di sistema.
 
 use std::path::Path;
 use std::time::Duration;
 
 use serde_json::Value;
 
-const FORK_LATEST: &str = "https://api.github.com/repos/WazeJinx/AltKeeperPlus/releases/latest";
-// Il progetto originale non pubblica release: si guarda l'ultimo commit su main.
-const UPSTREAM_HEAD: &str = "https://api.github.com/repos/BartolomeoRusso9/altkeeper/commits/main";
-pub const UPSTREAM_COMMITS: &str = "https://github.com/BartolomeoRusso9/altkeeper/commits/main";
-/// Commit del progetto originale su cui si basa questo fork (da aggiornare dopo ogni sync).
-const UPSTREAM_BASE: &str = "940d315413451cee4edd4f14a3c4f85892312791";
+const LATEST: &str = "https://api.github.com/repos/BartolomeoRusso9/altkeeper/releases/latest";
 pub const EXE_ASSET: &str = "altkeeper.exe";
 pub const SHA_ASSET: &str = "altkeeper.exe.sha256";
 
@@ -58,7 +53,7 @@ pub fn parse_release(v: &Value) -> Option<Release> {
 
 pub fn client() -> Result<reqwest::blocking::Client, String> {
     reqwest::blocking::Client::builder()
-        .user_agent(concat!("AltKeeperPlus/", env!("CARGO_PKG_VERSION")))
+        .user_agent(concat!("AltKeeper/", env!("CARGO_PKG_VERSION")))
         .timeout(Duration::from_secs(20))
         .build()
         .map_err(|e| e.to_string())
@@ -76,21 +71,12 @@ fn get_json(url: &str) -> Result<Option<Value>, String> {
         .map_err(|e| format!("update check failed: {e}"))
 }
 
-/// La release del fork più nuova di quella in uso, se c'è.
+/// L'ultima release, se è più nuova di quella in uso.
 pub fn check() -> Result<Option<Release>, String> {
-    let v = get_json(FORK_LATEST)?;
+    let v = get_json(LATEST)?;
     Ok(v.as_ref()
         .and_then(parse_release)
         .filter(|r| newer(env!("CARGO_PKG_VERSION"), &r.tag)))
-}
-
-/// I primi 7 caratteri dell'ultimo commit del progetto originale, se non è la base del fork.
-pub fn upstream_newer() -> Result<Option<String>, String> {
-    let v = get_json(UPSTREAM_HEAD)?;
-    Ok(v.as_ref()
-        .and_then(|v| v["sha"].as_str())
-        .filter(|sha| *sha != UPSTREAM_BASE)
-        .map(|sha| sha.chars().take(7).collect()))
 }
 
 /// Nome dell'exe precedente dopo un aggiornamento, finché quello nuovo non parte bene.
@@ -234,15 +220,14 @@ mod tests {
     #[ignore = "network"]
     fn live_check() {
         rustls::crypto::ring::default_provider().install_default().ok();
-        println!("fork: {:?}", check());
-        println!("upstream: {:?}", upstream_newer());
+        println!("latest: {:?}", check());
     }
 
     #[test]
     fn parse_release_json() {
         let v = json!({
             "tag_name": "v0.2.0-plus.2",
-            "html_url": "https://github.com/WazeJinx/AltKeeperPlus/releases/tag/v0.2.0-plus.2",
+            "html_url": "https://github.com/BartolomeoRusso9/altkeeper/releases/tag/v0.2.0-plus.2",
             "assets": [
                 { "name": "altkeeper.exe", "browser_download_url": "https://x/altkeeper.exe" },
                 { "name": "altkeeper.exe.sha256", "browser_download_url": "https://x/altkeeper.exe.sha256" },
