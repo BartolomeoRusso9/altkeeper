@@ -16,8 +16,9 @@ use rootcause::option_ext::OptionExt;
 use rootcause::prelude::*;
 use sha1::Digest;
 use sha2::Sha256;
-use std::io::Write;
-use std::path::PathBuf;
+use std::collections::HashSet;
+use std::io::{Read, Write};
+use std::path::{Path, PathBuf};
 use tracing::{info, warn};
 use zip::ZipArchive;
 
@@ -26,6 +27,55 @@ static ALT_PAIRING_FILE: &str = "ALTPairingFile.dat";
 pub struct Application {
     pub bundle: Bundle,
     //pub temp_path: PathBuf,
+}
+
+/// The direct app extensions found in an IPA, before any Apple sign-in or unpacking.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct IpaExtensionInfo {
+    pub bundle_id: String,
+    pub name: String,
+}
+
+/// Read only each extension's Info.plist from the ZIP central directory.
+/// Avoid unpacking potentially large IPAs merely to show install choices.
+pub fn inspect_ipa_extensions(path: &Path) -> Result<Vec<IpaExtensionInfo>, Report> {
+    let file = File::open(path).context("Could not open IPA for inspection")?;
+    let mut archive = ZipArchive::new(file).context("IPA is not a valid ZIP archive")?;
+    let mut result = Vec::new();
+    let mut ids = HashSet::new();
+    for i in 0..archive.len() {
+        let mut entry = archive.by_index(i)?;
+        let parts: Vec<_> = entry.name().split('/').collect();
+        if parts.len() != 5 || parts[0] != "Payload"
+            || !parts[1].ends_with(".app") || parts[2] != "PlugIns"
+            || !parts[3].ends_with(".appex") || parts[4] != "Info.plist"
+        {
+            continue;
+        }
+        if entry.size() > 512 * 1024 {
+            bail!(SideloadError::InvalidBundle("Extension Info.plist exceeds 512 KiB".into()));
+        }
+        let mut bytes = Vec::new();
+        entry.read_to_end(&mut bytes)?;
+        let info: plist::Dictionary = plist::from_bytes(&bytes)
+            .context("Could not parse extension Info.plist")?;
+        let id = info.get("CFBundleIdentifier")
+            .and_then(|v| v.as_string())
+            .ok_or_report()
+            .context("Extension is missing CFBundleIdentifier")?
+            .to_string();
+        if !ids.insert(id.clone()) {
+            bail!(SideloadError::InvalidBundle("Duplicate extension bundle ID".into()));
+        }
+        let name = info.get("CFBundleDisplayName")
+            .or_else(|| info.get("CFBundleName"))
+            .and_then(|v| v.as_string())
+            .unwrap_or(parts[3].trim_end_matches(".appex"))
+            .to_string();
+        result.push(IpaExtensionInfo { bundle_id: id, name });
+    }
+    result.sort_by(|a, b| a.bundle_id.cmp(&b.bundle_id));
+    Ok(result)
 }
 
 impl Application {
@@ -106,6 +156,32 @@ impl Application {
         Ok(Application {
             bundle, /*temp_path*/
         })
+    }
+
+    /// Exclude unchecked .appex bundles before registering App IDs or signing.
+    /// This mutates only the extracted temporary copy, never the original IPA.
+    pub fn retain_extensions(&mut self, keep_ids: &[String]) -> Result<(), Report> {
+        let keep: HashSet<&str> = keep_ids.iter().map(String::as_str).collect();
+        let known: HashSet<&str> = self.bundle.app_extensions().iter()
+            .filter_map(|e| e.bundle_identifier()).collect();
+        for id in &keep {
+            if !known.contains(id) {
+                bail!(SideloadError::InvalidBundle(
+                    format!("Selected extension is not present in the IPA: {id}"),
+                ));
+            }
+        }
+        let unwanted: Vec<PathBuf> = self.bundle.app_extensions().iter()
+            .filter(|e| !e.bundle_identifier().is_some_and(|id| keep.contains(id)))
+            .map(|e| e.bundle_dir.clone()).collect();
+        for path in &unwanted {
+            isideload_vfs::fs::remove_dir_all(path)
+                .context("Could not remove an excluded extension")?;
+        }
+        self.bundle.app_extensions.retain(|e| {
+            e.bundle_identifier().is_some_and(|id| keep.contains(id))
+        });
+        Ok(())
     }
 
     pub fn get_special_app(&self) -> Option<SpecialApp> {
