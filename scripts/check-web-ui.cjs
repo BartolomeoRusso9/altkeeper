@@ -167,3 +167,92 @@ async function checkDashboardState() {
 }
 checkDashboardState().catch(error => { console.error(error); process.exitCode = 1; });
 
+// Exercise restart recovery, failure retries, bounded output and hidden tabs.
+async function checkLogPolling() {
+  const view = { textContent:"before restart", scrollTop:0, clientHeight:100, scrollHeight:100 };
+  const requests = [], responses = [], timers = [], pendingTimers = new Map();
+  let id = 0;
+  const document = { hidden:false };
+  const context = vm.createContext({
+    $: name => { assert.equal(name, "logs-view"); return view; }, document,
+    AbortController,
+    api: async name => {
+      requests.push(name);
+      const response = responses.shift();
+      if (response instanceof Error) throw response;
+      assert(response, "unexpected log request");
+      return response;
+    },
+    setTimeout: (_fn, delay) => { timers.push(delay); pendingTimers.set(++id, delay); return id; },
+    clearTimeout: id => pendingTimers.delete(id),
+  });
+  const poll = embedded[1].match(/async function pollLogs\(\) \{[\s\S]*?\r?\n\}/);
+  assert(poll);
+  vm.runInContext('let logSeq = 100;\n' + poll[0], context);
+  responses.push({seq:2,lines:[]}, {seq:3,lines:["startup","ready","listening"]});
+  await vm.runInContext('pollLogs()', context);
+  assert.deepEqual(requests.splice(0), ["/api/logs?since=100", "/api/logs?since=0"]);
+  assert.equal(view.textContent, "before restart\nstartup\nready\nlistening");
+  assert.equal(vm.runInContext('logSeq', context), 3);
+  assert.equal(view.scrollTop, view.scrollHeight);
+
+  view.scrollTop = 10; view.scrollHeight = 1000;
+  responses.push({seq:4,lines:["next"]});
+  await vm.runInContext('pollLogs()', context);
+  assert.deepEqual(requests.splice(0), ["/api/logs?since=3"]);
+  assert.equal(view.scrollTop, 10, "polling must not disturb a reader scrolling back");
+
+  responses.push({seq:1,lines:[]}, new Error("temporarily offline"));
+  await vm.runInContext('pollLogs()', context);
+  assert.equal(vm.runInContext('logSeq', context), 4);
+  assert.deepEqual(requests.splice(0), ["/api/logs?since=4", "/api/logs?since=0"]);
+
+  responses.push({seq:2005,lines:Array.from({length:2005}, (_,i) => "line " + i)});
+  await vm.runInContext('pollLogs()', context);
+  assert.equal(view.textContent.split("\n").length, 2000);
+  assert(view.textContent.startsWith("line 5\n"));
+  requests.length = 0;
+  document.hidden = true;
+  await vm.runInContext('pollLogs()', context);
+  assert.deepEqual(requests, []);
+  assert([...pendingTimers.values()].every(delay => delay === 2000), "abort timers must be cleared");
+  assert.equal(timers.filter(delay => delay === 2000).length, 5, "polling must continue after failures or hidden tabs");
+}
+
+async function checkLogCopy() {
+  const notices = [], copied = [];
+  let removed = 0;
+  const field = {value:"", style:{}, select(){}, setSelectionRange(){}, remove(){ removed++; }};
+  const context = vm.createContext({
+    $: id => { assert.equal(id, "logs-view"); return {textContent:"KST log sample"}; },
+    navigator:{}, window:{isSecureContext:false}, t:x => x,
+    document:{
+      createElement: tag => { assert.equal(tag, "textarea"); return field; },
+      body:{append: node => assert.equal(node, field)},
+      execCommand: command => { assert.equal(command, "copy"); copied.push(field.value); return true; },
+    },
+    banner: (...args) => notices.push(args),
+  });
+  const copy = embedded[1].match(/async function copyLogs\(\) \{[\s\S]*?\r?\n\}/);
+  assert(copy);
+  vm.runInContext(copy[0], context);
+  await vm.runInContext('copyLogs()', context);
+  assert.deepEqual(copied, ["KST log sample"]);
+  assert.equal(removed, 1, "HTTP clipboard fallback must remove the temporary field");
+  assert.equal(notices.at(-1)[2], "ok");
+  context.document.execCommand = () => false;
+  await vm.runInContext('copyLogs()', context);
+  assert.equal(removed, 2);
+  assert.equal(notices.at(-1)[2], "bad");
+  context.navigator.clipboard = {writeText: async text => copied.push(text)};
+  context.window.isSecureContext = true;
+  await vm.runInContext('copyLogs()', context);
+  assert.equal(copied.length, 2);
+  assert.equal(removed, 2, "HTTPS should use the Clipboard API directly");
+  assert.equal(notices.at(-1)[2], "ok");
+}
+Promise.all([checkLogPolling(), checkLogCopy()]).then(() => {
+  console.log("Server log restart recovery, retention, scrolling and HTTP/HTTPS copy OK");
+}).catch(error => { console.error(error); process.exitCode = 1; });
+
+
