@@ -1518,6 +1518,12 @@ async fn run_install(
     run_check(app).await;
 }
 
+/// Fail closed when a customized install could overwrite an existing app:
+/// iPhones can report either the original ID or the Apple-team-suffixed ID.
+fn install_identity_taken(installed: &std::collections::HashSet<String>, raw_id: &str, signed_id: &str) -> bool {
+    installed.contains(raw_id) || installed.contains(signed_id)
+}
+
 async fn install_ipa(
     app: &Arc<App>, upload: &UploadedIpa, selected_extensions: Option<&[String]>,
     identity: Option<&NewInstallIdentity>,
@@ -1531,9 +1537,11 @@ async fn install_ipa(
     )
     .await?;
     let team = apple::pick_team(&mut session, account.team_id.as_deref(), false).await?;
-    let expected_id = identity.map(|id| format!(
-        "{}.{}", id.bundle_id.as_deref().unwrap_or(&id.source_bundle_id), team.team_id
-    ));
+    let expected_ids = identity.map(|id| {
+        let raw = id.bundle_id.as_deref().unwrap_or(&id.source_bundle_id).to_string();
+        let signed = format!("{raw}.{}", team.team_id);
+        (raw, signed)
+    });
 
     app.push_line("Connecting to the iPhone to read its device identity…");
 
@@ -1541,11 +1549,11 @@ async fn install_ipa(
         let _work = crate::altserver::phone_lock();
 
         let (_, mut link) = phone::connect_auto(app.phone, PAIRING_FILE, |_: &str| {}).await?;
-        if let Some(target) = expected_id.as_ref() {
+        if let Some((raw, signed)) = expected_ids.as_ref() {
             let installed = phone::with_timeout("Installed app lookup", std::time::Duration::from_secs(20),
                 link.installed_app_ids()).await?;
-            if installed.contains(target) {
-                return Err(format!("Cannot customize an installed app ({target}). Choose a different Bundle ID for a separate new install."));
+            if install_identity_taken(&installed, raw, signed) {
+                return Err(format!("Cannot customize an installed app ({signed}). Choose a different Bundle ID for a separate new install."));
             }
         }
         link.device_identity()
@@ -1571,11 +1579,11 @@ async fn install_ipa(
     let (via, mut link) = phone::connect_auto(app.phone, PAIRING_FILE, |_: &str| {}).await?;
     // Check once more immediately before installation to avoid replacing an app
     // that appeared while the IPA was signing.
-    if let Some(target) = expected_id.as_ref() {
+    if let Some((raw, signed)) = expected_ids.as_ref() {
         let installed = phone::with_timeout("Installed app lookup", std::time::Duration::from_secs(20),
             link.installed_app_ids()).await?;
-        if installed.contains(target) {
-            return Err(format!("Custom install would replace an existing app ({target}); blocked."));
+        if install_identity_taken(&installed, raw, signed) {
+            return Err(format!("Custom install would replace an existing app ({signed}); blocked."));
         }
     }
     app.push_line(&if via == phone::Via::Usb {
@@ -1956,6 +1964,33 @@ fn append_log(lines: &[String], ok: bool) {
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn custom_identity_accepts_independent_name_or_bundle_and_rejects_invalid_ids() {
+        assert!(validated_install_identity(None, None, "com.example.app").unwrap().is_none());
+        let renamed = validated_install_identity(Some(" 새 이름 ".into()), None, "com.example.app")
+            .unwrap().unwrap();
+        assert_eq!(renamed.display_name.as_deref(), Some("새 이름"));
+        assert!(renamed.bundle_id.is_none());
+        let cloned = validated_install_identity(None, Some("com.example.clone".into()), "com.example.app")
+            .unwrap().unwrap();
+        assert_eq!(cloned.bundle_id.as_deref(), Some("com.example.clone"));
+        assert!(cloned.display_name.is_none());
+        assert!(validated_install_identity(None, Some("no_spaces allowed".into()), "com.example.app").is_err());
+        assert!(validated_install_identity(None, Some("com.example.app".into()), "com.example.app").is_err());
+        assert!(validated_install_identity(Some("x".repeat(41)), None, "com.example.app").is_err());
+    }
+
+    #[test]
+    fn custom_install_never_overwrites_installed_raw_or_team_suffixed_ids() {
+        let mut installed = std::collections::HashSet::new();
+        assert!(!install_identity_taken(&installed, "com.example.app", "com.example.app.TEAM"));
+        installed.insert("com.example.app".to_string());
+        assert!(install_identity_taken(&installed, "com.example.app", "com.example.app.TEAM"));
+        installed.clear();
+        installed.insert("com.example.app.TEAM".to_string());
+        assert!(install_identity_taken(&installed, "com.example.app", "com.example.app.TEAM"));
+    }
+
     #[test]
     fn auto_renew_kst_time_validation_and_next_run() {
         assert_eq!(parse_kst_time("06:00"), Some(6 * 3600));
