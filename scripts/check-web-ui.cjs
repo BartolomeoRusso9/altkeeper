@@ -88,7 +88,7 @@ console.log("Localized dashboard JavaScript syntax, actions, labels and layout O
   const start = source.indexOf('function syncInstallKeepawake(job) {');
   const end = source.indexOf('document.addEventListener("visibilitychange"', start);
   assert(start >= 0 && end > start);
-  vm.runInContext('const $ = id => document.getElementById(id);\\n' + source.slice(start, end), context);
+  vm.runInContext('const $ = id => document.getElementById(id);\n' + source.slice(start, end), context);
   const run = job => context.syncInstallKeepawake(job);
   run({ kind:"renew", running:true });
   assert.equal(nodes["install-keepawake"].hidden, true);
