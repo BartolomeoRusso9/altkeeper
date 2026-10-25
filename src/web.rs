@@ -266,13 +266,13 @@ async fn auto_renew_loop(app: Arc<App>) {
                 match save_auto_renew(&updated) {
                     Ok(()) => {
                         *config = updated;
+                        drop(config); // avoid lock-order inversion with /api/state
                         app.lock().job = JobView {
                             kind: "auto_renew".into(),
                             running: true,
                             lines: vec!["Automatic renewal started (Asia/Seoul schedule).".into()],
                             ok: None,
                         };
-                        drop(config);
                         println!("[auto-renew] Starting scheduled renewal.");
                         spawn_job(guard, |app| run_renew(app, false, None, true));
                     }
