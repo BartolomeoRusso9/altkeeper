@@ -1,8 +1,11 @@
 # Changelog
 
-## Unreleased
+## 0.3.0
 
 ### Fixed
+- **USB on Windows without configuration.** When `USBMUXD_SOCKET_ADDRESS` is not set, Windows now
+  uses the usbmuxd of iTunes / Apple Devices on `127.0.0.1:27015` instead of failing to find the
+  phone. Ported from the USB-fix branch.
 - **Install hung forever over USB on iOS 27.** On USB, installing an IPA now goes through AFC + installation_proxy via usbmuxd (same path as `pymobiledevice3 apps install`) instead of the CoreDeviceProxy software tunnel, and the profile client prefers the lockdown service too. App install and profile install now have timeouts, so a stuck phone produces an error instead of a silent hang. The status line says "over USB" or "over Wi-Fi" according to the real transport. Not compiled in this environment: please run `cargo build` and test.
 
 ### Changed
@@ -17,6 +20,20 @@
   unattended renewals (profiles + App IDs) work again.
 
 ### Added
+- **Windows tray icon (`altkeeper tray`, also what a double-click on `altkeeper.exe` starts).**
+  AltServer and the web page run without a terminal, with an icon next to the clock (AltKeeper
+  logo, grey while the iPhone is unreachable), a menu (*Open AltKeeper*, *Show logs*, *Start with
+  Windows*, *Check for updates*, *Quit*), a window with the web page (WebView2) and toast
+  notifications for renewed profiles, installed apps and failures. Ported from AltKeeperPlus.
+- **Updates from the tray and `release.yml`.** The icon checks the fork's GitHub releases once a
+  day; *Update now* verifies the SHA-256, restarts and rolls back if the new version does not
+  start. `release.yml` builds `altkeeper.exe` for Windows on a `v*` tag. Ported from AltKeeperPlus.
+- **Persistent logs.** Server lines (AltServer, web page, DNS-SD) carry a timestamp and are
+  also written to `altkeeper.log` (rotated at 5 MB) and shown in a new **Logs** section of the
+  web page (`/api/logs`). Ported from AltKeeperPlus.
+- **AltKeeper logo as the icon of `altkeeper.exe`** (embedded by the new `build.rs` on Windows builds, from `assets/altkeeper.ico`), besides the tray and window icons.
+- **App / App ID counters** next to "Your apps" in the web page (3 active apps and 10 App IDs for
+  a free account; an estimate from the profiles on the phone). Ported from the USB-fix branch.
 - **USB when the iPhone is plugged into the machine running AltKeeper.** Every connection (check, renew, sign and install, AltServer) first looks for an iPhone on USB through the local `usbmuxd` (or the one in `USBMUXD_SOCKET_ADDRESS`) and talks to it through the CoreDeviceProxy tunnel; if there is none, or it fails, it falls back to Wi-Fi as before. Much faster for installing IPAs. Needs the phone to already trust the computer (the usual "Trust" prompt), not the remote pairing. `--phone <ip:port>` forces Wi-Fi; `ALTKEEPER_NO_USB=1` turns USB off. In Docker the usbmuxd socket must be mounted into the container.
 - `ALTKEEPER_REVOKE_CERTS=1`: when installing an IPA from the web page fails with Apple error 7460 (the Apple ID already has a development certificate, e.g. from AltStore/SideStore), AltKeeper can revoke it and create its own. Off by default; without it you now get a clear explanation instead of a generic error.
 - **Windows support (native, no Docker).** `cargo build --release` on Windows 10/11 produces

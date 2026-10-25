@@ -196,7 +196,7 @@ pub async fn anisette_for_altstore(dir: &Path) -> Result<serde_json::Value, Stri
     match anisette_for_altstore_once(dir).await {
         Err(e) if needs_reprovision(&e) => {
             if retire_anisette_state(dir)? {
-                println!("{}", crate::tr!(
+                crate::log::line(&crate::tr!(
                     format!("[anisette] il server non riconosce l'identità salvata ({e}); la metto da parte in state/anisette_state.stale e ne creo una nuova"),
                     format!("[anisette] server did not recognize the saved identity ({e}); moved it to state/anisette_state.stale and provisioning a new one")
                 ));
@@ -540,6 +540,9 @@ pub async fn sign_ipa(
     device_name: &str,
     udid: &str,
     ipa: &Path,
+    selected_extensions: Option<&[String]>,
+    display_name: Option<&str>,
+    custom_bundle_id: Option<&str>,
 ) -> Result<SignedApp, String> {
     let filename = ipa
         .file_name()
@@ -569,6 +572,9 @@ pub async fn sign_ipa(
             None::<fn(f32) -> std::future::Ready<()>>,
             None,
             None,
+            selected_extensions,
+            display_name,
+            custom_bundle_id,
         )
         .await
         .map_err(|e| {
@@ -580,7 +586,9 @@ pub async fn sign_ipa(
                     "App signing failed: this Apple ID already has a certificate (AltStore/SideStore). To replace it, set ALTKEEPER_REVOKE_CERTS=1 and retry; other apps will then need refreshing.".to_string()
                 )
             } else {
-                crate::tr!(format!("firma dell'app non riuscita: {e}"), format!("App signing failed: {e}"))
+                // Keep the complete report; its first line may only be a
+                // heading, with the useful cause on subsequent lines.
+                crate::tr!(format!("firma dell'app non riuscita: {detail}"), format!("App signing failed: {detail}"))
             }
         })?;
     Ok(SignedApp {
@@ -588,3 +596,4 @@ pub async fn sign_ipa(
         cleanup_dir,
     })
 }
+

@@ -5,7 +5,7 @@
 //!   altkeeper pair-usb [file]                     crea il pairing remoto via USB
 //!   altkeeper login <apple-id>                    accede e salva l'account
 //!   altkeeper apps                                elenca App ID e scadenze
-//!   altkeeper renew [--phone ip:porta] [--dry-run] [--force] [--min-days N]
+//!   altkeeper renew [--phone ip:porta] [--dry-run] [--force] [--min-days N] [--bundle ID] [--installed-only]
 //!   altkeeper profile-remove <uuid> [--phone ip:porta]   toglie un profilo (ne salva prima una copia)
 //!   altkeeper profile-restore <file> [--phone ip:porta]  rimette un profilo salvato
 //!   altkeeper serve [--bind ip:porta] [--pin PIN] [--dir cartella] [--phone ip:porta]
@@ -14,6 +14,9 @@
 //!   altkeeper altserver [--port N] [--dir cartella] [--phone ip:porta]
 //!                    [--dns-domain D --dns-address IP [--dns-port N]]
 //!                                                  fa da AltServer per AltStore (Refresh All e installazioni)
+//!   altkeeper tray [--dir cartella] [--phone ip:porta] [--console]
+//!                                                  (solo Windows) icona nella barra di sistema: come
+//!                                                  `serve --altserver` ma senza terminale
 //!
 //! Se non indichi il telefono (`--phone` o ALTKEEPER_PHONE) lo cerca in rete via Bonjour.
 //!
@@ -26,9 +29,15 @@ mod dnssd;
 mod env;
 mod fsperm;
 mod i18n;
+mod install_archive;
+mod log;
 mod phone;
 mod profile;
 mod terminal;
+#[cfg(windows)]
+mod tray;
+#[cfg(windows)]
+mod update;
 mod web;
 
 use std::net::SocketAddr;
@@ -229,6 +238,8 @@ async fn cmd_renew(
     dry_run: bool,
     force: bool,
     min_days: i64,
+    bundle_filter: Option<&str>,
+    installed_only: bool,
     say: &mut dyn FnMut(&str),
 ) -> Result<(), String> {
     let acc = apple::load_account(Path::new("."))?;
@@ -254,21 +265,83 @@ async fn cmd_renew(
     // scade più tardi, e si rinnova una volta sola (altrimenti ogni giro rifarebbe il rinnovo
     // finché il profilo vecchio non scade).
     let latest = profile::latest_by_bundle(mine);
+    let bundles: Vec<&str> = latest.iter().filter_map(|p| p.bundle_id.as_deref()).collect();
+    // Use the shortest remaining lifetime in each app/extension group, so an
+    // expiring extension triggers renewal for all related profiles.
+    let group_days: std::collections::HashMap<&str, i64> = {
+        let mut result = std::collections::HashMap::new();
+        for p in &latest {
+            if let Some(bundle) = p.bundle_id.as_deref() {
+                let root = profile::group_root(bundle, &bundles, &team_id);
+                result.entry(root).and_modify(|days: &mut i64| {
+                    *days = (*days).min(p.days_left().unwrap_or(-1));
+                }).or_insert_with(|| p.days_left().unwrap_or(-1));
+            }
+        }
+        result
+    };
+
+    // When the installed-app lookup fails, explicitly fall back to renewing ALL
+    // known team profiles. This is intentional and must be visible in logs.
+    let mut fallback_renew_all = false;
+    let installed = if installed_only {
+        match phone::with_timeout(
+            "Installed app lookup",
+            std::time::Duration::from_secs(30),
+            link.installed_app_ids(),
+        ).await {
+            Ok(apps) => {
+                say(&format!("Detected {} installed user apps on the iPhone.", apps.len()));
+                Some(apps)
+            }
+            Err(err) => {
+                fallback_renew_all = true;
+                say(&format!("WARNING: installed-app lookup failed: {err}"));
+                say("FALLBACK: renewing ALL known profiles for this Apple team, regardless of expiry.");
+                None
+            }
+        }
+    } else {
+        None
+    };
 
     // Si decide cosa rinnovare prima di parlare con Apple: se niente è in scadenza non si
     // accede affatto (meno login, meno rischio che Apple limiti le richieste).
     let mut due: Vec<(&str, i64)> = Vec::new();
-    for p in latest {
+    let mut requested_found = false;
+    for p in &latest {
         let Some(bundle) = p.bundle_id.as_deref() else {
             say(&format!("   {}: bundle ID cannot be read, skipping", p.name));
             continue;
         };
+        let root = profile::group_root(bundle, &bundles, &team_id);
+        if let Some(selected) = bundle_filter {
+            if selected != root { continue; }
+            requested_found = true;
+        }
+        if let Some(apps) = &installed {
+            // InstallationProxy may report either the signed (raw) Bundle ID
+            // or the unsuffixed app Bundle ID. Profiles, unlike installed
+            // apps, may carry a trailing ".{team}" in their Apple App ID.
+            let host_id = profile::profile_app_id(root, &team_id);
+            let member_id = profile::profile_app_id(bundle, &team_id);
+            if !apps.contains(root) && !apps.contains(host_id)
+                && !apps.contains(bundle) && !apps.contains(member_id)
+            {
+                say(&format!("   {bundle}: host app not installed, skipping"));
+                continue;
+            }
+        }
         let days = p.days_left().unwrap_or(-1);
-        if !force && days > min_days {
+        let group_left = *group_days.get(root).unwrap_or(&days);
+        if !force && !fallback_renew_all && group_left > min_days {
             say(&format!("   {bundle}: expires in {days} days, no renewal needed"));
             continue;
         }
         due.push((bundle, days));
+    }
+    if bundle_filter.is_some() && !requested_found {
+        return Err("Selected app has no provisioning profile for the configured Apple team.".into());
     }
     if due.is_empty() {
         say("Nothing to renew: skipping Apple sign-in.");
@@ -282,9 +355,12 @@ async fn cmd_renew(
     let ids = apple::app_ids(&mut sess, &team).await?;
 
     let mut done = 0;
+    let mut missing_app_ids = Vec::new();
     for (bundle, days) in due {
         let Some(app) = ids.iter().find(|a| a.identifier == bundle) else {
             say(&format!("   {bundle}: no matching App ID on Apple, skipping"));
+            say(&format!("MISSING_APP_ID {bundle}"));
+            missing_app_ids.push(bundle);
             continue;
         };
         if dry_run {
@@ -302,6 +378,7 @@ async fn cmd_renew(
         )
         .await?;
         say("      installed on the phone");
+        say(&format!("RENEWED {bundle}"));
         done += 1;
     }
 
@@ -312,36 +389,69 @@ async fn cmd_renew(
             say(&profile_line(p));
         }
     }
-    Ok(())
+    renewal_completion(&missing_app_ids, done)
+}
+
+/// A skipped due profile is still an incomplete renewal, even if other apps
+/// succeeded. Keep processing known IDs, then propagate failure to CLI/web
+/// callers so scheduled retries and the final failure notification still run.
+fn renewal_completion(missing_app_ids: &[&str], renewed: usize) -> Result<(), String> {
+    if missing_app_ids.is_empty() {
+        return Ok(());
+    }
+    Err(format!(
+        "Renewal incomplete: {} due profile(s) have no matching App ID on Apple; {} renewed. Missing: {}",
+        missing_app_ids.len(), renewed, missing_app_ids.join(", ")
+    ))
 }
 
 /// Toglie dal telefono il profilo con questo UUID, dopo averne salvato e riletto una copia in
 /// `profili-salvati/` (si rimette con `profile-restore`). Serve a capire se iOS accetta i
 /// profili nuovi per un'app installata con quello originale.
-async fn cmd_profile_remove(addr: Option<SocketAddr>, uuid: Option<String>) -> Result<(), String> {
-    let uuid = uuid.ok_or(crate::tr!("uso: altkeeper profile-remove <uuid>", "usage: altkeeper profile-remove <uuid>"))?;
-    let mut link = open_phone(addr, &mut |s| println!("{s}")).await?;
+/// Validate an exact UUID, back up its original bytes, then remove only that profile.
+/// The web endpoint also restricts deletion to the configured Apple team.
+async fn remove_profile_with_backup(
+    link: &mut phone::PhoneLink,
+    uuid: &str,
+    required_team: Option<&str>,
+) -> Result<profile::PhoneProfile, String> {
+    if uuid.is_empty() || uuid.len() > 64 || !uuid.bytes().all(|b| b.is_ascii_hexdigit() || b == b'-') {
+        return Err("Invalid profile UUID.".into());
+    }
     let raw = link.profiles().await?;
     let (found, parsed) = raw
         .iter()
         .find_map(|r| {
             profile::parse(r)
-                .filter(|p| p.uuid.eq_ignore_ascii_case(&uuid))
+                .filter(|p| p.uuid.eq_ignore_ascii_case(uuid))
                 .map(|p| (r, p))
         })
-        .ok_or(crate::tr!("profilo non trovato sul telefono", "profile not found on the phone"))?;
+        .ok_or("Profile not found on the iPhone.")?;
+    if let Some(team) = required_team {
+        if parsed.team_id.as_deref() != Some(team) || parsed.bundle_id.is_none() {
+            return Err("Refusing to remove a profile outside your Apple team.".into());
+        }
+    }
 
     std::fs::create_dir_all(SAVED_DIR).map_err(dbg)?;
     fsperm::restrict_dir(Path::new(SAVED_DIR)).map_err(dbg)?;
     let path = Path::new(SAVED_DIR).join(format!("{}.mobileprovision", parsed.uuid));
     fsperm::write_private(&path, found).map_err(dbg)?;
     if std::fs::read(&path).map_err(dbg)? != *found {
-        return Err(crate::tr!(format!("la copia in {} non coincide: non tolgo niente", path.display()), format!("saved copy at {} does not match; refusing to remove the profile", path.display())));
+        return Err("Profile backup verification failed; nothing was removed.".into());
     }
-    println!("{}", crate::tr!(format!("Copia salvata in {}", path.display()), format!("Copy saved to {}", path.display())));
-
     link.remove_profile(&parsed.uuid).await?;
-    println!("{}", crate::tr!(format!("Tolto dal telefono: {}  [{}]", parsed.name, parsed.uuid), format!("Removed from the phone: {}  [{}]", parsed.name, parsed.uuid)));
+    Ok(parsed)
+}
+
+async fn cmd_profile_remove(addr: Option<SocketAddr>, uuid: Option<String>) -> Result<(), String> {
+    let uuid = uuid.ok_or(crate::tr!("uso: altkeeper profile-remove <uuid>", "usage: altkeeper profile-remove <uuid>"))?;
+    let mut link = open_phone(addr, &mut |s| println!("{s}")).await?;
+    let parsed = remove_profile_with_backup(&mut link, &uuid, None).await?;
+    println!("{}", crate::tr!(
+        format!("Tolto dal telefono: {} [{}] (copia in {})", parsed.name, parsed.uuid, SAVED_DIR),
+        format!("Removed from the phone: {} [{}] (backup in {})", parsed.name, parsed.uuid, SAVED_DIR)
+    ));
     Ok(())
 }
 
@@ -416,6 +526,10 @@ async fn run() -> Result<(), String> {
         .init();
 
     let mut args: Vec<String> = std::env::args().skip(1).collect();
+    // Su Windows un doppio clic sull'exe (nessun argomento) apre la versione con l'icona.
+    if args.is_empty() && cfg!(windows) {
+        args.push("tray".into());
+    }
     if args.is_empty() {
         return Err(crate::tr!(USAGE, USAGE_EN).into());
     }
@@ -453,11 +567,18 @@ async fn run() -> Result<(), String> {
                 .map(|v| v.parse::<i64>().map_err(|e| crate::tr!(format!("--min-days non valido: {e}"), format!("invalid --min-days: {e}"))))
                 .transpose()?
                 .unwrap_or(3);
+            let bundle = opt("--bundle");
+            let force = flag("--force");
+            // Default CLI renewal (e.g. cron) and web "due" use installed-only.
+            // Explicit --force without --installed-only retains manual override behavior.
+            let installed_only = flag("--installed-only") || (!force && bundle.is_none());
             cmd_renew(
                 phone_addr(opt("--phone"))?,
                 flag("--dry-run"),
-                flag("--force"),
+                force,
                 min_days,
+                bundle.as_deref(),
+                installed_only,
                 &mut |s| println!("{s}"),
             )
             .await
@@ -474,6 +595,7 @@ async fn run() -> Result<(), String> {
             if let Some(dir) = opt("--dir") {
                 std::env::set_current_dir(&dir).map_err(|e| crate::tr!(format!("--dir {dir}: {e}"), format!("--dir {dir}: {e}")))?;
             }
+            log::init(Path::new("."));
             let phone = phone_addr(opt("--phone"))?;
             web::check_options(bind, &pin)?;
             apple::anisette_url(env::var("ANISETTE_URL").as_deref())?;
@@ -485,14 +607,69 @@ async fn run() -> Result<(), String> {
             }
             web::serve(bind, pin, phone).await
         }
+        #[cfg(windows)]
+        "tray" => {
+            // Senza --dir si usa la cartella dell'exe: all'avvio con Windows la cartella di
+            // lavoro è un'altra.
+            let dir = match opt("--dir") {
+                Some(d) => std::path::PathBuf::from(d),
+                None => std::env::current_exe()
+                    .map_err(dbg)?
+                    .parent()
+                    .ok_or(crate::tr!("cartella dell'exe non trovata", "cannot find the exe folder"))?
+                    .to_path_buf(),
+            };
+            std::env::set_current_dir(&dir).map_err(|e| format!("--dir {}: {e}", dir.display()))?;
+            let dir = std::env::current_dir().map_err(dbg)?;
+            log::init(&dir);
+            if !flag("--console") {
+                tray::hide_console();
+            }
+            // Avviato da un aggiornamento: prima si aspetta che la versione vecchia liberi le porte.
+            let replacing = opt("--replacing").and_then(|p| p.parse::<u32>().ok());
+            if let Some(pid) = replacing {
+                tray::wait_for_exit(pid);
+            }
+            let exe = std::env::current_exe().map_err(dbg)?;
+            let bind: SocketAddr = "127.0.0.1:8787".parse().map_err(dbg)?;
+            let phone = phone_addr(opt("--phone"))?;
+            let start = || -> Result<(), String> {
+                apple::anisette_url(env::var("ANISETTE_URL").as_deref())?;
+                let port = altserver::start(altserver_port(opt("--altserver-port"))?, phone)?;
+                start_dnssd(&opt, port)
+            };
+            if let Err(e) = start() {
+                log::err(&e);
+                // La versione nuova non parte: si rimette quella vecchia e si riavvia quella.
+                if replacing.is_some() && update::rollback(&exe) {
+                    log::err("[update] the new version did not start, going back to the old one");
+                    let _ = std::process::Command::new(&exe).arg("tray").arg("--dir").arg(&dir).spawn();
+                    return Err(e);
+                }
+                tray::message_box(&format!("AltKeeper cannot start:\n\n{e}"));
+                return Err(e);
+            }
+            update::cleanup(&exe);
+            let rt = tokio::runtime::Handle::current();
+            tokio::task::block_in_place(|| {
+                tray::run(bind, &dir, |proxy| {
+                    rt.spawn(async move {
+                        if let Err(e) = web::serve(bind, None, phone).await {
+                            let _ = proxy.send_event(tray::UserEvent::ServerFailed(e));
+                        }
+                    });
+                })
+            })
+        }
         "altserver" => {
             if let Some(dir) = opt("--dir") {
                 std::env::set_current_dir(&dir).map_err(|e| crate::tr!(format!("--dir {dir}: {e}"), format!("--dir {dir}: {e}")))?;
             }
+            log::init(Path::new("."));
             apple::anisette_url(env::var("ANISETTE_URL").as_deref())?;
             let port = altserver::start(altserver_port(opt("--port"))?, phone_addr(opt("--phone"))?)?;
             start_dnssd(&opt, port)?;
-            println!("{}", crate::tr!("AltServer attivo. Ctrl-C per fermarlo.", "AltServer running. Press Ctrl-C to stop."));
+            log::line(&crate::tr!("AltServer attivo. Ctrl-C per fermarlo.", "AltServer running. Press Ctrl-C to stop.").to_string());
             tokio::select! {
                 r = tokio::signal::ctrl_c() => r.map_err(dbg)?,
                 _ = terminated() => {}
@@ -515,6 +692,23 @@ mod cli_tests {
     use super::save_password_confirmed;
 
     #[test]
+    fn missing_due_app_ids_cannot_report_success() {
+        let missing = ["com.example.app.TEAM", "com.example.app.TEAM.extension"];
+        let error = super::renewal_completion(&missing, 0).unwrap_err();
+        assert!(error.contains("2 due profile(s)"));
+        assert!(error.contains("0 renewed"));
+        for bundle in missing { assert!(error.contains(bundle)); }
+        let partial = super::renewal_completion(&missing[..1], 2).unwrap_err();
+        assert!(partial.contains("2 renewed"));
+    }
+
+    #[test]
+    fn successful_and_no_op_renewals_remain_successful() {
+        assert!(super::renewal_completion(&[], 0).is_ok());
+        assert!(super::renewal_completion(&[], 3).is_ok());
+    }
+
+    #[test]
     fn confirmation_accepts_italian_and_english_yes() {
         for yes in ["s", "S", "si", "SÌ", "y", "Y", "yes", "YES", " yes\r\n"] {
             assert!(save_password_confirmed(yes), "{yes:?}");
@@ -528,3 +722,4 @@ mod cli_tests {
         }
     }
 }
+

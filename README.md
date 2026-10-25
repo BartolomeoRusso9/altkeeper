@@ -103,6 +103,15 @@ and server logs, **not** the HTML web page, protocol or JSON. The same 2FA menu 
 
 ### 1. Get the program
 
+**Prebuilt:** each [GitHub release](https://github.com/BartolomeoRusso9/altkeeper/releases) has
+`altkeeper-<version>-linux-x86_64.tar.gz`, `-linux-aarch64`, `-macos-aarch64` (Apple Silicon) and
+`-macos-x86_64` (Intel), each with a `.sha256` file (check with `sha256sum -c`). Unpack it and use the
+`altkeeper` binary inside. The Linux builds need glibc 2.35 or newer; on older systems or Alpine, use
+Docker or build it yourself. The macOS builds are not signed: if Gatekeeper blocks it, run
+`xattr -d com.apple.quarantine altkeeper`. Only the Windows `.exe` updates itself.
+
+**Or build it yourself:**
+
 ```sh
 git clone https://github.com/BartolomeoRusso9/altkeeper
 cd altkeeper
@@ -200,6 +209,79 @@ answers with errors, wait before trying again instead of repeating it.
 `renew` looks at each app's newest profile, renews the ones with `--min-days` days left or fewer
 (default 3), and signs in to Apple **only if something is due**.
 
+**Installed-app safety filter (default for scheduled/CLI `renew` and web “Renew expiring apps”):**
+Before checking expiry, AltKeeper queries the phone's installed user apps through installation_proxy.
+Profiles that do not correspond to installed apps are skipped. **If that lookup fails (including
+a timeout), AltKeeper explicitly falls back to renewing *all* known profiles for the configured
+Apple team, ignoring the expiry threshold.** This fallback is logged as WARNING/FALLBACK.
+A successful lookup returning zero apps skips all renewals.
+
+To renew a specific app, use `altkeeper renew --bundle <bundle-id> --force` or the per-app
+**Renew** button on the web page. The manual `--force` and web “Renew all now” operations
+do not check installed apps; `--installed-only` can be used with CLI `--force` to opt in.
+No unattended schedule is enabled by merely running the Docker container (default: OFF).
+
+**Optional built-in scheduler in the web UI:** Use **Automatic renewal** to enable/disable a
+once-daily job and choose a time in **UTC**. The default clock
+time is 06:00 UTC and the switch is initially OFF. When enabled, AltKeeper runs
+the same installed-app-aware renewal as **Renew expiring apps**, with the documented
+all-profile fallback if installed-app listing fails. The server needs a saved
+Apple ID password, must be running, and the iPhone must be reachable.
+Only one scheduled *attempt* is made per UTC calendar day (including failures).
+A server that starts after the scheduled time on a day with no attempt will run
+that day's job when it starts; enabling or changing the scheduled time after
+today's slot does **not** trigger an immediate refresh. The next slot is tomorrow.
+The schedule and last attempted day are stored in `state/auto-renew.json` under
+the persistent `/data` volume, surviving Docker restarts. No host systemd,
+cron, privileged host socket, or extra package is needed. **Do not enable
+an external cron/systemd renewal job at the same time** unless deliberate.
+
+
+The web page also lists **individual provisioning profiles** (including older versions) with a
+**Delete profile** button. Every removal requires confirmation, is limited to the saved Apple team,
+and saves then verifies a private `profili-salvati/<uuid>.mobileprovision` backup before removal.
+Removing a profile currently needed by an installed app can prevent that app from opening.
+To restore a backup: `altkeeper profile-restore profili-salvati/<uuid>.mobileprovision`.
+Neither profile deletion nor renewal removes Apple Developer App IDs.
+
+**Grouped app management and retry controls:** The web UI groups extension profiles with
+their host app when their bundle ID contains the saved team's extension marker
+(e.g. `com.kdt.livecontainer.TEAM.LiveProcess` under `com.kdt.livecontainer`).
+The expandable **Your apps** card renews *every* member profile in a group, rather
+than only the selected host profile. Installed-app filtering also checks the
+host app for an extension; the earliest-expiring member determines when the entire
+group is due. The web preview lists groups that appear due, but the actual run
+performs a fresh phone check and may fall back to all team profiles if the
+installed-app inventory fails.
+
+The web scheduler's **renewal threshold** is adjustable from **1 to 6 days**,
+default **3 days**. On automatic renewal failure it retries up to **two** more
+times, **30 minutes apart** (up to 3 attempts in total). Authentication and
+rate-limit failures are not automatically retried. Enabling Discord failure
+notifications requires saving a webhook URL in the web UI. The secret is saved in
+the private `state/discord-webhook` file and is never returned to the browser;
+only a boolean indicates configuration. The Docker image includes `curl` to send
+an alert only after the last failed attempt (or a non-retryable failure).
+Successful automatic renewals do not send Discord messages.
+
+The web UI also lists previously saved profile backups and offers an explicit
+**Restore** action after confirmation. Restoration verifies the saved profile
+UUID and Apple Team ID and does not change its expiry date. The original file
+is retained. The app summary shows the last known per-group profile-install
+result from `state/app-renew-status.json`, and **Preview renewals** provides a
+non-authoritative overview without signing in to Apple.
+
+
+**Monthly backup cleanup:** When the web service (`serve`, including Docker `serve --altserver`)
+is running, it checks once a day whether a cleanup is due. Every **30 days after the last
+successful sweep** (including the first startup), it removes only saved `.mobileprovision`
+files whose embedded expiry date is at least **30 days in the past**. A verified UUID/file name
+match is required; malformed, unreadable, future-dated or unrelated files are preserved.
+A cleanup log line reports the number removed. The last successful sweep is recorded at
+`state/profile-backup-last-cleanup` so Docker restarts do not reset the schedule.
+No iPhone communication, Apple login, cron job, or new systemd timer is required.
+This cleanup does not touch live iPhone profiles or Apple Developer App IDs.
+
 ### 6. Automatic renewal (optional)
 
 A safety net that does not depend on the iPhone running AltStore.
@@ -259,6 +341,20 @@ The image holds nothing secret: pairing, account and state live in the `/data` v
 `ALTKEEPER_WEB_PIN=...` in `/srv/altkeeper/.env` (mode 600) and run `docker compose up -d`. It
 uses the host network, because it needs Bonjour to find the iPhone and to be found by AltStore;
 ports 8787 (web) and 49500 (AltServer) must be free.
+
+
+**Fast IPA upload over Wi-Fi (experimental):** After signing, AltKeeper repackages the
+signed `.app` (including any custom name/Bundle ID and selected extensions) into one
+temporary IPA, stages that file over AFC, then asks iOS to install it. This avoids
+thousands of remote AFC operations for apps with many small files. The temporary
+IPA is removed automatically; peak memory is bounded by streaming both packaging
+and upload. USB installs keep the existing directory-based path.
+
+For an immediate rollback on Linux, set `ALTKEEPER_INSTALL_MODE=directory` in the
+AltKeeper container's `environment:` in `docker-compose.yml`, then recreate
+the container. This restores the previous Wi-Fi directory-transfer behavior
+without re-signing existing apps. Test on a disposable app first; compatibility
+with a real iPhone must be confirmed before considering it production-verified.
 
 A GitHub Actions workflow (`.github/workflows/docker.yml`) runs the tests on Linux and Windows,
 checks `--help` in both CLI languages, and publishes the image to `ghcr.io/<user>/altkeeper` on
@@ -339,6 +435,24 @@ prove Windows 11, other shell hosts, AltServer installation or unattended renewa
 
    `renew.ps1` keeps the same `renew.log`, the same optional `notify.conf` (ntfy) and the same
    once-a-day error notification as `renew.sh`. It needs the PC to be on and awake at that time.
+
+5. **System tray icon (no terminal).** Double-click `altkeeper.exe`, or run
+   `.\altkeeper.exe tray`: it starts AltServer and the web page like `serve --altserver`, but
+   with an icon next to the clock (the AltKeeper logo; grey while the iPhone is not reachable)
+   and no console window. Double-click the icon, or use the menu: *Open AltKeeper* (the page in
+   its own window; closing it only hides it), *Show logs*, *Start with Windows* (on by default
+   the first time), *Check for updates* and *Quit*. Toast notifications tell you when profiles
+   are renewed, an app is installed or something fails. The window needs the Microsoft Edge
+   WebView2 runtime, which Windows 11 and recent Windows 10 already have. `--console` keeps the
+   console, `--dir` chooses the data folder (default: the folder of the `.exe`).
+
+   The icon also checks the GitHub releases once a day; *Update now* downloads the new
+   `altkeeper.exe`, verifies its SHA-256, restarts, and goes back to the old version if the new
+   one does not start. Releases (Windows, Linux and macOS) are built by `.github/workflows/release.yml` when you push a
+   tag equal to the `version` in `Cargo.toml` (for example `v0.3.0`).
+
+   Every server line (AltServer, web page, DNS-SD) is also written, with date and time, to
+   `altkeeper.log` (rotated at 5 MB) and shown in the **Logs** section of the web page.
 
 Everything else in this guide (commands, environment variables, outside-the-home setup) is the
 same; only the paths use `\`, and `cron` and `renew.sh` are replaced by the Task Scheduler and
@@ -502,11 +616,12 @@ If it says it cannot find the server, watch the DNS with
 | `pair-usb [file]` | creates the remote pairing over USB (once) |
 | `login <apple-id>` | signs in with 2FA and saves the account |
 | `apps` | lists your App IDs and their expiry dates |
-| `renew [--dry-run] [--force] [--min-days N] [--phone ip:port]` | renews the profiles that are due |
+| `renew [--dry-run] [--force] [--min-days N] [--phone ip:port] [--bundle ID] [--installed-only]` | renews profiles, optionally one bundle or with installed-app filtering |
 | `altserver [--port N] [--dir folder] [--phone ip:port] [--dns-domain D --dns-address IP]` | acts as AltServer for AltStore |
 | `serve [--bind ip:port] [--pin PIN] [--dir folder] [--phone ip:port] [--altserver] [--altserver-port N]` | web page (and, with `--altserver`, AltServer) |
 | `profile-remove <uuid>` | takes one profile off the phone, saving a copy in `profili-salvati/` |
 | `profile-restore <file>` | puts a saved profile back |
+| `tray [--dir folder] [--phone ip:port] [--console]` | Windows only: AltServer + web page with a system tray icon, no terminal (the default when you double-click the `.exe`) |
 
 `ALTKEEPER_PHONE=ip:port` can replace `--phone`; without either the phone is found by itself (see
 step 2). `ALTKEEPER_NO_MDNS=1` turns Bonjour off (networks that block multicast, or to test the scan).

@@ -106,6 +106,15 @@ i JSON o la pagina web. I comandi del menu 2FA restano `d`, `r` (se disponibile)
 
 ### 1. Ottieni il programma
 
+**Già compilato:** ogni [release su GitHub](https://github.com/BartolomeoRusso9/altkeeper/releases) ha
+`altkeeper-<versione>-linux-x86_64.tar.gz`, `-linux-aarch64`, `-macos-aarch64` (Apple Silicon) e
+`-macos-x86_64` (Intel), ciascuno con il suo file `.sha256` (verifica con `sha256sum -c`). Decomprimi e
+usa il binario `altkeeper`. Le build Linux richiedono glibc 2.35 o più recente; su sistemi più vecchi
+o Alpine usa Docker o compila da te. Le build macOS non sono firmate: se Gatekeeper le blocca, lancia
+`xattr -d com.apple.quarantine altkeeper`. Si aggiorna da solo solo l'`.exe` di Windows.
+
+**Oppure compilalo tu:**
+
 ```sh
 git clone https://github.com/BartolomeoRusso9/altkeeper
 cd altkeeper
@@ -347,6 +356,25 @@ end-to-end.
    notifica d'errore al massimo una volta al giorno di `renew.sh`. Il PC deve essere acceso e non in
    sospensione a quell'ora.
 
+5. **Icona nella barra di sistema (senza terminale).** Fai doppio clic su `altkeeper.exe`, oppure
+   lancia `.\altkeeper.exe tray`: avvia AltServer e la pagina web come `serve --altserver`, ma con
+   un'icona accanto all'orologio (il logo di AltKeeper; grigio finché l'iPhone non è raggiungibile)
+   e senza finestra di console. Doppio clic sull'icona, oppure dal menu: *Open AltKeeper* (la pagina
+   in una finestra propria; chiuderla la nasconde soltanto), *Show logs*, *Start with Windows*
+   (attivo di default alla prima esecuzione), *Check for updates* e *Quit*. Le notifiche toast
+   avvisano quando i profili sono rinnovati, un'app è installata o qualcosa fallisce. La finestra
+   richiede il runtime Microsoft Edge WebView2, già presente in Windows 11 e nei Windows 10
+   recenti. `--console` tiene la console, `--dir` sceglie la cartella dei dati (di default quella
+   dell'`.exe`).
+
+   L'icona controlla anche, una volta al giorno, le release GitHub; *Update now* scarica il
+   nuovo `altkeeper.exe`, ne verifica lo SHA-256, si riavvia e torna alla versione vecchia se la
+   nuova non parte. Le release (Windows, Linux e macOS) le compila `.github/workflows/release.yml` quando pubblichi un tag
+   uguale alla `version` di `Cargo.toml` (per esempio `v0.3.0`).
+
+   Ogni riga del server (AltServer, pagina web, DNS-SD) viene scritta con data e ora anche in
+   `altkeeper.log` (ruotato a 5 MB) e mostrata nella sezione **Logs** della pagina web.
+
 Tutto il resto di questa guida (comandi, variabili d'ambiente, uso da fuori casa) vale uguale; cambia
 solo che i percorsi usano `\`, e che `cron` e `renew.sh` si sostituiscono con l'Utilità di
 pianificazione e `renew.ps1`.
@@ -518,6 +546,7 @@ quale nome sta chiedendo il telefono.
 | `serve [--bind ip:porta] [--pin PIN] [--dir cartella] [--phone ip:porta] [--altserver] [--altserver-port N]` | pagina web (e, con `--altserver`, AltServer) |
 | `profile-remove <uuid>` | toglie un profilo dal telefono, salvandone una copia in `profili-salvati/` |
 | `profile-restore <file>` | rimette un profilo salvato |
+| `tray [--dir cartella] [--phone ip:porta] [--console]` | solo Windows: AltServer + pagina web con icona nella barra di sistema, senza terminale (è quello che parte con il doppio clic sull'`.exe`) |
 
 `ALTKEEPER_PHONE=ip:porta` può sostituire `--phone`; senza nessuno dei due il telefono si trova da
 solo (vedi il passo 2). `ALTKEEPER_NO_MDNS=1` spegne Bonjour (reti che bloccano il multicast, o per
