@@ -17,6 +17,7 @@ pub async fn sign<F, Fut>(
     app: &mut Application,
     cert_identity: &CertificateIdentity,
     provisioning_profile: &Profile,
+    extension_profiles: &[(std::path::PathBuf, Profile)],
     special: &Option<SpecialApp>,
     team: &DeveloperTeam,
     progress_callback: Option<F>,
@@ -25,17 +26,17 @@ where
     F: Fn(f32) -> Fut,
     Fut: Future<Output = ()>,
 {
-    let mut settings = signing_settings(cert_identity)?;
-    let entitlements: Dictionary =
+    let main_entitlements: Dictionary =
         entitlements_from_prov(provisioning_profile.encoded_profile.as_ref(), special, team)?;
+    let signer = signer_with(cert_identity, &main_entitlements)?;
 
-    settings
-        .set_entitlements_xml(
-            apple_codesign::SettingsScope::Main,
-            plist_to_xml_string(&entitlements),
-        )
-        .context("Failed to set entitlements XML")?;
-    let signer = UnifiedSigner::new(settings);
+    // Each app extension is signed with the entitlements of its own profile, so its signature
+    // carries its own application identifier instead of the main app's.
+    let mut extension_signers = Vec::with_capacity(extension_profiles.len());
+    for (dir, profile) in extension_profiles {
+        let ent = entitlements_from_prov(profile.encoded_profile.as_ref(), special, team)?;
+        extension_signers.push((dir.clone(), signer_with(cert_identity, &ent)?));
+    }
 
     let sorted_bundles = app.bundle.collect_bundles_sorted();
 
@@ -52,7 +53,12 @@ where
                 .to_string_lossy()
         );
 
-        signer
+        let bundle_signer = extension_signers
+            .iter()
+            .find(|(dir, _)| *dir == bundle.bundle_dir)
+            .map(|(_, s)| s)
+            .unwrap_or(&signer);
+        bundle_signer
             .sign_path_in_place(&bundle.bundle_dir)
             .context(format!(
                 "Failed to sign bundle: {}",
@@ -61,6 +67,20 @@ where
     }
 
     Ok(())
+}
+
+fn signer_with<'a>(
+    cert: &'a CertificateIdentity,
+    entitlements: &Dictionary,
+) -> Result<UnifiedSigner<'a>, Report> {
+    let mut settings = signing_settings(cert)?;
+    settings
+        .set_entitlements_xml(
+            apple_codesign::SettingsScope::Main,
+            plist_to_xml_string(entitlements),
+        )
+        .context("Failed to set entitlements XML")?;
+    Ok(UnifiedSigner::new(settings))
 }
 
 pub fn signing_settings<'a>(cert: &'a CertificateIdentity) -> Result<SigningSettings<'a>, Report> {

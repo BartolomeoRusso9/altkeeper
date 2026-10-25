@@ -28,7 +28,11 @@ pub async fn install_app(
         "PublicStaging/{}",
         app_path.file_name().ok_or_report()?.to_string_lossy()
     );
-    let _ = afc_client.remove_all(&dir).await;
+    if let Err(e) = afc_client.remove_all(&dir).await {
+        if !matches!(e, idevice::IdeviceError::Afc(idevice::afc::errors::AfcError::ObjectNotFound)) {
+            return Err(Error::IdeviceError(e).into());
+        }
+    }
     let total_size = get_dir_size(app_path).unwrap_or(1) as f64;
     let mut uploaded = 0;
     let cb = |progress: f64| {
@@ -83,7 +87,11 @@ pub async fn install_app_rsd(
         "PublicStaging/{}",
         app_path.file_name().ok_or_report()?.to_string_lossy()
     );
-    let _ = afc_client.remove_all(&dir).await;
+    if let Err(e) = afc_client.remove_all(&dir).await {
+        if !matches!(e, idevice::IdeviceError::Afc(idevice::afc::errors::AfcError::ObjectNotFound)) {
+            return Err(Error::IdeviceError(e).into());
+        }
+    }
     let total_size = get_dir_size(app_path).unwrap_or(1) as f64;
     let mut uploaded = 0;
     let cb = |pct: f64| {

@@ -54,6 +54,7 @@
   ul.plain li:first-child { border-top: 0; padding-top: 0; }
   .app-name { font-weight: 600; word-break: break-all; }
   .quotas-row { display: flex; gap: 8px; align-items: center; }
+  .quotas-row[hidden] { display: none; }
   .quota-badge {
     display: inline-flex; align-items: center; padding: 3px 10px;
     border-radius: 999px; font-size: .83rem; font-weight: 600;
@@ -272,9 +273,11 @@ function render(s) {
     qApps.className = appsUsed >= maxApps ? "quota-badge at-limit" : appsUsed >= maxApps - 1 ? "quota-badge near-limit" : "quota-badge";
     qApps.title = `${appsUsed} of ${maxApps} active sideloaded apps used on this device`;
 
-    qAppIds.textContent = `${idsUsed}/${maxIds} App IDs`;
-    qAppIds.className = idsUsed >= maxIds ? "quota-badge at-limit" : idsUsed >= 7 ? "quota-badge near-limit" : "quota-badge";
-    qAppIds.title = `${idsUsed} of ${maxIds} App IDs registered on this Apple ID this week`;
+    qAppIds.textContent = `${idsUsed} App IDs on device`;
+    qAppIds.className = "quota-badge";
+    qAppIds.title = `${idsUsed} provisioning profiles of this team are on the phone (apps + extensions). ` +
+      `Apple allows a free account to register at most ${maxIds} new App IDs per week; ` +
+      `App IDs registered this week but no longer on the phone are not counted here.`;
   } else {
     qRow.hidden = true;
   }

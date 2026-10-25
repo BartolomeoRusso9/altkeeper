@@ -264,7 +264,6 @@ impl GrandSlam {
             "User-Agent",
             HeaderValue::from_str(&client_info.user_agent)?,
         );
-// removed fake xcode headers
 
         Ok(headers)
     }

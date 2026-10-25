@@ -163,12 +163,16 @@ impl AnisetteProvider for RemoteV3AnisetteProvider {
         let resp = self
             .client
             .get(format!("{}/v3/client_info", self.url))
+            .timeout(std::time::Duration::from_secs(10))
             .send()
             .await;
 
         if let Ok(r) = resp {
             if r.status().is_success() {
-                if let Ok(info) = r.json::<AnisetteClientInfo>().await {
+                let body =
+                    tokio::time::timeout(std::time::Duration::from_secs(10), r.json::<AnisetteClientInfo>())
+                        .await;
+                if let Ok(Ok(info)) = body {
                     return Ok(info);
                 }
             }

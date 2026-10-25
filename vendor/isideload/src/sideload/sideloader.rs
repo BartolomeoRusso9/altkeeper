@@ -192,6 +192,8 @@ impl Sideloader {
             .iter()
             .filter_map(|e| Some((e.bundle_dir.clone(), e.bundle_identifier()?.to_string())))
             .collect();
+        let mut extension_profiles: Vec<(std::path::PathBuf, crate::dev::app_ids::Profile)> =
+            Vec::new();
         for (ext_dir, ext_id) in ext_targets {
             let Some(ext_app_id) = app_ids.iter().find(|a| a.identifier == ext_id).cloned() else {
                 warn!("No App ID found for extension {ext_id}, skipping its profile");
@@ -206,6 +208,7 @@ impl Sideloader {
                 ext_profile.encoded_profile.as_ref(),
             )?;
             info!("Acquired provisioning profile for extension {ext_id}");
+            extension_profiles.push((ext_dir, ext_profile));
         }
 
         if let Some(callback) = &progress_callback {
@@ -216,6 +219,7 @@ impl Sideloader {
             &mut app,
             &cert_identity,
             &provisioning_profile,
+            &extension_profiles,
             &special,
             &team,
             progress_callback,

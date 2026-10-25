@@ -153,8 +153,11 @@ async fn cmd_phone(addr: Option<SocketAddr>) -> Result<(), String> {
     profiles.iter().for_each(print_profile);
 
     use idevice::RsdService;
-    if let Ok(mut inst) = idevice::installation_proxy::InstallationProxyClient::connect_rsd(&mut link.adapter, &mut link.hs).await {
-        if let Ok(apps) = inst.get_apps(Some("User"), None).await {
+    match idevice::installation_proxy::InstallationProxyClient::connect_rsd(&mut link.adapter, &mut link.hs).await {
+        Err(e) => eprintln!("warning: cannot list installed apps (installation_proxy): {e:?}"),
+        Ok(mut inst) => match inst.get_apps(Some("User"), None).await {
+            Err(e) => eprintln!("warning: cannot list installed apps: {e:?}"),
+            Ok(apps) => {
             println!("\n{} app utente trovate:", apps.len());
             for (bundle, info) in &apps {
                 if let Some(dict) = info.as_dictionary() {
@@ -165,7 +168,8 @@ async fn cmd_phone(addr: Option<SocketAddr>) -> Result<(), String> {
                     println!(" - {bundle}");
                 }
             }
-        }
+            }
+        },
     }
     Ok(())
 }

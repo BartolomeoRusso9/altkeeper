@@ -382,10 +382,18 @@ pub async fn install_via_usb(
         return Ok(false);
     };
     let provider = dev.to_provider(addr, "altkeeper");
-    isideload::sideload::install::install_app(&provider, app, progress)
-        .await
-        .map_err(|e| format!("Installation failed: {e:?}"))?;
-    Ok(true)
+    // Generous limit: a 1 GB IPA over USB 2 still finishes well within it, but a stuck
+    // device no longer hangs the job forever.
+    match tokio::time::timeout(
+        Duration::from_secs(20 * 60),
+        isideload::sideload::install::install_app(&provider, app, progress),
+    )
+    .await
+    {
+        Ok(Ok(())) => Ok(true),
+        Ok(Err(e)) => Err(format!("Installation failed: {e:?}")),
+        Err(_) => Err("Installation over USB timed out after 20 minutes".into()),
+    }
 }
 
 /// Crea il pairing remoto via USB, senza richieste sul telefono.
