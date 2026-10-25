@@ -1774,7 +1774,7 @@ mod tests {
     #[test]
     fn safari_icons_are_real_pngs() {
         for icon in [APPLE_TOUCH_ICON, FAVICON_32] {
-            assert!(icon.starts_with(b"\\x89PNG\\r\\n\\x1a\\n"));
+            assert!(icon.starts_with(b"\x89PNG\r\n\x1a\n"));
             assert!(icon.len() > 100);
         }
     }
