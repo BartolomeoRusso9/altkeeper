@@ -1,5 +1,35 @@
 # AltKeeper
 
+> **This is AltKeeperPlus**, a fork of [BartolomeoRusso9/altkeeper](https://github.com/BartolomeoRusso9/altkeeper)
+> with English messages, timestamped logs and a Windows tray app. Everything below the next
+> section is the original README and still applies.
+
+## AltKeeperPlus on Windows
+
+- **Tray app.** Double-click `altkeeper.exe` (or run `altkeeper.exe tray --dir C:\altkeeper`).
+  It runs AltServer and the web page with no console window and puts an icon next to the clock.
+  Double-click the icon to open the AltKeeper window (the same page as `http://127.0.0.1:8787`).
+  Closing the window only hides it; **Quit** in the right-click menu stops AltKeeper.
+- **Status.** The icon is green when the iPhone was reachable at the last check and grey
+  otherwise; hovering shows the number of apps and the nearest expiry. Windows notifications
+  report installed profiles and apps, and failures.
+- **Logs.** Every server line starts with `[YYYY-MM-DD HH:MM:SS]`. The window has a Logs section
+  (tray menu: **Show logs**), and everything is also written to `altkeeper.log` in the same
+  folder (rotated at 5 MB). `tray --console` keeps the old console window.
+- **Start with Windows** is turned on the first time the tray app runs. Untick it in the menu
+  and it stays off.
+- **Updates.** Once a day the tray checks this fork's GitHub releases. When there is a newer
+  one, **Update now** downloads it, checks its SHA-256, replaces the exe and restarts; if the new
+  version cannot start, the previous one is put back. The menu also says when the original
+  project has new commits, which is the time to sync this fork.
+- Run **one** AltKeeper at a time: close any old console instance before starting the tray app,
+  otherwise ports 49500 and 8787 are taken.
+
+Releases: push a tag that matches `version` in `Cargo.toml` (for example
+`git tag v0.2.0-plus.1 && git push origin v0.2.0-plus.1`); the `release` workflow builds
+`altkeeper.exe` and `altkeeper.exe.sha256`. After syncing with the original project, update
+`UPSTREAM_BASE` in `src/update.rs` to the merged upstream commit.
+
 **AltServer for iOS 17+ that runs on your home server (Docker).** Refresh and install your
 AltStore / SideStore-style apps over Wi-Fi, with no computer left on and no VPN.
 
