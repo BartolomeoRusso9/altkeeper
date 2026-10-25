@@ -29,55 +29,88 @@ pub struct Application {
     //pub temp_path: PathBuf,
 }
 
-/// The direct app extensions found in an IPA, before any Apple sign-in or unpacking.
+/// Installation metadata, read from IPA Info.plist files without unpacking the archive.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct IpaExtensionInfo {
     pub bundle_id: String,
     pub name: String,
 }
 
-/// Read only each extension's Info.plist from the ZIP central directory.
-/// Avoid unpacking potentially large IPAs merely to show install choices.
-pub fn inspect_ipa_extensions(path: &Path) -> Result<Vec<IpaExtensionInfo>, Report> {
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct IpaManifest {
+    pub bundle_id: String,
+    pub name: String,
+    pub extensions: Vec<IpaExtensionInfo>,
+}
+
+fn display_name(info: &plist::Dictionary, fallback: &str) -> String {
+    info.get("CFBundleDisplayName")
+        .or_else(|| info.get("CFBundleName"))
+        .and_then(|v| v.as_string())
+        .unwrap_or(fallback)
+        .to_string()
+}
+
+/// Read the main bundle identifier and extension manifests. This is read-only:
+/// neither signing nor Apple registration happens until the user confirms.
+pub fn inspect_ipa(path: &Path) -> Result<IpaManifest, Report> {
     let file = File::open(path).context("Could not open IPA for inspection")?;
     let mut archive = ZipArchive::new(file).context("IPA is not a valid ZIP archive")?;
-    let mut result = Vec::new();
+    let mut main = None;
+    let mut extensions = Vec::new();
     let mut ids = HashSet::new();
     for i in 0..archive.len() {
         let mut entry = archive.by_index(i)?;
         let entry_name = entry.name().to_owned();
         let parts: Vec<_> = entry_name.split('/').collect();
-        if parts.len() != 5 || parts[0] != "Payload"
-            || !parts[1].ends_with(".app") || parts[2] != "PlugIns"
-            || !parts[3].ends_with(".appex") || parts[4] != "Info.plist"
-        {
-            continue;
-        }
+        let is_main = parts.len() == 3 && parts[0] == "Payload"
+            && parts[1].ends_with(".app") && parts[2] == "Info.plist";
+        let is_extension = parts.len() == 5 && parts[0] == "Payload"
+            && parts[1].ends_with(".app") && parts[2] == "PlugIns"
+            && parts[3].ends_with(".appex") && parts[4] == "Info.plist";
+        if !is_main && !is_extension { continue; }
         if entry.size() > 512 * 1024 {
-            bail!(SideloadError::InvalidBundle("Extension Info.plist exceeds 512 KiB".into()));
+            bail!(SideloadError::InvalidBundle("Info.plist exceeds 512 KiB".into()));
         }
         let mut bytes = Vec::new();
         entry.read_to_end(&mut bytes)?;
         let info: plist::Dictionary = plist::from_bytes(&bytes)
-            .context("Could not parse extension Info.plist")?;
-        let id = info.get("CFBundleIdentifier")
-            .and_then(|v| v.as_string())
-            .ok_or_report()
-            .context("Extension is missing CFBundleIdentifier")?
-            .to_string();
-        if !ids.insert(id.clone()) {
-            bail!(SideloadError::InvalidBundle("Duplicate extension bundle ID".into()));
+            .context("Cannot parse Info.plist")?;
+        let bundle_id = info.get("CFBundleIdentifier")
+            .and_then(|v| v.as_string()).ok_or_report()
+            .context("Missing CFBundleIdentifier")?.to_string();
+        if !ids.insert(bundle_id.clone()) {
+            bail!(SideloadError::InvalidBundle("Duplicate bundle identifier".into()));
         }
-        let name = info.get("CFBundleDisplayName")
-            .or_else(|| info.get("CFBundleName"))
-            .and_then(|v| v.as_string())
-            .unwrap_or(parts[3].trim_end_matches(".appex"))
-            .to_string();
-        result.push(IpaExtensionInfo { bundle_id: id, name });
+        let name = display_name(&info, if is_main {
+            parts[1].trim_end_matches(".app")
+        } else {
+            parts[3].trim_end_matches(".appex")
+        });
+        if is_main {
+            if main.replace((bundle_id, name)).is_some() {
+                bail!(SideloadError::InvalidBundle("Multiple apps in IPA".into()));
+            }
+        } else {
+            extensions.push(IpaExtensionInfo { bundle_id, name });
+        }
     }
-    result.sort_by(|a, b| a.bundle_id.cmp(&b.bundle_id));
-    Ok(result)
+    let (bundle_id, name) = main.ok_or_report()
+        .context("IPA is missing Payload/*.app/Info.plist")?;
+    extensions.sort_by(|a, b| a.bundle_id.cmp(&b.bundle_id));
+    Ok(IpaManifest { bundle_id, name, extensions })
 }
+
+/// Accept a conservative reverse-DNS identifier, without the signer-added team suffix.
+pub fn valid_custom_bundle_id(id: &str) -> bool {
+    if id.len() > 160 || id.len() < 3 || !id.contains('.') { return false; }
+    id.split('.').all(|part| {
+        !part.is_empty() && part.len() <= 63
+            && part.as_bytes()[0].is_ascii_alphanumeric()
+            && part.bytes().all(|b| b.is_ascii_alphanumeric() || b == b'-')
+    })
+}
+
 
 impl Application {
     pub fn new(path: PathBuf) -> Result<Self, Report> {
@@ -182,6 +215,35 @@ impl Application {
         // Re-scan the bundle so removed extensions' nested frameworks and
         // dylibs are not left in the signing tree.
         self.bundle = Bundle::new(self.bundle.bundle_dir.clone())?;
+        Ok(())
+    }
+
+    /// Apply requested new-install identity before the existing team-ID signing rewrite.
+    /// The original IPA is untouched; this only edits the extracted temp bundle.
+    pub fn apply_install_identity(
+        &mut self,
+        display_name: Option<&str>,
+        custom_bundle_id: Option<&str>,
+    ) -> Result<(), Report> {
+        if let Some(custom_id) = custom_bundle_id {
+            if !valid_custom_bundle_id(custom_id) {
+                bail!(SideloadError::InvalidBundle("Invalid custom Bundle ID".into()));
+            }
+            let original = self.main_bundle_id()?;
+            if original != custom_id {
+                self.update_bundle_id(&original, custom_id)?;
+                for ext in self.bundle.app_extensions_mut() {
+                    ext.write_info()?;
+                }
+            }
+        }
+        if let Some(name) = display_name {
+            if name.is_empty() || name.chars().count() > 40 || name.chars().any(char::is_control) {
+                bail!(SideloadError::InvalidBundle("Invalid custom display name".into()));
+            }
+            self.bundle.app_info.insert("CFBundleDisplayName".into(), plist::Value::String(name.into()));
+            self.bundle.app_info.insert("CFBundleName".into(), plist::Value::String(name.into()));
+        }
         Ok(())
     }
 
