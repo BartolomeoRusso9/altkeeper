@@ -65,6 +65,108 @@ assert(html.includes('rel="icon"'));
 assert(html.includes('"/api/discord/test"'));
 console.log("Localized dashboard JavaScript syntax, actions, labels and layout OK");
 
+// A user can test the HTTP/iOS video without installing an IPA or using App IDs.
+// Renewals never start the video automatically; an install does. The test
+// expires after five minutes, can be stopped, and pauses on tab background.
+{
+  assert(html.includes('id="btn-keepawake-test"'));
+  assert(html.includes('id="install-keepawake" hidden'));
+  assert(html.includes('id="install-keepawake-video" muted loop playsinline'));
+  assert(html.includes('src="data:video/mp4;base64,'));
+  assert(html.includes('syncInstallKeepawake(job);'));
+  const mediaData = html.match(/src="data:video\/mp4;base64,([^"]+)"/);
+  assert(mediaData && Buffer.from(mediaData[1], "base64").toString("ascii", 4, 8) === "ftyp",
+    "embedded clip must contain a playable MP4 container");
+  let now = 100000;
+  let hidden = false;
+  let nextTimer = 0;
+  const intervals = new Map();
+  const listeners = {};
+  const nodes = {
+    "install-keepawake": {
+      hidden: true, listeners: {},
+      addEventListener(event, callback) { this.listeners[event] = callback; },
+    },
+    "install-keepawake-label": { textContent: "" },
+    "btn-keepawake-test": { disabled: false, textContent: "", onclick: null },
+    "keepawake-test-status": { textContent: "" },
+    "install-keepawake-video": {
+      paused: true, playCount: 0, pauseCount: 0,
+      play() { this.paused = false; this.playCount++; return Promise.resolve(); },
+      pause() { this.paused = true; this.pauseCount++; },
+    },
+  };
+  const context = vm.createContext({
+    document: {
+      get hidden() { return hidden; },
+      getElementById: id => nodes[id],
+      addEventListener(event, callback) { listeners[event] = callback; },
+    },
+    Date: { now: () => now },
+    setInterval(fn, delay) {
+      assert.equal(delay, 1000);
+      const id = ++nextTimer;
+      intervals.set(id, fn);
+      return id;
+    },
+    clearInterval(id) { intervals.delete(id); },
+  });
+  const source = embedded[1];
+  const start = source.indexOf('const KEEPAWAKE_TEST_MS = ');
+  const end = source.indexOf('function days(n) {', start);
+  assert(start >= 0 && end > start, "missing keepawake lifecycle helpers");
+  vm.runInContext('const $ = id => document.getElementById(id);\n'
+    + 'function t(s) { return s; }\nlet state = null;\n'
+    + source.slice(start, end), context);
+  const run = job => context.syncInstallKeepawake(job);
+  const video = nodes["install-keepawake-video"];
+
+  run({ kind: "renew", running: true });
+  assert.equal(video.playCount, 0, "renewal must never auto-activate video");
+  run({ kind: "install", running: true });
+  assert.equal(video.playCount, 1);
+  assert.equal(nodes["install-keepawake"].hidden, false);
+  run({ kind: "install", running: true });
+  assert.equal(video.playCount, 1, "status polling must not restart the video");
+  run({ kind: "install", running: false });
+  assert.equal(nodes["install-keepawake"].hidden, true);
+  assert.equal(video.paused, true);
+
+  nodes["btn-keepawake-test"].onclick();
+  assert.equal(intervals.size, 1, "manual test starts its own timer");
+  assert.equal(nodes["install-keepawake"].hidden, false);
+  assert.equal(video.paused, false);
+  assert(nodes["keepawake-test-status"].textContent.includes("300s remaining"));
+  nodes["btn-keepawake-test"].onclick();
+  assert.equal(intervals.size, 0, "manual stop clears the timer");
+  assert.equal(nodes["install-keepawake"].hidden, true);
+  assert.equal(video.paused, true);
+
+  nodes["btn-keepawake-test"].onclick();
+  hidden = true;
+  listeners.visibilitychange();
+  assert.equal(video.paused, true, "background must pause");
+  hidden = false;
+  listeners.visibilitychange();
+  assert.equal(video.paused, false, "foreground can retry playback");
+  now += 300001;
+  for (const tick of [...intervals.values()]) tick();
+  assert.equal(intervals.size, 0, "test must expire by elapsed time");
+  assert.equal(video.paused, true);
+  assert.equal(nodes["install-keepawake"].hidden, true);
+
+  nodes["btn-keepawake-test"].onclick();
+  assert.equal(intervals.size, 1);
+  run({ kind: "renew", running: true });
+  assert.equal(intervals.size, 0, "a real renewal cancels manual test");
+  assert.equal(video.paused, true);
+  run({ kind: "install", running: true });
+  assert.equal(video.paused, false);
+  assert.equal(nodes["btn-keepawake-test"].disabled, true);
+  run({ kind: "install", running: false, ok: false });
+  assert.equal(video.paused, true, "failed installation stops the video");
+}
+
 // Installation progress stays next to the IPA controls, including its final
 // failure/success. A later renewal moves the same panel back without copying
 // log nodes or losing the reader's scroll position.
