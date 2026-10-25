@@ -311,7 +311,14 @@ async fn cmd_renew(
             requested_found = true;
         }
         if let Some(apps) = &installed {
-            if !apps.contains(root) && !apps.contains(bundle) {
+            // InstallationProxy may report either the signed (raw) Bundle ID
+            // or the unsuffixed app Bundle ID. Profiles, unlike installed
+            // apps, may carry a trailing ".{team}" in their Apple App ID.
+            let host_id = profile::profile_app_id(root, &team_id);
+            let member_id = profile::profile_app_id(bundle, &team_id);
+            if !apps.contains(root) && !apps.contains(host_id)
+                && !apps.contains(bundle) && !apps.contains(member_id)
+            {
                 say(&format!("   {bundle}: host app not installed, skipping"));
                 continue;
             }
