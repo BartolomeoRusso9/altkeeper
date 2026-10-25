@@ -101,6 +101,82 @@ pub fn inspect_ipa(path: &Path) -> Result<IpaManifest, Report> {
     Ok(IpaManifest { bundle_id, name, extensions })
 }
 
+/// Replace quoted display-name values in OpenStep InfoPlist.strings without
+/// disturbing other localized strings. Binary plist is handled separately.
+fn replace_localized_display_name(text: &str, display_name: &str) -> String {
+    let quoted_name = display_name.replace('\\', "\\\\").replace('"', "\\\"");
+    let mut value = text.to_string();
+    for key in ["CFBundleDisplayName", "CFBundleName"] {
+        for prefix in [format!("\"{key}\""), key.to_string()] {
+            let mut cursor = 0;
+            while let Some(offset) = value[cursor..].find(&prefix) {
+                let end_key = cursor + offset + prefix.len();
+                let bytes = value.as_bytes();
+                let mut p = end_key;
+                while p < bytes.len() && bytes[p].is_ascii_whitespace() { p += 1; }
+                if bytes.get(p) != Some(&b'=') { cursor = end_key; continue; }
+                p += 1;
+                while p < bytes.len() && bytes[p].is_ascii_whitespace() { p += 1; }
+                if bytes.get(p) != Some(&b'"') { cursor = end_key; continue; }
+                let first = p + 1;
+                let mut last = first;
+                let mut escaped = false;
+                while last < bytes.len() {
+                    let current = bytes[last];
+                    if current == b'"' && !escaped { break; }
+                    if current == b'\\' && !escaped { escaped = true; }
+                    else { escaped = false; }
+                    last += 1;
+                }
+                if last == bytes.len() { cursor = end_key; continue; }
+                value.replace_range(first..last, &quoted_name);
+                cursor = first + quoted_name.len() + 1;
+            }
+        }
+    }
+    value
+}
+
+fn localized_name_bytes(original: &[u8], name: &str) -> Result<Vec<u8>, Report> {
+    if let Ok(mut dict) = plist::from_bytes::<plist::Dictionary>(original) {
+        for key in ["CFBundleDisplayName", "CFBundleName"] {
+            if dict.contains_key(key) {
+                dict.insert(key.into(), plist::Value::String(name.into()));
+            }
+        }
+        let mut result = Vec::new();
+        plist::to_writer_binary(&mut result, &dict)?;
+        return Ok(result);
+    }
+    let le = original.starts_with(&[0xff, 0xfe]);
+    let be = original.starts_with(&[0xfe, 0xff]);
+    let text = if le || be {
+        let mut chunks = original[2..].chunks_exact(2);
+        let words: Vec<u16> = chunks.by_ref().map(|c| if le {
+            u16::from_le_bytes([c[0], c[1]])
+        } else {
+            u16::from_be_bytes([c[0], c[1]])
+        }).collect();
+        if !chunks.remainder().is_empty() {
+            bail!(SideloadError::InvalidBundle("Invalid UTF-16 localization file".into()));
+        }
+        String::from_utf16(&words)?
+    } else {
+        String::from_utf8(original.to_vec())?
+    };
+    let updated = replace_localized_display_name(&text, name);
+    if updated == text { return Ok(original.to_vec()); }
+    if le || be {
+        let mut out = if le { vec![0xff, 0xfe] } else { vec![0xfe, 0xff] };
+        for c in updated.encode_utf16() {
+            out.extend_from_slice(if le { &c.to_le_bytes() } else { &c.to_be_bytes() });
+        }
+        Ok(out)
+    } else {
+        Ok(updated.into_bytes())
+    }
+}
+
 /// Accept a conservative reverse-DNS identifier, without the signer-added team suffix.
 pub fn valid_custom_bundle_id(id: &str) -> bool {
     if id.len() > 160 || id.len() < 3 || !id.contains('.') { return false; }
@@ -243,6 +319,23 @@ impl Application {
             }
             self.bundle.app_info.insert("CFBundleDisplayName".into(), plist::Value::String(name.into()));
             self.bundle.app_info.insert("CFBundleName".into(), plist::Value::String(name.into()));
+            // iOS prefers localized InfoPlist.strings names over CFBundleDisplayName.
+            // Update the temporary IPA extraction only, not any installed app.
+            for entry in isideload_vfs::fs::read_dir(&self.bundle.bundle_dir)? {
+                let entry = entry?;
+                let localized = entry.path();
+                if localized.extension().is_none_or(|ext| ext != "lproj") { continue; }
+                let path = localized.join("InfoPlist.strings");
+                if !isideload_vfs::fs::metadata(&path).is_ok() { continue; }
+                let old = isideload_vfs::fs::read(&path)?;
+                if old.len() > 1024 * 1024 {
+                    bail!(SideloadError::InvalidBundle("Localized display-name file too large".into()));
+                }
+                let new = localized_name_bytes(&old, name)?;
+                if old != new {
+                    isideload_vfs::fs::write(&path, &new)?;
+                }
+            }
         }
         Ok(())
     }
