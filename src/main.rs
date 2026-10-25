@@ -346,9 +346,12 @@ async fn cmd_renew(
     let ids = apple::app_ids(&mut sess, &team).await?;
 
     let mut done = 0;
+    let mut missing_app_ids = Vec::new();
     for (bundle, days) in due {
         let Some(app) = ids.iter().find(|a| a.identifier == bundle) else {
             say(&format!("   {bundle}: no matching App ID on Apple, skipping"));
+            say(&format!("MISSING_APP_ID {bundle}"));
+            missing_app_ids.push(bundle);
             continue;
         };
         if dry_run {
@@ -377,7 +380,20 @@ async fn cmd_renew(
             say(&profile_line(p));
         }
     }
-    Ok(())
+    renewal_completion(&missing_app_ids, done)
+}
+
+/// A skipped due profile is still an incomplete renewal, even if other apps
+/// succeeded. Keep processing known IDs, then propagate failure to CLI/web
+/// callers so scheduled retries and the final failure notification still run.
+fn renewal_completion(missing_app_ids: &[&str], renewed: usize) -> Result<(), String> {
+    if missing_app_ids.is_empty() {
+        return Ok(());
+    }
+    Err(format!(
+        "Renewal incomplete: {} due profile(s) have no matching App ID on Apple; {} renewed. Missing: {}",
+        missing_app_ids.len(), renewed, missing_app_ids.join(", ")
+    ))
 }
 
 /// Toglie dal telefono il profilo con questo UUID, dopo averne salvato e riletto una copia in
@@ -607,6 +623,23 @@ mod cli_tests {
     use super::save_password_confirmed;
 
     #[test]
+    fn missing_due_app_ids_cannot_report_success() {
+        let missing = ["com.example.app.TEAM", "com.example.app.TEAM.extension"];
+        let error = super::renewal_completion(&missing, 0).unwrap_err();
+        assert!(error.contains("2 due profile(s)"));
+        assert!(error.contains("0 renewed"));
+        for bundle in missing { assert!(error.contains(bundle)); }
+        let partial = super::renewal_completion(&missing[..1], 2).unwrap_err();
+        assert!(partial.contains("2 renewed"));
+    }
+
+    #[test]
+    fn successful_and_no_op_renewals_remain_successful() {
+        assert!(super::renewal_completion(&[], 0).is_ok());
+        assert!(super::renewal_completion(&[], 3).is_ok());
+    }
+
+    #[test]
     fn confirmation_accepts_italian_and_english_yes() {
         for yes in ["s", "S", "si", "SÌ", "y", "Y", "yes", "YES", " yes\r\n"] {
             assert!(save_password_confirmed(yes), "{yes:?}");
@@ -620,3 +653,4 @@ mod cli_tests {
         }
     }
 }
+

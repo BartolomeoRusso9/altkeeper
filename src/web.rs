@@ -59,7 +59,7 @@ struct App {
     pending_ipa: Mutex<Option<PendingIpa>>,
 }
 
-#[derive(Default)]
+#[derive(Default, Clone)]
 struct Inner {
     snapshot: Snapshot,
     job: JobView,
@@ -637,7 +637,9 @@ async fn state(State(app): State<Arc<App>>) -> Json<Value> {
     let history = std::fs::read_to_string(RENEW_LOG)
         .map(|t| parse_history(&t, 6))
         .unwrap_or_default();
-    let g = app.lock();
+    // Copy the view and release its mutex before reading the schedule. Never
+    // hold the UI and scheduler mutexes together (retry logging also uses UI).
+    let g = app.lock().clone();
     let schedule = app.auto_renew.lock().unwrap_or_else(|e| e.into_inner()).clone();
     let next_scheduled = next_auto_run(&schedule, now());
     let asking = app.tfa.asking.load(Ordering::SeqCst);
@@ -1405,12 +1407,13 @@ async fn run_renew(
         g.job.lines.clone()
     };
     append_log(&lines, ok);
-    save_app_renew_status(&app, &lines, ok, bundle.as_deref());
+    save_app_renew_status(&app, &lines, bundle.as_deref());
 
     if automatic {
         let mut config = app.auto_renew.lock().unwrap_or_else(|e| e.into_inner());
         let mut updated = config.clone();
         let mut notify = false;
+        let mut retry_message = None;
         if ok {
             updated.retry_count = 0;
             updated.retry_at = None;
@@ -1422,7 +1425,7 @@ async fn run_renew(
                 && retryable_renew_error(err)
             {
                 updated.retry_at = Some(now() + RETRY_SECONDS);
-                app.push_line(&format!(
+                retry_message = Some(format!(
                     "Automatic retry {}/{} in 30 minutes.",
                     updated.retry_count + 1, MAX_RETRIES
                 ));
@@ -1433,10 +1436,15 @@ async fn run_renew(
         }
         if let Err(e) = save_auto_renew(&updated) {
             eprintln!("[auto-renew] Could not persist retry state: {e}");
+            retry_message = None;
         } else {
             *config = updated;
         }
         drop(config);
+        // Only announce a persisted retry, after releasing the schedule lock.
+        if let Some(message) = retry_message {
+            app.push_line(&message);
+        }
         if notify && discord_configured() {
             let err = error.as_deref().unwrap_or("Unknown renewal error");
             match send_discord_failure(err) {
@@ -1448,27 +1456,38 @@ async fn run_renew(
     run_check(app).await;
 }
 
-fn save_app_renew_status(app: &App, lines: &[String], ok: bool, selected: Option<&str>) {
+fn app_renew_updates(
+    groups: Vec<AppView>, lines: &[String], selected: Option<&str>, at: u64,
+) -> serde_json::Map<String, Value> {
     let renewed: std::collections::HashSet<&str> = lines.iter()
         .filter_map(|line| line.strip_prefix("RENEWED ")).collect();
+    let missing: std::collections::HashSet<&str> = lines.iter()
+        .filter_map(|line| line.strip_prefix("MISSING_APP_ID ")).collect();
     let attempted: std::collections::HashSet<&str> = lines.iter()
         .filter_map(|line| line.trim().split_once(": expires in "))
         .filter(|(_, tail)| tail.contains("downloading a new profile"))
         .map(|(bundle,_)| bundle).collect();
+    let mut updates = serde_json::Map::new();
+    for group in groups {
+        if selected.is_some_and(|s| s != group.bundle) { continue; }
+        let in_group = group.members.iter().filter(|m| renewed.contains(m.bundle.as_str())).count();
+        let any_attempted = group.members.iter().any(|m|
+            attempted.contains(m.bundle.as_str()) || missing.contains(m.bundle.as_str()));
+        if in_group == 0 && !any_attempted && selected.is_none() { continue; }
+        let status = if in_group == group.members.len() { "success" }
+            else if in_group > 0 { "partial" } else { "failed" };
+        updates.insert(group.bundle, json!({"status":status,"at":at,"renewed":in_group,
+            "total":group.members.len()}));
+    }
+    updates
+}
+
+fn save_app_renew_status(app: &App, lines: &[String], selected: Option<&str>) {
     let groups = app.lock().snapshot.apps.clone();
     let mut existing = std::fs::read_to_string(APP_STATUS_FILE).ok()
         .and_then(|s| serde_json::from_str::<serde_json::Map<String, Value>>(&s).ok())
         .unwrap_or_default();
-    for group in groups {
-        if selected.is_some_and(|s| s != group.bundle) { continue; }
-        let in_group = group.members.iter().filter(|m| renewed.contains(m.bundle.as_str())).count();
-        let any_attempted = group.members.iter().any(|m| attempted.contains(m.bundle.as_str()));
-        if in_group == 0 && !any_attempted && selected.is_none() { continue; }
-        let status = if ok && in_group == group.members.len() { "success" }
-            else if in_group > 0 { "partial" } else { "failed" };
-        existing.insert(group.bundle, json!({"status":status,"at":now(),"renewed":in_group,
-            "total":group.members.len()}));
-    }
+    existing.extend(app_renew_updates(groups, lines, selected, now()));
     if std::fs::create_dir_all("state").is_ok() {
         if let Ok(bytes) = serde_json::to_vec(&existing) {
             let _ = crate::fsperm::write_private(Path::new(APP_STATUS_FILE), &bytes);
@@ -1965,6 +1984,77 @@ fn append_log(lines: &[String], ok: bool) {
 #[cfg(test)]
 mod tests {
     #[test]
+    fn state_does_not_hold_ui_lock_while_waiting_for_schedule() {
+        let app = Arc::new(App {
+            pin: None, phone: None, busy: AtomicBool::new(true),
+            inner: Mutex::new(Inner::default()),
+            tfa: Arc::new(apple::TfaChannel::default()),
+            auto_renew: Mutex::new(AutoRenewConfig::default()),
+            pending_ipa: Mutex::new(None),
+        });
+        let schedule = app.auto_renew.lock().unwrap();
+        let (started_tx, started_rx) = std::sync::mpsc::channel();
+        let (done_tx, done_rx) = std::sync::mpsc::channel();
+        let reader = app.clone();
+        std::thread::spawn(move || {
+            let rt = tokio::runtime::Builder::new_current_thread().enable_all().build().unwrap();
+            started_tx.send(()).unwrap();
+            rt.block_on(state(State(reader)));
+            let _ = done_tx.send(());
+        });
+        started_rx.recv_timeout(Duration::from_secs(5)).unwrap();
+        // A state reader waiting for the scheduler must release the UI mutex.
+        // Brief contention while copying the snapshot is fine; sustained
+        // contention would block retry logging and recreate the deadlock.
+        let until = std::time::Instant::now() + Duration::from_millis(200);
+        let mut blocked_since = None;
+        let mut sustained_block = false;
+        while std::time::Instant::now() < until {
+            if app.inner.try_lock().is_ok() {
+                blocked_since = None;
+            } else {
+                let since = blocked_since.get_or_insert_with(std::time::Instant::now);
+                if since.elapsed() > Duration::from_millis(50) {
+                    sustained_block = true;
+                    break;
+                }
+            }
+            std::thread::yield_now();
+        }
+        // Release before asserting so even the old behavior cannot hang CI.
+        drop(schedule);
+        done_rx.recv_timeout(Duration::from_secs(5)).unwrap();
+        assert!(!sustained_block, "state held the UI mutex while waiting for the schedule");
+    }
+
+    #[test]
+    fn missing_ids_update_failed_and_partial_groups_without_tainting_successes() {
+        let profiles = vec![
+            profile("a", "TEAM", "com.example.a", 2),
+            profile("b", "TEAM", "com.example.b", 2),
+            profile("c", "TEAM", "com.example.c", 2),
+            profile("cx", "TEAM", "com.example.c.TEAM.extension", 2),
+            profile("d", "TEAM", "com.example.d", 6),
+        ];
+        let groups = app_views(&profiles, "TEAM");
+        let lines = vec![
+            "RENEWED com.example.a".into(),
+            "MISSING_APP_ID com.example.b".into(),
+            "RENEWED com.example.c".into(),
+            "MISSING_APP_ID com.example.c.TEAM.extension".into(),
+        ];
+        let updates = app_renew_updates(groups, &lines, None, 123);
+        assert_eq!(updates["com.example.a"]["status"], "success");
+        assert_eq!(updates["com.example.b"]["status"], "failed");
+        assert_eq!(updates["com.example.b"]["renewed"], 0);
+        assert_eq!(updates["com.example.c"]["status"], "partial");
+        assert_eq!(updates["com.example.c"]["total"], 2);
+        assert!(!updates.contains_key("com.example.d"));
+        let error = crate::renewal_completion(&["com.example.b"], 2).unwrap_err();
+        assert!(retryable_renew_error(&error));
+    }
+
+    #[test]
     fn custom_identity_accepts_independent_name_or_bundle_and_rejects_invalid_ids() {
         assert!(validated_install_identity(None, None, "com.example.app").unwrap().is_none());
         let renamed = validated_install_identity(Some(" 새 이름 ".into()), None, "com.example.app")
@@ -2289,3 +2379,4 @@ esito: 0
         assert!(parse_history("righe senza intestazione\n", 5).is_empty());
     }
 }
+
