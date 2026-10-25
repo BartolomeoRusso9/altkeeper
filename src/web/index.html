@@ -42,12 +42,18 @@
   .locale-toolbar { display: flex; justify-content: flex-end; align-items: center; gap: 8px; margin: 0 0 8px; }
   .locale-toolbar label { margin: 0; font-size: .85rem; color: var(--muted); }
   .locale-toolbar select { min-width: 112px; text-align: center; }
-  .action-row { justify-content: center; align-items: stretch; }
-  .action-row > button { flex: 0 0 184px; width: 184px; min-height: 54px; padding: 6px 10px; }
+  /* Responsive action groups: keep labels centered, groups left-aligned. */
+  .action-row { justify-content: flex-start; align-items: stretch; flex-wrap: nowrap; }
+  .action-row > button {
+    flex: 1 1 0; min-width: 0; max-width: 184px; min-height: 54px;
+    padding: 6px 8px; text-align: center; white-space: normal;
+    word-break: keep-all; overflow-wrap: anywhere;
+  }
   #btn-check, #btn-change, #btn-install, #btn-login, #btn-code, #btn-resend {
     width: 184px; min-height: 54px; padding: 6px 10px;
   }
-  #code-form .row { justify-content: center; }
+  #code-form .row { justify-content: flex-start; flex-wrap: nowrap; gap: 8px; }
+  #code-form .row > button { flex: 1 1 0; width: auto; min-width: 0; max-width: 184px; }
 
   .item-head button { width: 106px; flex: 0 0 106px; }
   .ext-option { display: flex; align-items: center; gap: 10px; padding: 10px 3px;
@@ -68,7 +74,14 @@
   @media(max-width:420px) {
     .item-head { gap: 6px; }
     .item-head button { width: 90px; flex-basis: 90px; padding: 8px 3px; font-size: .77rem; white-space: normal; }
-    .action-row > button { flex-basis: 184px; width: 184px; }
+    /* Three equal-width buttons still fit iPhone 13 mini's 375px viewport. */
+    .action-row { gap: 6px; }
+    .action-row > button {
+      flex: 1 1 0; width: auto; min-width: 0; max-width: 184px;
+      padding: 8px 4px; font-size: .8rem; line-height: 1.25;
+    }
+    #code-form .row > button { padding: 8px 5px; font-size: .85rem; }
+    #btn-check, #btn-change, #btn-install, #btn-login { max-width: 100%; }
   }
   .grow { flex: 1 1 auto; }
   .pill {
@@ -227,7 +240,7 @@
       <input id="install-bundle-id" type="text" maxlength="160" autocapitalize="off" spellcheck="false"
         autocomplete="off" placeholder="e.g. com.example.youtubeclone">
       <p class="muted" data-i18n="These settings are for new installations only. Existing apps and automatic renewal are never modified. A new Bundle ID allows a separate copy; the Apple team suffix is added automatically.">These settings are for new installations only. Existing apps and automatic renewal are never modified. A new Bundle ID allows a separate copy; the Apple team suffix is added automatically.</p>
-      <div class="row" style="margin-top:10px; justify-content:center">
+      <div class="row" style="margin-top:10px">
         <button class="primary" id="btn-install" type="submit" data-i18n="Sign and install">Sign and install</button>
         <span class="muted" id="install-hint"></span>
       </div>
