@@ -210,7 +210,23 @@ A successful lookup returning zero apps skips all renewals.
 To renew a specific app, use `altkeeper renew --bundle <bundle-id> --force` or the per-app
 **Renew** button on the web page. The manual `--force` and web “Renew all now” operations
 do not check installed apps; `--installed-only` can be used with CLI `--force` to opt in.
-No unattended schedule is enabled by merely running the Docker container.
+No unattended schedule is enabled by merely running the Docker container (default: OFF).
+
+**Optional built-in scheduler in the web UI:** Use **Automatic renewal** to enable/disable a
+once-daily job and choose a time in **Asia/Seoul (KST, UTC+09:00)**. The default clock
+time is 06:00 KST and the switch is initially OFF. When enabled, AltKeeper runs
+the same installed-app-aware renewal as **Renew expiring apps**, with the documented
+all-profile fallback if installed-app listing fails. The server needs a saved
+Apple ID password, must be running, and the iPhone must be reachable.
+Only one scheduled *attempt* is made per KST calendar day (including failures).
+A server that starts after the scheduled time on a day with no attempt will run
+that day's job when it starts; enabling or changing the scheduled time after
+today's slot does **not** trigger an immediate refresh. The next slot is tomorrow.
+The schedule and last attempted day are stored in `state/auto-renew.json` under
+the persistent `/data` volume, surviving Docker restarts. No host systemd,
+cron, privileged host socket, or extra package is needed. **Do not enable
+an external cron/systemd renewal job at the same time** unless deliberate.
+
 
 The web page also lists **individual provisioning profiles** (including older versions) with a
 **Delete profile** button. Every removal requires confirmation, is limited to the saved Apple team,

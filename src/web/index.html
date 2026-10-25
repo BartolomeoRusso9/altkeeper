@@ -117,6 +117,22 @@
   </section>
 
   <section class="card">
+    <h2>Automatic renewal</h2>
+    <p class="muted">Runs once daily while this server is online. Renews expiring installed apps. If installed-app lookup fails, it falls back to all saved-team profiles. Default is OFF.</p>
+    <div class="row">
+      <span class="pill" id="auto-pill">OFF</span>
+      <span class="muted grow" id="auto-next">Automatic renewal disabled</span>
+    </div>
+    <label for="auto-time">Run every day at (Korea Standard Time)</label>
+    <div class="row">
+      <input type="time" id="auto-time" value="06:00" style="max-width:165px">
+      <button class="primary" id="auto-enable" type="button">Enable auto-renew</button>
+      <button id="auto-disable" type="button" hidden>Turn off</button>
+    </div>
+    <div class="banner bad" id="auto-error" hidden></div>
+  </section>
+
+  <section class="card">
     <h2>Provisioning profiles on iPhone</h2>
     <p class="muted">Old profiles may remain after renewal. Deleting a profile still needed by an installed app can stop it opening. A verified server-side backup is saved before removal.</p>
     <p class="muted" id="profiles-empty" hidden></p>
@@ -281,6 +297,23 @@ function render(s) {
     : !s.account.password_saved ? "The password must be saved to renew: sign in again and leave the checkbox selected."
     : s.busy ? "Working…" : "";
 
+  // Persistent server-side automatic renewal; UI does not call host systemctl.
+  const auto = s.auto_renew || {enabled:false, time:"06:00", next_run:null};
+  $("auto-pill").textContent = auto.enabled ? "ON" : "OFF";
+  $("auto-pill").className = "pill " + (auto.enabled ? "ok" : "");
+  const next = auto.next_run
+    ? new Date(auto.next_run * 1000).toLocaleString("ko-KR", {
+        timeZone:"Asia/Seoul", year:"numeric", month:"2-digit", day:"2-digit",
+        hour:"2-digit", minute:"2-digit", hour12:false
+      })
+    : null;
+  $("auto-next").textContent = auto.enabled ? "Next: " + (next || "checking") + " KST"
+    : "Automatic renewal disabled";
+  if (document.activeElement !== $("auto-time")) $("auto-time").value = auto.time || "06:00";
+  $("auto-enable").textContent = auto.enabled ? "Save time" : "Enable auto-renew";
+  $("auto-enable").disabled = !s.account.password_saved || !s.account.team;
+  $("auto-disable").hidden = !auto.enabled;
+
   // Manual, individually backed-up profile removal. Never deletes apps or Apple App IDs.
   const pu = $("profiles");
   pu.replaceChildren();
@@ -380,6 +413,14 @@ async function act(fn, errId) {
   refresh();
 }
 
+$("auto-enable").onclick = () => {
+  banner("auto-error", "");
+  act(() => api("/api/auto-renew", {enabled:true, time:$("auto-time").value}), "auto-error");
+};
+$("auto-disable").onclick = () => {
+  banner("auto-error", "");
+  act(() => api("/api/auto-renew", {enabled:false, time:$("auto-time").value}), "auto-error");
+};
 $("btn-check").onclick = () => act(() => api("/api/check", {}));
 $("btn-due").onclick = () => act(() => api("/api/renew", { mode: "due" }));
 $("btn-all").onclick = () => {

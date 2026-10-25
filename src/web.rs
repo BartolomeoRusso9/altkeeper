@@ -24,13 +24,16 @@ use axum::{
     response::{Html, IntoResponse, Response},
     routing::{get, post},
 };
-use serde::Deserialize;
+use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
 
 use crate::{PAIRING_FILE, apple, phone, profile};
 
 const INDEX_HTML: &str = include_str!("web/index.html");
 const RENEW_LOG: &str = "renew.log";
+const AUTO_RENEW_CONFIG: &str = "state/auto-renew.json";
+const KST_OFFSET_SECS: u64 = 9 * 60 * 60;
+const DAY_SECS: u64 = 24 * 60 * 60;
 const MAX_JOB_LINES: usize = 300;
 const MAX_IPA_BYTES: usize = 1024 * 1024 * 1024;
 
@@ -45,6 +48,7 @@ struct App {
     busy: AtomicBool,
     inner: Mutex<Inner>,
     tfa: Arc<apple::TfaChannel>,
+    auto_renew: Mutex<AutoRenewConfig>,
 }
 
 #[derive(Default)]
@@ -168,6 +172,118 @@ fn now() -> u64 {
     SystemTime::now().duration_since(UNIX_EPOCH).map(|d| d.as_secs()).unwrap_or(0)
 }
 
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+struct AutoRenewConfig {
+    enabled: bool,
+    /// HH:MM in Asia/Seoul (fixed UTC+09:00), independent of container TZ.
+    time: String,
+    /// KST calendar day of the most recent automatic attempt.
+    last_attempt_day: Option<u64>,
+}
+
+impl Default for AutoRenewConfig {
+    fn default() -> Self {
+        Self {
+            enabled: false,
+            time: "06:00".into(),
+            last_attempt_day: None,
+        }
+    }
+}
+
+fn parse_kst_time(value: &str) -> Option<u64> {
+    let (hh, mm) = value.split_once(':')?;
+    if hh.len() != 2 || mm.len() != 2 { return None; }
+    if !hh.bytes().chain(mm.bytes()).all(|b| b.is_ascii_digit()) { return None; }
+    let hour: u64 = hh.parse().ok()?;
+    let minute: u64 = mm.parse().ok()?;
+    (hour < 24 && minute < 60).then_some(hour * 3600 + minute * 60)
+}
+
+fn kst_day(now_secs: u64) -> u64 {
+    now_secs.saturating_add(KST_OFFSET_SECS) / DAY_SECS
+}
+
+fn kst_seconds_of_day(now_secs: u64) -> u64 {
+    now_secs.saturating_add(KST_OFFSET_SECS) % DAY_SECS
+}
+
+fn next_auto_run(config: &AutoRenewConfig, now_secs: u64) -> Option<u64> {
+    if !config.enabled { return None; }
+    let target = parse_kst_time(&config.time)?;
+    let today = kst_day(now_secs);
+    let can_run_today = kst_seconds_of_day(now_secs) < target
+        && config.last_attempt_day != Some(today);
+    let scheduled_day = if can_run_today { today } else { today + 1 };
+    Some(scheduled_day * DAY_SECS + target - KST_OFFSET_SECS)
+}
+
+fn load_auto_renew() -> AutoRenewConfig {
+    let raw = match std::fs::read_to_string(AUTO_RENEW_CONFIG) {
+        Ok(raw) => raw,
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => return AutoRenewConfig::default(),
+        Err(e) => {
+            eprintln!("[auto-renew] Cannot read config ({e}); automatic renewal disabled");
+            return AutoRenewConfig::default();
+        }
+    };
+    match serde_json::from_str::<AutoRenewConfig>(&raw) {
+        Ok(config) if parse_kst_time(&config.time).is_some() => config,
+        _ => {
+            eprintln!("[auto-renew] Invalid schedule config; automatic renewal disabled");
+            AutoRenewConfig::default()
+        }
+    }
+}
+
+fn save_auto_renew(config: &AutoRenewConfig) -> Result<(), String> {
+    std::fs::create_dir_all("state").map_err(crate::phone::dbg)?;
+    crate::fsperm::restrict_dir(Path::new("state")).map_err(crate::phone::dbg)?;
+    let data = serde_json::to_vec_pretty(config).map_err(crate::phone::dbg)?;
+    // Atomic write: avoid resetting the persistent on/off state after an interrupted write.
+    let tmp = Path::new("state/auto-renew.json.tmp");
+    crate::fsperm::write_private(tmp, &data).map_err(crate::phone::dbg)?;
+    std::fs::rename(tmp, AUTO_RENEW_CONFIG).map_err(crate::phone::dbg)
+}
+
+async fn auto_renew_loop(app: Arc<App>) {
+    loop {
+        let now_secs = now();
+        let guard = {
+            let config = app.auto_renew.lock().unwrap_or_else(|e| e.into_inner());
+            let due = config.enabled
+                && parse_kst_time(&config.time)
+                    .is_some_and(|target| kst_seconds_of_day(now_secs) >= target)
+                && config.last_attempt_day != Some(kst_day(now_secs));
+            if due { try_busy(&app) } else { None }
+        };
+        if let Some(guard) = guard {
+            let mut config = app.auto_renew.lock().unwrap_or_else(|e| e.into_inner());
+            if config.enabled && config.last_attempt_day != Some(kst_day(now_secs)) {
+                let mut updated = config.clone();
+                updated.last_attempt_day = Some(kst_day(now_secs));
+                match save_auto_renew(&updated) {
+                    Ok(()) => {
+                        *config = updated;
+                        drop(config); // avoid lock-order inversion with /api/state
+                        app.lock().job = JobView {
+                            kind: "auto_renew".into(),
+                            running: true,
+                            lines: vec!["Automatic renewal started (Asia/Seoul schedule).".into()],
+                            ok: None,
+                        };
+                        println!("[auto-renew] Starting scheduled renewal.");
+                        spawn_job(guard, |app| run_renew(app, false, None, true));
+                    }
+                    Err(err) => eprintln!("[auto-renew] Could not persist attempt; skipping: {err}"),
+                }
+            }
+        }
+        tokio::time::sleep(Duration::from_secs(60)).await;
+    }
+}
+
 // ---------------------------------------------------------------------------------------------
 // Avvio
 // ---------------------------------------------------------------------------------------------
@@ -199,12 +315,14 @@ pub async fn serve(
         busy: AtomicBool::new(false),
         inner: Mutex::new(Inner::default()),
         tfa: Arc::new(apple::TfaChannel::default()),
+        auto_renew: Mutex::new(load_auto_renew()),
     });
     let router = Router::new()
         .route("/", get(index))
         .route("/api/state", get(state))
         .route("/api/check", post(check))
         .route("/api/renew", post(renew))
+        .route("/api/auto-renew", post(update_auto_renew))
         .route("/api/profile/remove", post(remove_profile))
         .route(
             "/api/install",
@@ -227,6 +345,8 @@ pub async fn serve(
             "PIN-protected: any username is accepted"
         } else { "only accessible from this computer" })
     ));
+    // Built-in scheduler; no systemd socket/host privileges or separate cron required.
+    tokio::spawn(auto_renew_loop(app.clone()));
     // Runs independently of iPhone communications and renewal. Check daily but
     // perform a sweep only if 30 days have passed since the last successful sweep.
     tokio::spawn(async {
@@ -390,6 +510,8 @@ async fn state(State(app): State<Arc<App>>) -> Json<Value> {
         .map(|t| parse_history(&t, 6))
         .unwrap_or_default();
     let g = app.lock();
+    let schedule = app.auto_renew.lock().unwrap_or_else(|e| e.into_inner()).clone();
+    let next_scheduled = next_auto_run(&schedule, now());
     let asking = app.tfa.asking.load(Ordering::SeqCst);
     let login_phase = if asking { "needs_code" } else { g.login.phase };
     let code_error = app.tfa.last_error.lock().ok().and_then(|e| e.clone());
@@ -398,6 +520,12 @@ async fn state(State(app): State<Arc<App>>) -> Json<Value> {
         "now": now(),
         "busy": app.busy.load(Ordering::SeqCst),
         "pairing": pairing,
+        "auto_renew": {
+            "enabled": schedule.enabled,
+            "time": schedule.time,
+            "time_zone": "Asia/Seoul",
+            "next_run": next_scheduled,
+        },
         "account": {
             "present": account.is_some(),
             "apple_id": account.as_ref().map(|a| a.apple_id.clone()),
@@ -440,6 +568,45 @@ async fn check(State(app): State<Arc<App>>) -> (StatusCode, Json<Value>) {
     };
     app.lock().snapshot.checking = true;
     spawn_job(guard, run_check);
+    json_ok()
+}
+
+
+#[derive(Deserialize)]
+struct AutoRenewReq {
+    enabled: bool,
+    time: String,
+}
+
+async fn update_auto_renew(
+    State(app): State<Arc<App>>,
+    Json(req): Json<AutoRenewReq>,
+) -> (StatusCode, Json<Value>) {
+    let Some(target) = parse_kst_time(&req.time) else {
+        return json_err(StatusCode::BAD_REQUEST, "Use a valid 24-hour time (HH:MM).");
+    };
+    if req.enabled {
+        match apple::read_account(Path::new(".")) {
+            Some(acc) if !acc.password.is_empty() && acc.team_id.is_some() => {}
+            _ => return json_err(StatusCode::BAD_REQUEST,
+                "Save your Apple ID password before enabling automatic renewal."),
+        }
+    }
+    let mut config = app.auto_renew.lock().unwrap_or_else(|e| e.into_inner());
+    let mut updated = config.clone();
+    // Turning on or changing the clock time after today's scheduled time
+    // must NOT immediately trigger an unrequested refresh.
+    if req.enabled && (!config.enabled || config.time != req.time)
+        && kst_seconds_of_day(now()) >= target
+    {
+        updated.last_attempt_day = Some(kst_day(now()));
+    }
+    updated.enabled = req.enabled;
+    updated.time = req.time;
+    if let Err(err) = save_auto_renew(&updated) {
+        return json_err(StatusCode::INTERNAL_SERVER_ERROR, &format!("Cannot save schedule: {err}"));
+    }
+    *config = updated;
     json_ok()
 }
 
@@ -1225,6 +1392,25 @@ fn append_log(lines: &[String], ok: bool) {
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn auto_renew_kst_time_validation_and_next_run() {
+        assert_eq!(parse_kst_time("06:00"), Some(6 * 3600));
+        for invalid in ["24:00", "21:60", "9:01", "abc", "21:17:00"] {
+            assert_eq!(parse_kst_time(invalid), None);
+        }
+        // Day 20 in KST: scheduled for 06:00, 05:00 currently.
+        let day = 20_u64;
+        let now_secs = day * DAY_SECS + 5 * 3600 - KST_OFFSET_SECS;
+        let mut conf = AutoRenewConfig { enabled: true, time: "06:00".into(), last_attempt_day: None };
+        assert_eq!(next_auto_run(&conf, now_secs),
+            Some(day * DAY_SECS + 6 * 3600 - KST_OFFSET_SECS));
+        conf.last_attempt_day = Some(day);
+        assert_eq!(next_auto_run(&conf, now_secs),
+            Some((day + 1) * DAY_SECS + 6 * 3600 - KST_OFFSET_SECS));
+        conf.enabled = false;
+        assert_eq!(next_auto_run(&conf, now_secs), None);
+    }
+
     #[test]
     fn il_progresso_si_scrive_ogni_dieci_punti() {
         let mut last = -1;
