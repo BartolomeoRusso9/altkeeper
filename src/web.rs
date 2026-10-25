@@ -32,6 +32,10 @@ use crate::{PAIRING_FILE, apple, phone, profile};
 const INDEX_HTML: &str = include_str!("web/index.html");
 const RENEW_LOG: &str = "renew.log";
 const AUTO_RENEW_CONFIG: &str = "state/auto-renew.json";
+const DISCORD_WEBHOOK_FILE: &str = "state/discord-webhook";
+const APP_STATUS_FILE: &str = "state/app-renew-status.json";
+const RETRY_SECONDS: u64 = 30 * 60;
+const MAX_RETRIES: u8 = 2;
 const KST_OFFSET_SECS: u64 = 9 * 60 * 60;
 const DAY_SECS: u64 = 24 * 60 * 60;
 const MAX_JOB_LINES: usize = 300;
@@ -78,12 +82,22 @@ struct AppView {
     days: i64,
     expires: String,
     level: &'static str,
+    members: Vec<MemberView>,
+}
+
+#[derive(Clone, PartialEq, Debug)]
+struct MemberView {
+    bundle: String,
+    label: String,
+    days: i64,
+    expires: String,
 }
 
 #[derive(Clone, PartialEq, Debug)]
 struct ProfileView {
     uuid: String,
     bundle: String,
+    root: String,
     label: String,
     days: i64,
     expires: String,
@@ -178,16 +192,29 @@ struct AutoRenewConfig {
     enabled: bool,
     /// HH:MM in Asia/Seoul (fixed UTC+09:00), independent of container TZ.
     time: String,
+    #[serde(default = "default_min_days")]
+    min_days: u8,
     /// KST calendar day of the most recent automatic attempt.
     last_attempt_day: Option<u64>,
+    #[serde(default)]
+    retry_count: u8,
+    #[serde(default)]
+    retry_at: Option<u64>,
+    #[serde(default)]
+    last_error: Option<String>,
 }
+fn default_min_days() -> u8 { 3 }
 
 impl Default for AutoRenewConfig {
     fn default() -> Self {
         Self {
             enabled: false,
             time: "06:00".into(),
+            min_days: 3,
             last_attempt_day: None,
+            retry_count: 0,
+            retry_at: None,
+            last_error: None,
         }
     }
 }
@@ -211,6 +238,7 @@ fn kst_seconds_of_day(now_secs: u64) -> u64 {
 
 fn next_auto_run(config: &AutoRenewConfig, now_secs: u64) -> Option<u64> {
     if !config.enabled { return None; }
+    if let Some(retry_at) = config.retry_at { return Some(retry_at); }
     let target = parse_kst_time(&config.time)?;
     let today = kst_day(now_secs);
     let can_run_today = kst_seconds_of_day(now_secs) < target
@@ -229,7 +257,7 @@ fn load_auto_renew() -> AutoRenewConfig {
         }
     };
     match serde_json::from_str::<AutoRenewConfig>(&raw) {
-        Ok(config) if parse_kst_time(&config.time).is_some() => config,
+        Ok(config) if parse_kst_time(&config.time).is_some() && (1..=6).contains(&config.min_days) => config,
         _ => {
             eprintln!("[auto-renew] Invalid schedule config; automatic renewal disabled");
             AutoRenewConfig::default()
@@ -247,40 +275,102 @@ fn save_auto_renew(config: &AutoRenewConfig) -> Result<(), String> {
     std::fs::rename(tmp, AUTO_RENEW_CONFIG).map_err(crate::phone::dbg)
 }
 
+fn retryable_renew_error(err: &str) -> bool {
+    let lower = err.to_ascii_lowercase();
+    !["2fa", "incorrect password", "invalid password", "invalid credentials",
+      "unauthorized", "forbidden", "rate.limit", "too many requests", "429",
+      "apple id sign-in", "apple id login"].iter().any(|part| lower.contains(part))
+}
+
+fn validate_discord_webhook(url: &str) -> bool {
+    let prefixes = ["https://discord.com/api/webhooks/", "https://discordapp.com/api/webhooks/"];
+    let Some(rest) = prefixes.iter().find_map(|prefix| url.strip_prefix(prefix)) else {
+        return false;
+    };
+    let mut parts = rest.split('/');
+    let Some(id) = parts.next() else { return false };
+    let Some(token) = parts.next() else { return false };
+    parts.next().is_none() && id.len() >= 10 && token.len() >= 20
+        && id.bytes().all(|b| b.is_ascii_digit())
+        && token.bytes().all(|b| b.is_ascii_alphanumeric() || b == b'-' || b == b'_')
+}
+
+fn discord_configured() -> bool {
+    std::fs::read_to_string(DISCORD_WEBHOOK_FILE)
+        .ok().is_some_and(|url| validate_discord_webhook(url.trim()))
+}
+
+fn send_discord_failure(error: &str) -> Result<(), String> {
+    use std::io::Write;
+    let url = std::fs::read_to_string(DISCORD_WEBHOOK_FILE).map_err(crate::phone::dbg)?;
+    let url = url.trim();
+    if !validate_discord_webhook(url) { return Err("Invalid Discord webhook configuration".into()); }
+    // Pass the sensitive webhook URL via stdin (curl config), not process arguments.
+    let msg = format!("AltKeeper: automatic renewal failed after retries.\\n{}",
+        error.chars().take(240).collect::<String>());
+    let body = json!({ "content": msg }).to_string();
+    let mut child = std::process::Command::new("curl")
+        .args(["--fail", "--silent", "--show-error", "--max-time", "12",
+            "--request", "POST", "--header", "Content-Type: application/json",
+            "--data-raw", &body, "--config", "-"])
+        .stdin(std::process::Stdio::piped())
+        .stdout(std::process::Stdio::null())
+        .stderr(std::process::Stdio::piped())
+        .spawn().map_err(crate::phone::dbg)?;
+    // Validated webhook has no quote/backslash/newline, so it is safe for curl config.
+    if let Some(mut stdin) = child.stdin.take() {
+        stdin.write_all(format!("url = \"{url}\"\n").as_bytes()).map_err(crate::phone::dbg)?;
+    }
+    let output = child.wait_with_output().map_err(crate::phone::dbg)?;
+    if output.status.success() { Ok(()) }
+    else { Err("Discord rejected webhook notification".into()) }
+}
+
 async fn auto_renew_loop(app: Arc<App>) {
     loop {
         let now_secs = now();
         let guard = {
             let config = app.auto_renew.lock().unwrap_or_else(|e| e.into_inner());
-            let due = config.enabled
-                && parse_kst_time(&config.time)
-                    .is_some_and(|target| kst_seconds_of_day(now_secs) >= target)
+            let retry_due = config.retry_at.is_some_and(|at| at <= now_secs);
+            let scheduled_due = parse_kst_time(&config.time)
+                .is_some_and(|target| kst_seconds_of_day(now_secs) >= target)
                 && config.last_attempt_day != Some(kst_day(now_secs));
-            if due { try_busy(&app) } else { None }
+            if config.enabled && (retry_due || scheduled_due) { try_busy(&app) } else { None }
         };
         if let Some(guard) = guard {
             let mut config = app.auto_renew.lock().unwrap_or_else(|e| e.into_inner());
-            if config.enabled && config.last_attempt_day != Some(kst_day(now_secs)) {
-                let mut updated = config.clone();
-                updated.last_attempt_day = Some(kst_day(now_secs));
-                match save_auto_renew(&updated) {
-                    Ok(()) => {
+            if config.enabled {
+                let is_retry = config.retry_at.is_some_and(|t| t <= now_secs);
+                let is_new_day = config.last_attempt_day != Some(kst_day(now_secs))
+                    && config.retry_at.is_none();
+                if is_retry || is_new_day {
+                    let mut updated = config.clone();
+                    if is_retry {
+                        updated.retry_count = updated.retry_count.saturating_add(1);
+                    } else {
+                        updated.last_attempt_day = Some(kst_day(now_secs));
+                        updated.retry_count = 0;
+                    }
+                    updated.retry_at = None;
+                    if let Err(err) = save_auto_renew(&updated) {
+                        eprintln!("[auto-renew] Could not persist attempt: {err}");
+                    } else {
+                        let threshold = updated.min_days as i64;
+                        let attempt = updated.retry_count + 1;
                         *config = updated;
-                        drop(config); // avoid lock-order inversion with /api/state
+                        drop(config);
                         app.lock().job = JobView {
                             kind: "auto_renew".into(),
                             running: true,
-                            lines: vec!["Automatic renewal started (Asia/Seoul schedule).".into()],
+                            lines: vec![format!("Scheduled renewal attempt {attempt}/3 (Asia/Seoul).")],
                             ok: None,
                         };
-                        println!("[auto-renew] Starting scheduled renewal.");
-                        spawn_job(guard, |app| run_renew(app, false, None, true));
+                        spawn_job(guard, move |app| run_renew(app, false, None, true, threshold, true));
                     }
-                    Err(err) => eprintln!("[auto-renew] Could not persist attempt; skipping: {err}"),
                 }
             }
         }
-        tokio::time::sleep(Duration::from_secs(60)).await;
+        tokio::time::sleep(Duration::from_secs(30)).await;
     }
 }
 
@@ -323,7 +413,9 @@ pub async fn serve(
         .route("/api/check", post(check))
         .route("/api/renew", post(renew))
         .route("/api/auto-renew", post(update_auto_renew))
+        .route("/api/discord", post(update_discord))
         .route("/api/profile/remove", post(remove_profile))
+        .route("/api/profile/restore", post(restore_profile))
         .route(
             "/api/install",
             post(install).layer(DefaultBodyLimit::max(MAX_IPA_BYTES + 1024 * 1024)),
@@ -523,6 +615,11 @@ async fn state(State(app): State<Arc<App>>) -> Json<Value> {
         "auto_renew": {
             "enabled": schedule.enabled,
             "time": schedule.time,
+            "min_days": schedule.min_days,
+            "retry_count": schedule.retry_count,
+            "retry_at": schedule.retry_at,
+            "last_error": schedule.last_error,
+            "discord_configured": discord_configured(),
             "time_zone": "Asia/Seoul",
             "next_run": next_scheduled,
         },
@@ -544,9 +641,12 @@ async fn state(State(app): State<Arc<App>>) -> Json<Value> {
         "apps": g.snapshot.apps.iter().map(|a| json!({
             "bundle": a.bundle, "label": a.label, "days": a.days,
             "expires": a.expires, "level": a.level,
+            "members": a.members.iter().map(|m| json!({
+                "bundle":m.bundle,"label":m.label,"days":m.days,"expires":m.expires
+            })).collect::<Vec<_>>(),
         })).collect::<Vec<_>>(),
         "profiles": g.snapshot.profiles.iter().map(|p| json!({
-            "uuid": p.uuid, "bundle": p.bundle, "label": p.label,
+            "uuid": p.uuid, "bundle": p.bundle, "root": p.root, "label": p.label,
             "days": p.days, "expires": p.expires,
         })).collect::<Vec<_>>(),
         "job": {
@@ -559,6 +659,11 @@ async fn state(State(app): State<Arc<App>>) -> Json<Value> {
             "code_error": if asking { code_error } else { None },
         },
         "history": history,
+        "backups": account.as_ref().and_then(|a| a.team_id.as_deref())
+            .map(backup_views).unwrap_or_default(),
+        "app_status": std::fs::read_to_string(APP_STATUS_FILE).ok()
+            .and_then(|s| serde_json::from_str::<Value>(&s).ok())
+            .unwrap_or(json!({})),
     }))
 }
 
@@ -576,6 +681,8 @@ async fn check(State(app): State<Arc<App>>) -> (StatusCode, Json<Value>) {
 struct AutoRenewReq {
     enabled: bool,
     time: String,
+    #[serde(default = "default_min_days")]
+    min_days: u8,
 }
 
 async fn update_auto_renew(
@@ -585,6 +692,9 @@ async fn update_auto_renew(
     let Some(target) = parse_kst_time(&req.time) else {
         return json_err(StatusCode::BAD_REQUEST, "Use a valid 24-hour time (HH:MM).");
     };
+    if !(1..=6).contains(&req.min_days) {
+        return json_err(StatusCode::BAD_REQUEST, "Renewal threshold must be 1-6 days.");
+    }
     if req.enabled {
         match apple::read_account(Path::new(".")) {
             Some(acc) if !acc.password.is_empty() && acc.team_id.is_some() => {}
@@ -603,11 +713,127 @@ async fn update_auto_renew(
     }
     updated.enabled = req.enabled;
     updated.time = req.time;
+    updated.min_days = req.min_days;
+    if !req.enabled {
+        updated.retry_at = None;
+        updated.retry_count = 0;
+    }
     if let Err(err) = save_auto_renew(&updated) {
         return json_err(StatusCode::INTERNAL_SERVER_ERROR, &format!("Cannot save schedule: {err}"));
     }
     *config = updated;
     json_ok()
+}
+
+
+fn backup_views(team: &str) -> Vec<Value> {
+    let Ok(entries) = std::fs::read_dir(crate::SAVED_DIR) else { return Vec::new(); };
+    let mut result = Vec::new();
+    for entry in entries.flatten() {
+        if !entry.file_type().is_ok_and(|ft| ft.is_file()) { continue; }
+        let path = entry.path();
+        if path.extension().and_then(|s| s.to_str()) != Some("mobileprovision") { continue; }
+        let Ok(bytes) = std::fs::read(&path) else { continue; };
+        let Some(p) = profile::parse(&bytes) else { continue; };
+        if p.team_id.as_deref() != Some(team)
+            || path.file_stem().and_then(|s| s.to_str())
+                .is_none_or(|stem| !stem.eq_ignore_ascii_case(&p.uuid)) { continue; }
+        result.push(json!({
+            "uuid": p.uuid, "bundle": p.bundle_id, "expires":p.expires_text(),
+            "days": p.days_left()
+        }));
+    }
+    result.sort_by(|a,b| a["bundle"].as_str().cmp(&b["bundle"].as_str()));
+    result
+}
+
+#[derive(Deserialize)]
+struct DiscordReq {
+    #[serde(default)]
+    webhook: Option<String>,
+    #[serde(default)]
+    clear: bool,
+}
+
+async fn update_discord(
+    Json(req): Json<DiscordReq>,
+) -> (StatusCode, Json<Value>) {
+    if req.clear {
+        match std::fs::remove_file(DISCORD_WEBHOOK_FILE) {
+            Ok(()) => return json_ok(),
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => return json_ok(),
+            Err(_) => return json_err(StatusCode::INTERNAL_SERVER_ERROR, "Could not clear webhook"),
+        }
+    }
+    let Some(webhook) = req.webhook else {
+        return json_err(StatusCode::BAD_REQUEST, "Supply a Discord webhook URL.");
+    };
+    if !validate_discord_webhook(&webhook) {
+        return json_err(StatusCode::BAD_REQUEST, "Expected a valid Discord webhook URL.");
+    }
+    if std::fs::create_dir_all("state").is_err()
+        || crate::fsperm::restrict_dir(Path::new("state")).is_err()
+        || crate::fsperm::write_private(Path::new(DISCORD_WEBHOOK_FILE), webhook.as_bytes()).is_err()
+    {
+        return json_err(StatusCode::INTERNAL_SERVER_ERROR, "Could not save webhook");
+    }
+    json_ok()
+}
+
+#[derive(Deserialize)]
+struct RestoreReq {
+    uuid: String,
+}
+
+async fn restore_profile(
+    State(app): State<Arc<App>>,
+    Json(req): Json<RestoreReq>,
+) -> (StatusCode, Json<Value>) {
+    let team = apple::read_account(Path::new(".")).and_then(|a| a.team_id);
+    let Some(team) = team else {
+        return json_err(StatusCode::BAD_REQUEST, "Sign in before restoring profiles.");
+    };
+    if !backup_views(&team).iter().any(|p| p["uuid"].as_str() == Some(&req.uuid)) {
+        return json_err(StatusCode::NOT_FOUND, "Verified profile backup was not found.");
+    }
+    let Some(guard) = try_busy(&app) else {
+        return json_err(StatusCode::CONFLICT, BUSY_MSG);
+    };
+    app.lock().job = JobView {
+        kind:"restore_profile".into(), running:true, lines:Vec::new(), ok:None
+    };
+    spawn_job(guard, move |app| run_restore_profile(app, req.uuid, team));
+    json_ok()
+}
+
+async fn run_restore_profile(app: Arc<App>, uuid: String, team: String) {
+    let result: Result<String, String> = async {
+        // Only original verified UUID-named files for the configured Apple team.
+        if uuid.len() > 64 || uuid.is_empty()
+            || !uuid.bytes().all(|b| b.is_ascii_hexdigit() || b == b'-') {
+            return Err("Invalid profile UUID".into());
+        }
+        let path = Path::new(crate::SAVED_DIR).join(format!("{uuid}.mobileprovision"));
+        let bytes = std::fs::read(path).map_err(crate::phone::dbg)?;
+        let p = profile::parse(&bytes).ok_or("Invalid backup data")?;
+        if !p.uuid.eq_ignore_ascii_case(&uuid) || p.team_id.as_deref() != Some(&team) {
+            return Err("Backup does not belong to the configured Apple team".into());
+        }
+        let (_, mut link) = phone::connect_auto(app.phone, PAIRING_FILE, |_: &str| {}).await?;
+        phone::with_timeout("Profile restore", Duration::from_secs(60),
+            link.install_profile(bytes)).await?;
+        Ok(format!("Restored profile {}. Original backup retained.", uuid))
+    }.await;
+    let ok = result.is_ok();
+    match result {
+        Ok(line) => app.push_line(&line),
+        Err(e) => app.push_line(&format!("Error: {}", short_error(&e))),
+    }
+    {
+        let mut g=app.lock();
+        g.job.running=false; g.job.ok=Some(ok);
+    }
+    run_check(app).await;
 }
 
 #[derive(Deserialize)]
@@ -657,7 +883,8 @@ async fn renew(
             ok: None,
         };
     }
-    spawn_job(guard, move |app| run_renew(app, force, bundle, installed_only));
+    let threshold = app.auto_renew.lock().unwrap_or_else(|e| e.into_inner()).min_days as i64;
+    spawn_job(guard, move |app| run_renew(app, force, bundle, installed_only, threshold, false));
     json_ok()
 }
 
@@ -940,13 +1167,16 @@ async fn run_check(app: Arc<App>) {
     }
 }
 
-async fn run_renew(app: Arc<App>, force: bool, bundle: Option<String>, installed_only: bool) {
+async fn run_renew(
+    app: Arc<App>, force: bool, bundle: Option<String>, installed_only: bool,
+    min_days: i64, automatic: bool,
+) {
     let mut say = |s: &str| app.push_line(&english_job_line(s));
-    let result = crate::cmd_renew(app.phone, false, force, 3, bundle.as_deref(), installed_only, &mut say).await;
-
+    let result = crate::cmd_renew(app.phone, false, force, min_days, bundle.as_deref(), installed_only, &mut say).await;
     let ok = result.is_ok();
-    if let Err(e) = &result {
-        app.push_line(&format!("Error: {}", short_error(e)));
+    let error = result.as_ref().err().map(|err| short_error(err));
+    if let Some(err) = &error {
+        app.push_line(&format!("Error: {err}"));
     }
     let lines = {
         let mut g = app.lock();
@@ -955,8 +1185,75 @@ async fn run_renew(app: Arc<App>, force: bool, bundle: Option<String>, installed
         g.job.lines.clone()
     };
     append_log(&lines, ok);
-    // Poi si aggiorna lo stato mostrato in pagina.
+    save_app_renew_status(&app, &lines, ok, bundle.as_deref());
+
+    if automatic {
+        let mut config = app.auto_renew.lock().unwrap_or_else(|e| e.into_inner());
+        let mut updated = config.clone();
+        let mut notify = false;
+        if ok {
+            updated.retry_count = 0;
+            updated.retry_at = None;
+            updated.last_error = None;
+        } else {
+            let err = error.as_deref().unwrap_or("Unknown renewal error");
+            updated.last_error = Some(err.to_owned());
+            if updated.enabled && updated.retry_count < MAX_RETRIES
+                && retryable_renew_error(err)
+            {
+                updated.retry_at = Some(now() + RETRY_SECONDS);
+                app.push_line(&format!(
+                    "Automatic retry {}/{} in 30 minutes.",
+                    updated.retry_count + 1, MAX_RETRIES
+                ));
+            } else {
+                updated.retry_at = None;
+                notify = true;
+            }
+        }
+        if let Err(e) = save_auto_renew(&updated) {
+            eprintln!("[auto-renew] Could not persist retry state: {e}");
+        } else {
+            *config = updated;
+        }
+        drop(config);
+        if notify && discord_configured() {
+            let err = error.as_deref().unwrap_or("Unknown renewal error");
+            match send_discord_failure(err) {
+                Ok(()) => app.push_line("Discord failure notification sent."),
+                Err(e) => app.push_line(&format!("Discord notification failed: {e}")),
+            }
+        }
+    }
     run_check(app).await;
+}
+
+fn save_app_renew_status(app: &App, lines: &[String], ok: bool, selected: Option<&str>) {
+    let renewed: std::collections::HashSet<&str> = lines.iter()
+        .filter_map(|line| line.strip_prefix("RENEWED ")).collect();
+    let attempted: std::collections::HashSet<&str> = lines.iter()
+        .filter_map(|line| line.trim().split_once(": expires in "))
+        .filter(|(_, tail)| tail.contains("downloading a new profile"))
+        .map(|(bundle,_)| bundle).collect();
+    let groups = app.lock().snapshot.apps.clone();
+    let mut existing = std::fs::read_to_string(APP_STATUS_FILE).ok()
+        .and_then(|s| serde_json::from_str::<serde_json::Map<String, Value>>(&s).ok())
+        .unwrap_or_default();
+    for group in groups {
+        if selected.is_some_and(|s| s != group.bundle) { continue; }
+        let in_group = group.members.iter().filter(|m| renewed.contains(m.bundle.as_str())).count();
+        let any_attempted = group.members.iter().any(|m| attempted.contains(m.bundle.as_str()));
+        if in_group == 0 && !any_attempted && selected.is_none() { continue; }
+        let status = if ok && in_group == group.members.len() { "success" }
+            else if in_group > 0 { "partial" } else { "failed" };
+        existing.insert(group.bundle, json!({"status":status,"at":now(),"renewed":in_group,
+            "total":group.members.len()}));
+    }
+    if std::fs::create_dir_all("state").is_ok() {
+        if let Ok(bytes) = serde_json::to_vec(&existing) {
+            let _ = crate::fsperm::write_private(Path::new(APP_STATUS_FILE), &bytes);
+        }
+    }
 }
 
 async fn run_remove_profile(app: Arc<App>, uuid: String) {
@@ -1121,42 +1418,62 @@ fn level_for(days: i64) -> &'static str {
     }
 }
 
-/// Le app del team, una riga per bundle (il profilo più recente), dalla più urgente.
+/// Display one host app with all its latest extension profiles nested below.
 fn app_views(profiles: &[profile::PhoneProfile], team: &str) -> Vec<AppView> {
     let mine = profiles.iter().filter(|p| p.team_id.as_deref() == Some(team));
-    let mut views: Vec<AppView> = profile::latest_by_bundle(mine)
-        .into_iter()
-        .filter_map(|p| {
-            let bundle = p.bundle_id.clone()?;
-            let days = p.days_left().unwrap_or(-1);
-            Some(AppView {
-                label: label_of(&bundle, team),
-                bundle,
-                days,
-                expires: p.expires_text(),
-                level: level_for(days),
-            })
-        })
-        .collect();
-    views.sort_by(|a, b| a.days.cmp(&b.days).then_with(|| a.label.cmp(&b.label)));
+    let latest = profile::latest_by_bundle(mine);
+    let bundles: Vec<&str> = latest.iter().filter_map(|p| p.bundle_id.as_deref()).collect();
+    let mut groups: std::collections::BTreeMap<String, Vec<MemberView>> =
+        std::collections::BTreeMap::new();
+    for p in &latest {
+        let Some(bundle) = p.bundle_id.as_deref() else { continue; };
+        let root = profile::group_root(bundle, &bundles, team).to_owned();
+        groups.entry(root).or_default().push(MemberView {
+            bundle: bundle.to_owned(),
+            label: label_of(bundle, team),
+            days: p.days_left().unwrap_or(-1),
+            expires: p.expires_text(),
+        });
+    }
+    let mut views = Vec::new();
+    for (bundle, mut members) in groups {
+        members.sort_by(|a,b| a.bundle.cmp(&b.bundle));
+        let earliest = members.iter().min_by_key(|m| m.days).unwrap();
+        views.push(AppView {
+            label: label_of(&bundle, team),
+            bundle,
+            days: earliest.days,
+            expires: earliest.expires.clone(),
+            level: level_for(earliest.days),
+            members,
+        });
+    }
+    views.sort_by(|a,b| a.days.cmp(&b.days).then_with(|| a.label.cmp(&b.label)));
     views
 }
 
 fn profile_views(profiles: &[profile::PhoneProfile], team: &str) -> Vec<ProfileView> {
+    let bundles: Vec<&str> = profiles.iter()
+        .filter(|p| p.team_id.as_deref() == Some(team))
+        .filter_map(|p| p.bundle_id.as_deref())
+        .collect();
     let mut views: Vec<_> = profiles.iter()
         .filter(|p| p.team_id.as_deref() == Some(team))
         .filter_map(|p| {
             let bundle = p.bundle_id.clone()?;
+            let root = profile::group_root(&bundle, &bundles, team).to_owned();
             Some(ProfileView {
                 uuid: p.uuid.clone(),
                 label: label_of(&bundle, team),
                 bundle,
+                root,
                 days: p.days_left().unwrap_or(-1),
                 expires: p.expires_text(),
             })
         })
         .collect();
-    views.sort_by(|a, b| a.label.cmp(&b.label).then_with(|| b.expires.cmp(&a.expires)));
+    views.sort_by(|a,b| a.root.cmp(&b.root).then_with(|| a.label.cmp(&b.label))
+        .then_with(|| b.expires.cmp(&a.expires)));
     views
 }
 
@@ -1401,7 +1718,7 @@ mod tests {
         // Day 20 in KST: scheduled for 06:00, 05:00 currently.
         let day = 20_u64;
         let now_secs = day * DAY_SECS + 5 * 3600 - KST_OFFSET_SECS;
-        let mut conf = AutoRenewConfig { enabled: true, time: "06:00".into(), last_attempt_day: None };
+        let mut conf = AutoRenewConfig { enabled: true, time: "06:00".into(), last_attempt_day: None, ..AutoRenewConfig::default() };
         assert_eq!(next_auto_run(&conf, now_secs),
             Some(day * DAY_SECS + 6 * 3600 - KST_OFFSET_SECS));
         conf.last_attempt_day = Some(day);
@@ -1513,6 +1830,24 @@ mod tests {
         assert_eq!(v[0].days, 6);
         assert_eq!(v[1].label, "com.b");
         assert!(v.iter().all(|a| a.level == "ok"));
+        assert_eq!(v[0].members.len(), 1);
+    }
+
+    #[test]
+    fn hosts_group_extensions_and_take_earliest_expiration() {
+        let p = vec![
+            profile("a", "TEAM", "com.kdt.livecontainer", 6),
+            profile("b", "TEAM", "com.kdt.livecontainer.TEAM.LiveProcess", 1),
+            profile("c", "TEAM", "com.kdt.livecontainer.TEAM.ShareExtension", 5),
+            profile("d", "TEAM", "com.google.ios.youtube", 6),
+        ];
+        let apps = app_views(&p, "TEAM");
+        assert_eq!(apps.len(), 2);
+        let live = apps.iter().find(|a| a.bundle == "com.kdt.livecontainer").unwrap();
+        assert_eq!(live.members.len(), 3);
+        assert_eq!(live.days, 1);
+        let profiles = profile_views(&p, "TEAM");
+        assert!(profiles.iter().filter(|p| p.root == "com.kdt.livecontainer").count() == 3);
     }
 
     #[test]

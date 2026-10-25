@@ -35,6 +35,15 @@
   }
   .card h2 { font-size: 1.05rem; margin: 0 0 10px; }
   .row { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; }
+  .item-head { display: flex; align-items: flex-start; gap: 10px; flex-wrap: nowrap; }
+  .item-info { flex: 1 1 0; min-width: 0; overflow-wrap: anywhere; }
+  .item-head button { flex: 0 0 auto; white-space: nowrap; }
+  .nested { padding: 9px 12px; border-radius: 10px; background: var(--bg); margin-top: 9px; }
+  .nested > div + div { border-top: 1px solid var(--line); padding-top: 8px; margin-top: 8px; }
+  .mini { font-size: .82rem; padding: 7px 10px; }
+  select, input[type=time] { font: inherit; padding: 9px; border: 1px solid var(--line);
+    border-radius: 10px; background: var(--bg); color: var(--text); }
+  @media(max-width:420px){ .item-head { gap: 6px; } .item-head button { padding: 8px; font-size: .84rem; } }
   .grow { flex: 1 1 auto; }
   .pill {
     display: inline-block; padding: 3px 11px; border-radius: 999px; font-weight: 600;
@@ -108,8 +117,10 @@
     <div class="row" style="margin-top:14px">
       <button class="primary" id="btn-due" type="button">Renew expiring apps</button>
       <button id="btn-all" type="button">Renew all now</button>
+      <button id="btn-preview" type="button">Preview renewals</button>
     </div>
     <p class="muted" id="renew-hint" style="margin:8px 0 0"></p>
+    <div class="nested" id="renew-preview" hidden></div>
     <div id="job" hidden>
       <div class="banner" id="job-status"></div>
       <pre class="log" id="job-log"></pre>
@@ -123,13 +134,38 @@
       <span class="pill" id="auto-pill">OFF</span>
       <span class="muted grow" id="auto-next">Automatic renewal disabled</span>
     </div>
-    <label for="auto-time">Run every day at (Korea Standard Time)</label>
     <div class="row">
-      <input type="time" id="auto-time" value="06:00" style="max-width:165px">
+      <div>
+        <label for="auto-time">Daily time (KST)</label>
+        <input type="time" id="auto-time" value="06:00" style="max-width:150px">
+      </div>
+      <div>
+        <label for="auto-days">Renew when days remaining</label>
+        <select id="auto-days">
+          <option value="1">1 day</option><option value="2">2 days</option>
+          <option value="3" selected>3 days</option><option value="4">4 days</option>
+          <option value="5">5 days</option><option value="6">6 days</option>
+        </select>
+      </div>
+    </div>
+    <p class="muted">If a scheduled renewal fails: retry after 30 minutes, up to twice more. Send Discord notification only after the final failure (or an unretryable authentication error).</p>
+    <div class="row" style="margin-top:10px">
       <button class="primary" id="auto-enable" type="button">Enable auto-renew</button>
       <button id="auto-disable" type="button" hidden>Turn off</button>
     </div>
     <div class="banner bad" id="auto-error" hidden></div>
+    <div class="divider"></div>
+    <label for="discord-webhook">Discord failure notifications</label>
+    <div class="row">
+      <span class="pill" id="discord-pill">Not configured</span>
+      <span class="muted">Only sent when automatic renewal fails after retries.</span>
+    </div>
+    <input type="password" id="discord-webhook" placeholder="https://discord.com/api/webhooks/..." autocomplete="off">
+    <div class="row" style="margin-top:10px">
+      <button id="discord-save" type="button">Save webhook</button>
+      <button id="discord-clear" type="button">Clear webhook</button>
+    </div>
+    <div class="banner bad" id="discord-error" hidden></div>
   </section>
 
   <section class="card">
@@ -137,6 +173,13 @@
     <p class="muted">Old profiles may remain after renewal. Deleting a profile still needed by an installed app can stop it opening. A verified server-side backup is saved before removal.</p>
     <p class="muted" id="profiles-empty" hidden></p>
     <ul class="plain" id="profiles"></ul>
+  </section>
+
+  <section class="card">
+    <h2>Saved profile backups</h2>
+    <p class="muted">Restore a backed-up profile by UUID. Restoring does not extend its original expiry date. The backup is retained.</p>
+    <p class="muted" id="backups-empty"></p>
+    <ul class="plain" id="backups"></ul>
   </section>
 
   <section class="card">
@@ -199,6 +242,7 @@
 "use strict";
 const $ = (id) => document.getElementById(id);
 let state = null, showForm = false, timer = null, sending = false, uploading = false;
+let expandedApps = new Set(), expandedProfiles = new Set(), showPreview = false;
 
 async function api(path, body) {
   const opt = body === undefined ? {} : {
@@ -261,27 +305,54 @@ function render(s) {
   banner("phone-error", err, "bad");
   $("phone-error").title = p.detail || "";
 
-  // App
+  // One app per host bundle. Members are separate signing profiles.
   const canRenew = s.account.present && s.account.password_saved && s.account.team && !s.busy;
   const ul = $("apps");
   ul.replaceChildren();
   s.apps.forEach((a) => {
+    const members = a.members || [{bundle:a.bundle,label:a.label,days:a.days,expires:a.expires}];
     const pct = Math.max(4, Math.min(100, Math.round((Math.max(a.days, 0) / 7) * 100)));
     const bar = div("bar", span(""));
     bar.firstChild.style.width = pct + "%";
-    const details = div("grow",
+    const details = div("item-info",
       div("app-name", document.createTextNode(a.label)),
-      div("muted", span(days(a.days), "when"), document.createTextNode(" · " + a.expires.slice(0, 10))));
+      div("muted", span(days(a.days), "when"),
+        document.createTextNode(" · " + (a.expires || "").slice(0, 10) +
+        " · " + members.length + " profiles")));
+    const last = (s.app_status || {})[a.bundle];
+    if (last) {
+      const date = new Date(last.at * 1000).toLocaleString("ko-KR", {timeZone:"Asia/Seoul"});
+      details.append(div("muted", document.createTextNode("Last profile install: " +
+        last.status + " · " + date + " KST (" + last.renewed + "/" + last.total + ")")));
+    }
     const renewBtn = document.createElement("button");
     renewBtn.type = "button";
-    renewBtn.textContent = "Renew";
+    renewBtn.className = "mini";
+    renewBtn.textContent = "Renew app";
     renewBtn.disabled = !canRenew;
     renewBtn.onclick = () => {
-      if (confirm("Renew only " + a.label + " now?")) {
-        act(() => api("/api/renew", { mode: "single", bundle: a.bundle }));
+      if (confirm("Renew " + a.label + " and all " + members.length + " profiles now?")) {
+        act(() => api("/api/renew", {mode:"single",bundle:a.bundle}));
       }
     };
-    ul.append(li(a.level, div("row", details, renewBtn), bar));
+    const expandBtn = document.createElement("button");
+    expandBtn.type = "button"; expandBtn.className = "mini";
+    expandBtn.textContent = expandedApps.has(a.bundle) ? "Less ▲" : "Details ▼";
+    expandBtn.onclick = () => {
+      if (expandedApps.has(a.bundle)) expandedApps.delete(a.bundle);
+      else expandedApps.add(a.bundle);
+      render(state);
+    };
+    const item = li(a.level,
+      div("item-head", details, renewBtn, expandBtn), bar);
+    if (expandedApps.has(a.bundle)) {
+      const nested = div("nested");
+      members.forEach(m => nested.append(div("",
+        div("app-name", document.createTextNode(m.label)),
+        div("muted", document.createTextNode(days(m.days) + " · " + m.bundle)))));
+      item.append(nested);
+    }
+    ul.append(item);
   });
   const empty = $("apps-empty");
   if (!s.account.present) { empty.textContent = "Sign in with your Apple ID to see your apps."; empty.hidden = false; }
@@ -289,54 +360,115 @@ function render(s) {
   else if (!s.apps.length && p.reachable === true) { empty.textContent = "No apps found for this Apple ID."; empty.hidden = false; }
   else { empty.hidden = true; }
 
-  // Renewal buttons
   $("btn-due").disabled = !canRenew;
   $("btn-all").disabled = !canRenew;
   $("btn-check").disabled = s.busy;
   $("renew-hint").textContent = !s.account.present ? "Sign in with your Apple ID first."
-    : !s.account.password_saved ? "The password must be saved to renew: sign in again and leave the checkbox selected."
+    : !s.account.password_saved ? "Save the Apple ID password to renew."
     : s.busy ? "Working…" : "";
+  show("renew-preview", showPreview);
+  if (showPreview) {
+    const box = $("renew-preview");
+    box.replaceChildren(div("app-name", document.createTextNode(
+      "Potential renewals (expires in " + (s.auto_renew.min_days || 3) + " days or less):")));
+    const due = s.apps.filter(a => a.days <= (s.auto_renew.min_days || 3));
+    if (!due.length) box.append(div("muted", document.createTextNode("No profiles appear due.")));
+    due.forEach(a => box.append(div("muted",
+      document.createTextNode(a.label + " · " + a.members.length + " profiles · " + days(a.days)))));
+    box.append(div("muted", document.createTextNode(
+      "Preview only: final renewal also verifies installed apps on the iPhone. " +
+      "If installed-app lookup fails, all known team profiles are renewed.")));
+  }
 
-  // Persistent server-side automatic renewal; UI does not call host systemctl.
-  const auto = s.auto_renew || {enabled:false, time:"06:00", next_run:null};
+  // Persistent schedule and retry details
+  const auto = s.auto_renew || {enabled:false,time:"06:00",min_days:3,next_run:null};
   $("auto-pill").textContent = auto.enabled ? "ON" : "OFF";
   $("auto-pill").className = "pill " + (auto.enabled ? "ok" : "");
   const next = auto.next_run
     ? new Date(auto.next_run * 1000).toLocaleString("ko-KR", {
         timeZone:"Asia/Seoul", year:"numeric", month:"2-digit", day:"2-digit",
         hour:"2-digit", minute:"2-digit", hour12:false
-      })
-    : null;
-  $("auto-next").textContent = auto.enabled ? "Next: " + (next || "checking") + " KST"
-    : "Automatic renewal disabled";
+      }) : null;
+  $("auto-next").textContent = auto.enabled ? (auto.retry_at ? "Retry: " : "Next: ") +
+    (next || "checking") + " KST" : "Automatic renewal disabled";
   if (document.activeElement !== $("auto-time")) $("auto-time").value = auto.time || "06:00";
-  $("auto-enable").textContent = auto.enabled ? "Save time" : "Enable auto-renew";
+  if (document.activeElement !== $("auto-days")) $("auto-days").value = String(auto.min_days || 3);
+  $("auto-enable").textContent = auto.enabled ? "Save settings" : "Enable auto-renew";
   $("auto-enable").disabled = !s.account.password_saved || !s.account.team;
   $("auto-disable").hidden = !auto.enabled;
+  $("discord-pill").textContent = auto.discord_configured ? "Configured" : "Not configured";
+  $("discord-pill").className = "pill" + (auto.discord_configured ? " ok" : "");
+  $("discord-clear").disabled = !auto.discord_configured;
 
-  // Manual, individually backed-up profile removal. Never deletes apps or Apple App IDs.
+  // Show provisioning profiles only when expanded, without moving controls when labels wrap.
   const pu = $("profiles");
   pu.replaceChildren();
-  (s.profiles || []).forEach((p) => {
-    const details = div("grow",
-      div("app-name", document.createTextNode(p.label)),
-      div("muted", document.createTextNode(days(p.days) + " · " + p.expires.slice(0, 10))),
-      div("muted", document.createTextNode("Profile " + p.uuid)));
-    const removeBtn = document.createElement("button");
-    removeBtn.type = "button";
-    removeBtn.textContent = "Delete profile";
-    removeBtn.disabled = s.busy || s.phone.reachable !== true;
-    removeBtn.onclick = () => {
-      if (confirm("Remove this provisioning profile for " + p.label +
-        "? This may prevent the app from opening. A backup will be saved first.\n\n" + p.uuid)) {
-        act(() => api("/api/profile/remove", { uuid: p.uuid }));
-      }
+  const grouped = new Map();
+  (s.profiles || []).forEach(profile => {
+    const root = profile.root || profile.bundle;
+    if (!grouped.has(root)) grouped.set(root, []);
+    grouped.get(root).push(profile);
+  });
+  grouped.forEach((profiles, root) => {
+    const label = (s.apps.find(a => a.bundle === root) || {}).label || root;
+    const details = div("item-info", div("app-name", document.createTextNode(label)),
+      div("muted", document.createTextNode(profiles.length + " saved-on-phone profiles")));
+    const toggle = document.createElement("button");
+    toggle.type = "button"; toggle.className = "mini";
+    toggle.textContent = expandedProfiles.has(root) ? "Hide ▲" : "Show ▼";
+    toggle.onclick = () => {
+      if (expandedProfiles.has(root)) expandedProfiles.delete(root);
+      else expandedProfiles.add(root);
+      render(state);
     };
-    pu.append(li("", div("row", details, removeBtn)));
+    const item = li("", div("item-head", details, toggle));
+    if (expandedProfiles.has(root)) {
+      const nested = div("nested");
+      profiles.forEach(prof => {
+        const info = div("item-info",
+          div("app-name", document.createTextNode(prof.label)),
+          div("muted", document.createTextNode(days(prof.days) + " · " + prof.expires.slice(0,10))),
+          div("muted", document.createTextNode("Profile " + prof.uuid)));
+        const remove = document.createElement("button");
+        remove.type = "button"; remove.className = "mini";
+        remove.textContent = "Delete profile";
+        remove.disabled = s.busy || s.phone.reachable !== true;
+        remove.onclick = () => {
+          if (confirm("Delete profile " + prof.uuid + "? An original verified backup will be saved first. " +
+            "Removing an active profile may prevent the app from opening.")) {
+            act(() => api("/api/profile/remove", {uuid:prof.uuid}));
+          }
+        };
+        nested.append(div("item-head", info, remove));
+      });
+      item.append(nested);
+    }
+    pu.append(item);
   });
   const pempty = $("profiles-empty");
-  pempty.textContent = "No provisioning profiles found for the current Apple team.";
-  pempty.hidden = (s.profiles || []).length > 0 || s.phone.reachable !== true;
+  pempty.textContent = "No provisioning profiles found for this Apple team.";
+  pempty.hidden = grouped.size > 0 || s.phone.reachable !== true;
+
+  const backups = $("backups");
+  backups.replaceChildren();
+  (s.backups || []).forEach(b => {
+    const info = div("item-info",
+      div("app-name", document.createTextNode(b.bundle || "Unknown bundle")),
+      div("muted", document.createTextNode("Profile " + b.uuid)),
+      div("muted", document.createTextNode("Expires " + b.expires.slice(0,10))));
+    const restore = document.createElement("button");
+    restore.type = "button"; restore.className = "mini";
+    restore.textContent = "Restore";
+    restore.disabled = s.busy;
+    restore.onclick = () => {
+      if (confirm("Restore profile " + b.uuid + " to the iPhone? This does not renew the expiry.")) {
+        act(() => api("/api/profile/restore", {uuid:b.uuid}));
+      }
+    };
+    backups.append(li("", div("item-head", info, restore)));
+  });
+  $("backups-empty").hidden = (s.backups || []).length > 0;
+  $("backups-empty").textContent = "No saved profile backups for this Apple team.";
 
   const canInstall = s.account.present && s.account.password_saved && s.account.team &&
                      p.reachable === true && !s.busy;
@@ -358,9 +490,10 @@ function render(s) {
         ? "Signing and installing the app. Keep this page open until it finishes…"
         : job.kind === "remove_profile"
         ? "Backing up and deleting the selected profile…"
+        : job.kind === "restore_profile" ? "Restoring the selected profile…"
         : "Renewal in progress. Keep this page open until it finishes…";
     }
-    else if (job.ok) { st.className = "banner good"; st.textContent = job.kind === "install" ? "App installed." : job.kind === "remove_profile" ? "Profile removed and backed up." : "Done."; }
+    else if (job.ok) { st.className = "banner good"; st.textContent = job.kind === "install" ? "App installed." : job.kind === "remove_profile" ? "Profile removed and backed up." : job.kind === "restore_profile" ? "Profile restored." : "Done."; }
     else { st.className = "banner bad"; st.textContent = "It did not complete successfully. Check the last line."; }
     const log = $("job-log");
     const atEnd = log.scrollTop + log.clientHeight >= log.scrollHeight - 8;
@@ -415,12 +548,31 @@ async function act(fn, errId) {
 
 $("auto-enable").onclick = () => {
   banner("auto-error", "");
-  act(() => api("/api/auto-renew", {enabled:true, time:$("auto-time").value}), "auto-error");
+  act(() => api("/api/auto-renew", {
+    enabled:true, time:$("auto-time").value, min_days:Number($("auto-days").value)
+  }), "auto-error");
 };
 $("auto-disable").onclick = () => {
   banner("auto-error", "");
-  act(() => api("/api/auto-renew", {enabled:false, time:$("auto-time").value}), "auto-error");
+  act(() => api("/api/auto-renew", {
+    enabled:false, time:$("auto-time").value, min_days:Number($("auto-days").value)
+  }), "auto-error");
 };
+$("discord-save").onclick = () => {
+  const url = $("discord-webhook").value.trim();
+  banner("discord-error", "");
+  if (!url) return banner("discord-error", "Enter the Discord webhook URL.", "bad");
+  act(async () => {
+    await api("/api/discord", {webhook:url});
+    $("discord-webhook").value = "";
+  }, "discord-error");
+};
+$("discord-clear").onclick = () => {
+  if (confirm("Remove the saved Discord webhook?")) {
+    act(() => api("/api/discord", {clear:true}), "discord-error");
+  }
+};
+$("btn-preview").onclick = () => {showPreview = !showPreview; if(state)render(state);};
 $("btn-check").onclick = () => act(() => api("/api/check", {}));
 $("btn-due").onclick = () => act(() => api("/api/renew", { mode: "due" }));
 $("btn-all").onclick = () => {
