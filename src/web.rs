@@ -42,6 +42,7 @@ const KST_OFFSET_SECS: u64 = 9 * 60 * 60;
 const DAY_SECS: u64 = 24 * 60 * 60;
 const MAX_JOB_LINES: usize = 300;
 const MAX_IPA_BYTES: usize = 1024 * 1024 * 1024;
+const PENDING_IPA_TTL: u64 = 15 * 60;
 
 // ---------------------------------------------------------------------------------------------
 // Stato condiviso
@@ -55,6 +56,7 @@ struct App {
     inner: Mutex<Inner>,
     tfa: Arc<apple::TfaChannel>,
     auto_renew: Mutex<AutoRenewConfig>,
+    pending_ipa: Mutex<Option<PendingIpa>>,
 }
 
 #[derive(Default)]
@@ -412,6 +414,7 @@ pub async fn serve(
         inner: Mutex::new(Inner::default()),
         tfa: Arc::new(apple::TfaChannel::default()),
         auto_renew: Mutex::new(load_auto_renew()),
+        pending_ipa: Mutex::new(None),
     });
     let router = Router::new()
         .route("/", get(index))
@@ -425,10 +428,15 @@ pub async fn serve(
         .route("/api/discord/test", post(test_discord))
         .route("/api/profile/remove", post(remove_profile))
         .route("/api/profile/restore", post(restore_profile))
-        .route(
+.route(
             "/api/install",
             post(install).layer(DefaultBodyLimit::max(MAX_IPA_BYTES + 1024 * 1024)),
         )
+        .route(
+            "/api/install/inspect",
+            post(inspect_install).layer(DefaultBodyLimit::max(MAX_IPA_BYTES + 1024 * 1024)),
+        )
+        .route("/api/install/confirm", post(confirm_install))
         .route("/api/login", post(login))
         .route("/api/login/code", post(login_code))
         .route("/api/login/resend", post(login_resend))
@@ -961,6 +969,14 @@ async fn remove_profile(
 
 struct UploadedIpa(PathBuf);
 
+/// One preflight upload only, auto-expiring and deleted on replacement, abort or restart.
+struct PendingIpa {
+    upload: UploadedIpa,
+    extensions: Vec<isideload::sideload::application::IpaExtensionInfo>,
+    token: String,
+    created_at: u64,
+}
+
 impl Drop for UploadedIpa {
     fn drop(&mut self) {
         let _ = std::fs::remove_file(&self.0);
@@ -1101,7 +1117,100 @@ async fn install(
             ok: None,
         };
     }
-    spawn_job(guard, move |app| run_install(app, uploaded));
+    spawn_job(guard, move |app| run_install(app, uploaded, None));
+    json_ok()
+}
+
+/// Keep old clients' /api/install route intact. The web UI uses inspect/confirm
+/// to avoid signing or registering unwanted app extensions.
+async fn inspect_install(
+    State(app): State<Arc<App>>,
+    mut multipart: Multipart,
+) -> (StatusCode, Json<Value>) {
+    match apple::read_account(Path::new(".")) {
+        Some(a) if !a.password.is_empty() && a.team_id.is_some() => {}
+        _ => return json_err(StatusCode::BAD_REQUEST, "Save an Apple ID account before installing."),
+    }
+    let Some(guard) = try_busy(&app) else {
+        return json_err(StatusCode::CONFLICT, BUSY_MSG);
+    };
+    let uploaded = match receive_ipa(&mut multipart).await {
+        Ok(file) => file,
+        Err((status, detail)) => return json_err(status, &detail),
+    };
+    let extensions = match isideload::sideload::application::inspect_ipa_extensions(&uploaded.0) {
+        Ok(entries) => entries,
+        Err(e) => return json_err(StatusCode::UNPROCESSABLE_ENTITY,
+            &format!("Cannot inspect the IPA: {e}")),
+    };
+    if extensions.is_empty() {
+        app.lock().job = JobView {
+            kind: "install".into(), running: true,
+            lines: vec!["IPA uploaded (no extensions). Signing and installing…".into()],
+            ok: None,
+        };
+        spawn_job(guard, move |app| run_install(app, uploaded, None));
+        return (StatusCode::OK, Json(json!({ "installing": true })));
+    }
+    // For the rare archive containing many extensions, cap the preview surface.
+    if extensions.len() > 100 {
+        return json_err(StatusCode::UNPROCESSABLE_ENTITY, "IPA contains too many extensions.");
+    }
+    let token = uploaded.0.file_stem()
+        .and_then(|s| s.to_str()).unwrap_or("").to_string();
+    let preview = extensions.iter().map(|ext| json!({
+        "bundle_id": ext.bundle_id, "name": ext.name,
+    })).collect::<Vec<_>>();
+    let mut pending = app.pending_ipa.lock().unwrap_or_else(|e| e.into_inner());
+    *pending = Some(PendingIpa { upload: uploaded, extensions, token: token.clone(),
+        created_at: now() });
+    (StatusCode::OK, Json(json!({
+        "needs_selection": true, "token": token, "extensions": preview,
+        "max_app_ids": 1 + preview.len(),
+    })))
+}
+
+#[derive(Deserialize)]
+struct ConfirmInstallReq {
+    token: String,
+    keep_extensions: Vec<String>,
+}
+
+async fn confirm_install(
+    State(app): State<Arc<App>>,
+    Json(req): Json<ConfirmInstallReq>,
+) -> (StatusCode, Json<Value>) {
+    let Some(guard) = try_busy(&app) else {
+        return json_err(StatusCode::CONFLICT, BUSY_MSG);
+    };
+    let mut pending = app.pending_ipa.lock().unwrap_or_else(|e| e.into_inner());
+    if pending.as_ref().is_some_and(|p| now().saturating_sub(p.created_at) > PENDING_IPA_TTL) {
+        *pending = None;
+    }
+    let Some(prepared) = pending.as_ref() else {
+        return json_err(StatusCode::GONE, "IPA selection expired. Upload it again.");
+    };
+    if prepared.token != req.token {
+        return json_err(StatusCode::BAD_REQUEST, "Invalid install selection.");
+    }
+    let allowed: std::collections::HashSet<&str> = prepared.extensions.iter()
+        .map(|e| e.bundle_id.as_str()).collect();
+    let mut unique = std::collections::HashSet::new();
+    if req.keep_extensions.iter().any(|id| !allowed.contains(id.as_str())
+        || !unique.insert(id.as_str()))
+    {
+        return json_err(StatusCode::BAD_REQUEST, "Unknown or duplicate extension selection.");
+    }
+    let prepared = pending.take().expect("checked pending");
+    drop(pending);
+    app.lock().job = JobView {
+        kind: "install".into(), running: true,
+        lines: vec![format!("IPA uploaded. Keeping {} of {} extensions.",
+            req.keep_extensions.len(), prepared.extensions.len())],
+        ok: None,
+    };
+    spawn_job(guard, move |app| run_install(app, prepared.upload,
+        Some(req.keep_extensions)));
     json_ok()
 }
 
@@ -1322,8 +1431,8 @@ async fn run_remove_profile(app: Arc<App>, uuid: String) {
     run_check(app).await;
 }
 
-async fn run_install(app: Arc<App>, upload: UploadedIpa) {
-    let result = install_ipa(&app, &upload).await;
+async fn run_install(app: Arc<App>, upload: UploadedIpa, selected_extensions: Option<Vec<String>>) {
+    let result = install_ipa(&app, &upload, selected_extensions.as_deref()).await;
     let ok = result.is_ok();
     if let Err(e) = result {
         app.push_line(&format!("Error: {}", short_error(&e)));
@@ -1338,7 +1447,9 @@ async fn run_install(app: Arc<App>, upload: UploadedIpa) {
     run_check(app).await;
 }
 
-async fn install_ipa(app: &Arc<App>, upload: &UploadedIpa) -> Result<(), String> {
+async fn install_ipa(
+    app: &Arc<App>, upload: &UploadedIpa, selected_extensions: Option<&[String]>,
+) -> Result<(), String> {
     let account = apple::load_account(Path::new("."))?;
     let mut session = apple::open_session_web(
         Path::new("."),
@@ -1369,6 +1480,7 @@ async fn install_ipa(app: &Arc<App>, upload: &UploadedIpa) -> Result<(), String>
         &device_name,
         &udid,
         &upload.0,
+        selected_extensions,
     )
     .await?;
 
