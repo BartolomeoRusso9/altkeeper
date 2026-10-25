@@ -1,5 +1,5 @@
 <!doctype html>
-<html lang="en">
+<html lang="ko">
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
@@ -37,15 +37,27 @@
   }
   .card h2 { font-size: 1.05rem; margin: 0 0 10px; }
   .row { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; }
-  .item-head { display: flex; align-items: flex-start; gap: 10px; flex-wrap: nowrap; }
+  .item-head { display: flex; align-items: center; gap: 10px; flex-wrap: nowrap; }
+  .item-head .item-info { align-self: center; }
+  .locale-toolbar { display: flex; justify-content: flex-end; align-items: center; gap: 8px; margin: 0 0 8px; }
+  .locale-toolbar label { margin: 0; font-size: .85rem; color: var(--muted); }
+  .locale-toolbar select { min-width: 112px; text-align: center; }
+  .action-row { justify-content: center; align-items: stretch; }
+  .action-row > button { flex: 1 1 148px; min-width: 136px; }
+  .item-head button { width: 106px; flex: 0 0 106px; }
+  .app-name { overflow-wrap: anywhere; }
   .item-info { flex: 1 1 0; min-width: 0; overflow-wrap: anywhere; }
-  .item-head button { flex: 0 0 auto; white-space: nowrap; }
+  .item-head button { white-space: nowrap; }
   .nested { padding: 9px 12px; border-radius: 10px; background: var(--bg); margin-top: 9px; }
   .nested > div + div { border-top: 1px solid var(--line); padding-top: 8px; margin-top: 8px; }
   .mini { font-size: .82rem; padding: 7px 10px; }
   select, input[type=time] { font: inherit; padding: 9px; border: 1px solid var(--line);
     border-radius: 10px; background: var(--bg); color: var(--text); }
-  @media(max-width:420px){ .item-head { gap: 6px; } .item-head button { padding: 8px; font-size: .84rem; } }
+  @media(max-width:420px) {
+    .item-head { gap: 6px; }
+    .item-head button { width: 84px; flex-basis: 84px; padding: 8px 5px; font-size: .81rem; }
+    .action-row > button { flex-basis: 145px; min-width: 128px; }
+  }
   .grow { flex: 1 1 auto; }
   .pill {
     display: inline-block; padding: 3px 11px; border-radius: 999px; font-weight: 600;
@@ -70,7 +82,8 @@
   li.urgent .bar > span { background: var(--urgent); }
   li.soon .when { color: var(--soon); } li.urgent .when { color: var(--urgent); }
   button {
-    font: inherit; font-weight: 600; border-radius: 10px; padding: 10px 14px; cursor: pointer;
+    display: inline-flex; align-items: center; justify-content: center; text-align: center;
+    min-height: 42px; line-height: 1.25; font: inherit; font-weight: 600; border-radius: 10px; padding: 10px 12px; cursor: pointer;
     border: 1px solid var(--line); background: var(--card); color: var(--text);
   }
   button.primary { background: var(--accent); color: var(--accent-text); border-color: var(--accent); }
@@ -94,32 +107,35 @@
 </head>
 <body>
 <main>
+  <div class="locale-toolbar">
+    <label for="language-select" data-i18n="Language">Language</label>
+    <select id="language-select" aria-label="Language"><option value="ko">한국어</option><option value="en">English</option></select>
+  </div>
   <h1>AltKeeper</h1>
-  <p class="sub">Keeps your iPhone apps alive by renewing their profiles.</p>
+  <p class="sub" data-i18n="Keeps your iPhone apps alive by renewing their profiles.">Keeps your iPhone apps alive by renewing their profiles.</p>
 
   <div class="banner bad" id="no-pairing" hidden>
-    iPhone pairing is missing (<code>rp-pairing.plist</code>). Set it up once with a USB cable:
-    follow the guide in the README.
+    <span data-i18n="iPhone pairing is missing">iPhone pairing is missing</span> (<code>rp-pairing.plist</code>). <span data-i18n="Set it up once with a USB cable: follow the guide in the README.">Set it up once with a USB cable: follow the guide in the README.</span>
   </div>
 
   <section class="card" aria-live="polite">
-    <h2>iPhone</h2>
+    <h2 data-i18n="iPhone">iPhone</h2>
     <div class="row">
-      <span class="pill" id="phone-pill">Checking…</span>
+      <span class="pill" id="phone-pill" data-i18n="Checking…">Checking…</span>
       <span class="muted grow" id="phone-addr"></span>
-      <button id="btn-check" type="button">Check again</button>
+      <button id="btn-check" type="button" data-i18n="Check again">Check again</button>
     </div>
     <div class="banner bad" id="phone-error" hidden></div>
   </section>
 
   <section class="card">
-    <h2>Your apps</h2>
+    <h2 data-i18n="Your apps">Your apps</h2>
     <p class="muted" id="apps-empty" hidden></p>
     <ul class="plain" id="apps"></ul>
-    <div class="row" style="margin-top:14px">
-      <button class="primary" id="btn-due" type="button">Renew expiring apps</button>
-      <button id="btn-all" type="button">Renew all now</button>
-      <button id="btn-preview" type="button">Preview renewals</button>
+    <div class="row action-row" style="margin-top:14px">
+      <button class="primary" id="btn-due" type="button" data-i18n="Renew expiring apps">Renew expiring apps</button>
+      <button id="btn-all" type="button" data-i18n="Renew all now">Renew all now</button>
+      <button id="btn-preview" type="button" data-i18n="Preview renewals">Preview renewals</button>
     </div>
     <p class="muted" id="renew-hint" style="margin:8px 0 0"></p>
     <div class="nested" id="renew-preview" hidden></div>
@@ -130,70 +146,70 @@
   </section>
 
   <section class="card">
-    <h2>Automatic renewal</h2>
-    <p class="muted">Runs once daily while this server is online. Renews expiring installed apps. If installed-app lookup fails, it falls back to all saved-team profiles. Default is OFF.</p>
+    <h2 data-i18n="Automatic renewal">Automatic renewal</h2>
+    <p class="muted" data-i18n="Runs once daily while this server is online. Renews expiring installed apps. If installed-app lookup fails, it falls back to all saved-team profiles. Default is OFF.">Runs once daily while this server is online. Renews expiring installed apps. If installed-app lookup fails, it falls back to all saved-team profiles. Default is OFF.</p>
     <div class="row">
-      <span class="pill" id="auto-pill">OFF</span>
-      <span class="muted grow" id="auto-next">Automatic renewal disabled</span>
+      <span class="pill" id="auto-pill" data-i18n="OFF">OFF</span>
+      <span class="muted grow" id="auto-next" data-i18n="Automatic renewal disabled">Automatic renewal disabled</span>
     </div>
     <div class="row">
       <div>
-        <label for="auto-time">Daily time (KST)</label>
+        <label for="auto-time" data-i18n="Daily time (KST)">Daily time (KST)</label>
         <input type="time" id="auto-time" value="06:00" style="max-width:150px">
       </div>
       <div>
-        <label for="auto-days">Renew when days remaining</label>
+        <label for="auto-days" data-i18n="Renew when days remaining">Renew when days remaining</label>
         <select id="auto-days">
-          <option value="1">1 day</option><option value="2">2 days</option>
-          <option value="3" selected>3 days</option><option value="4">4 days</option>
-          <option value="5">5 days</option><option value="6">6 days</option>
+          <option value="1" data-i18n="1 day">1 day</option><option value="2" data-i18n="2 days">2 days</option>
+          <option value="3" selected data-i18n="3 days">3 days</option><option value="4" data-i18n="4 days">4 days</option>
+          <option value="5" data-i18n="5 days">5 days</option><option value="6" data-i18n="6 days">6 days</option>
         </select>
       </div>
     </div>
-    <p class="muted">If a scheduled renewal fails: retry after 30 minutes, up to twice more. Send Discord notification only after the final failure (or an unretryable authentication error).</p>
-    <div class="row" style="margin-top:10px">
-      <button class="primary" id="auto-enable" type="button">Enable auto-renew</button>
-      <button id="auto-disable" type="button" hidden>Turn off</button>
+    <p class="muted" data-i18n="If a scheduled renewal fails: retry after 30 minutes, up to twice more. Send Discord notification only after the final failure (or an unretryable authentication error).">If a scheduled renewal fails: retry after 30 minutes, up to twice more. Send Discord notification only after the final failure (or an unretryable authentication error).</p>
+    <div class="row action-row" style="margin-top:10px">
+      <button class="primary" id="auto-enable" type="button" data-i18n="Enable auto-renew">Enable auto-renew</button>
+      <button id="auto-disable" type="button" hidden data-i18n="Turn off">Turn off</button>
     </div>
     <div class="banner bad" id="auto-error" hidden></div>
     <div class="divider"></div>
-    <label for="discord-webhook">Discord failure notifications</label>
+    <label for="discord-webhook" data-i18n="Discord failure notifications">Discord failure notifications</label>
     <div class="row">
-      <span class="pill" id="discord-pill">Not configured</span>
-      <span class="muted">Only sent when automatic renewal fails after retries.</span>
+      <span class="pill" id="discord-pill" data-i18n="Not configured">Not configured</span>
+      <span class="muted" data-i18n="Only sent when automatic renewal fails after retries.">Only sent when automatic renewal fails after retries.</span>
     </div>
     <input type="password" id="discord-webhook" placeholder="https://discord.com/api/webhooks/..." autocomplete="off">
-    <div class="row" style="margin-top:10px">
-      <button id="discord-save" type="button">Save webhook</button>
-      <button id="discord-clear" type="button">Clear webhook</button>
-      <button id="discord-test" type="button">Send test notification</button>
+    <div class="row action-row" style="margin-top:10px">
+      <button id="discord-save" type="button" data-i18n="Save webhook">Save webhook</button>
+      <button id="discord-clear" type="button" data-i18n="Clear webhook">Clear webhook</button>
+      <button id="discord-test" type="button" data-i18n="Send test notification">Send test notification</button>
     </div>
     <div class="banner bad" id="discord-error" hidden></div>
     <div class="banner" id="discord-test-result" role="status" aria-live="polite" hidden></div>
   </section>
 
   <section class="card">
-    <h2>Provisioning profiles on iPhone</h2>
-    <p class="muted">Old profiles may remain after renewal. Deleting a profile still needed by an installed app can stop it opening. A verified server-side backup is saved before removal.</p>
+    <h2 data-i18n="Provisioning profiles on iPhone">Provisioning profiles on iPhone</h2>
+    <p class="muted" data-i18n="Old profiles may remain after renewal. Deleting a profile still needed by an installed app can stop it opening. A verified server-side backup is saved before removal.">Old profiles may remain after renewal. Deleting a profile still needed by an installed app can stop it opening. A verified server-side backup is saved before removal.</p>
     <p class="muted" id="profiles-empty" hidden></p>
     <ul class="plain" id="profiles"></ul>
   </section>
 
   <section class="card">
-    <h2>Saved profile backups</h2>
-    <p class="muted">Restore a backed-up profile by UUID. Restoring does not extend its original expiry date. The backup is retained.</p>
+    <h2 data-i18n="Saved profile backups">Saved profile backups</h2>
+    <p class="muted" data-i18n="Restore a backed-up profile by UUID. Restoring does not extend its original expiry date. The backup is retained.">Restore a backed-up profile by UUID. Restoring does not extend its original expiry date. The backup is retained.</p>
     <p class="muted" id="backups-empty"></p>
     <ul class="plain" id="backups"></ul>
   </section>
 
   <section class="card">
-    <h2>Install an app from this PC</h2>
-    <p class="muted">Choose an IPA. AltKeeper signs it with the configured Apple ID and installs it over Wi-Fi. The Apple ID password must be saved on the server.</p>
+    <h2 data-i18n="Install an app from this PC">Install an app from this PC</h2>
+    <p class="muted" data-i18n="Choose an IPA. AltKeeper signs it with the configured Apple ID and installs it over Wi-Fi. The Apple ID password must be saved on the server.">Choose an IPA. AltKeeper signs it with the configured Apple ID and installs it over Wi-Fi. The Apple ID password must be saved on the server.</p>
     <form id="install-form">
-      <label for="ipa-file">IPA file</label>
+      <label for="ipa-file" data-i18n="IPA file">IPA file</label>
       <input id="ipa-file" type="file" accept=".ipa,application/octet-stream">
-      <div class="row" style="margin-top:10px">
-        <button class="primary" id="btn-install" type="submit">Sign and install</button>
+      <div class="row" style="margin-top:10px; justify-content:center">
+        <button class="primary" id="btn-install" type="submit" data-i18n="Sign and install">Sign and install</button>
         <span class="muted" id="install-hint"></span>
       </div>
     </form>
@@ -205,46 +221,65 @@
     <div id="account-info" hidden>
       <div class="row">
         <span class="grow"><strong id="acc-id"></strong><br><span class="muted" id="acc-pw"></span></span>
-        <button id="btn-change" type="button">Change account</button>
+        <button id="btn-change" type="button" data-i18n="Change account">Change account</button>
       </div>
     </div>
     <form id="login-form" autocomplete="off" hidden>
-      <label for="apple-id">Apple ID (email)</label>
+      <label for="apple-id" data-i18n="Apple ID (email)">Apple ID (email)</label>
       <input id="apple-id" type="email" autocomplete="username" inputmode="email" autocapitalize="off" spellcheck="false">
-      <label for="apple-pw">Password</label>
+      <label for="apple-pw" data-i18n="Password">Password</label>
       <input id="apple-pw" type="password" autocomplete="current-password" autocapitalize="off" spellcheck="false">
-      <label class="check"><input type="checkbox" id="show-pw"> Show password</label>
+      <label class="check"><input type="checkbox" id="show-pw"> <span data-i18n="Show password">Show password</span></label>
       <label class="check"><input type="checkbox" id="save-pw" checked>
-        <span>Save the password on this server for automatic renewals<br>
-        <span class="muted">It is stored as plain text in a private server file.</span></span></label>
-      <button class="primary" id="btn-login" type="submit">Sign in</button>
-      <p class="muted">Try only once at a time: repeated failures may cause Apple to block sign-ins temporarily.</p>
+        <span><span data-i18n="Save the password on this server for automatic renewals">Save the password on this server for automatic renewals</span>
+        <span class="muted" data-i18n="It is stored as plain text in a private server file.">It is stored as plain text in a private server file.</span></span></label>
+      <button class="primary" id="btn-login" type="submit" data-i18n="Sign in">Sign in</button>
+      <p class="muted" data-i18n="Try only once at a time: repeated failures may cause Apple to block sign-ins temporarily.">Try only once at a time: repeated failures may cause Apple to block sign-ins temporarily.</p>
     </form>
     <form id="code-form" autocomplete="off" hidden>
       <div class="banner good">Apple sent a 6-digit code to your devices.</div>
       <div class="banner bad" id="code-error" hidden></div>
-      <label for="code">Code</label>
+      <label for="code" data-i18n="Code">Code</label>
       <input id="code" class="code" type="text" inputmode="numeric" pattern="[0-9]*" maxlength="6" autocomplete="one-time-code">
       <div class="row" style="margin-top:10px">
-        <button class="primary" id="btn-code" type="submit">Submit code</button>
-        <button id="btn-resend" type="button">Resend code</button>
+        <button class="primary" id="btn-code" type="submit" data-i18n="Submit code">Submit code</button>
+        <button id="btn-resend" type="button" data-i18n="Resend code">Resend code</button>
       </div>
     </form>
     <div class="banner" id="login-msg" hidden></div>
   </section>
 
   <section class="card hist">
-    <h2>Recent renewals</h2>
-    <p class="muted" id="hist-empty">Nothing yet. Automatic renewal runs every evening when configured on the server.</p>
+    <h2 data-i18n="Recent renewals">Recent renewals</h2>
+    <p class="muted" id="hist-empty" data-i18n="Nothing yet. Automatic renewal runs every evening when configured on the server.">Nothing yet. Automatic renewal runs every evening when configured on the server.</p>
     <ul class="plain" id="hist"></ul>
   </section>
 
-  <footer>For use on your home network only.</footer>
+  <footer data-i18n="For use on your home network only.">For use on your home network only.</footer>
 </main>
 
 <script>
 "use strict";
 const $ = (id) => document.getElementById(id);
+const KO = {"Language":"언어","Keeps your iPhone apps alive by renewing their profiles.":"아이폰 앱의 프로파일을 갱신해 사용 기간을 유지합니다.","iPhone":"아이폰","Checking…":"확인 중…","Check again":"다시 확인","Your apps":"앱 목록","Renew app":"이 앱 갱신","Details":"상세 정보","Less":"접기","Renew expiring apps":"만료 임박 앱 갱신","Renew all now":"전체 갱신","Preview renewals":"갱신 대상 미리보기","Automatic renewal":"자동 갱신","OFF":"꺼짐","ON":"켜짐","Automatic renewal disabled":"자동 갱신이 꺼져 있습니다","Daily time (KST)":"매일 실행 시간 (KST)","Renew when days remaining":"만료까지 남은 기간","1 day":"1일","2 days":"2일","3 days":"3일","4 days":"4일","5 days":"5일","6 days":"6일","Enable auto-renew":"자동 갱신 켜기","Save settings":"설정 저장","Turn off":"끄기","Discord failure notifications":"Discord 실패 알림","Not configured":"설정 안 됨","Configured":"설정됨","Only sent when automatic renewal fails after retries.":"자동 갱신이 최종 실패했을 때만 알림을 보냅니다.","Save webhook":"웹훅 저장","Clear webhook":"웹훅 삭제","Send test notification":"테스트 알림 보내기","Provisioning profiles on iPhone":"아이폰의 프로비저닝 프로파일","Delete profile":"프로파일 삭제","Saved profile backups":"저장된 프로파일 백업","Restore":"복원","Install an app from this PC":"이 PC에서 IPA 설치","IPA file":"IPA 파일","Sign and install":"서명 후 설치","Apple ID (email)":"Apple ID (이메일)","Password":"비밀번호","Show password":"비밀번호 표시","Change account":"계정 변경","Sign in":"로그인","Code":"인증 코드","Submit code":"코드 확인","Resend code":"코드 다시 보내기","Recent renewals":"최근 갱신 기록","For use on your home network only.":"가정 내 네트워크에서만 사용하세요.","Apple sent a 6-digit code to your devices.":"Apple에서 기기로 6자리 인증 코드를 보냈습니다.","Save the password on this server for automatic renewals":"자동 갱신을 위해 서버에 비밀번호 저장","It is stored as plain text in a private server file.":"비밀번호는 접근이 제한된 서버 파일에 평문으로 저장됩니다.","iPhone pairing is missing":"아이폰 페어링 정보가 없습니다","Set it up once with a USB cable: follow the guide in the README.":"USB 케이블로 한 번 페어링하고 README 안내를 따르세요.","Runs once daily while this server is online. Renews expiring installed apps. If installed-app lookup fails, it falls back to all saved-team profiles. Default is OFF.":"서버가 실행 중일 때 하루 한 번 만료가 임박한 앱을 갱신합니다. 설치된 앱을 조회하지 못하면 저장된 Apple Team의 모든 프로파일을 갱신 대상으로 사용합니다. 기본값은 꺼짐입니다.","If a scheduled renewal fails: retry after 30 minutes, up to twice more. Send Discord notification only after the final failure (or an unretryable authentication error).":"예약된 갱신에 실패하면 30분 간격으로 최대 2회 재시도합니다. 모든 시도가 실패했거나 재시도할 수 없는 인증 오류일 때만 Discord 알림을 보냅니다.","Old profiles may remain after renewal. Deleting a profile still needed by an installed app can stop it opening. A verified server-side backup is saved before removal.":"갱신 후에도 이전 프로파일이 남을 수 있습니다. 사용 중인 프로파일을 삭제하면 앱이 실행되지 않을 수 있습니다. 삭제 전에 서버에 검증된 백업을 저장합니다.","Restore a backed-up profile by UUID. Restoring does not extend its original expiry date. The backup is retained.":"UUID로 백업 프로파일을 복원합니다. 복원해도 원래 만료일은 연장되지 않으며, 백업 파일은 유지됩니다.","Choose an IPA. AltKeeper signs it with the configured Apple ID and installs it over Wi-Fi. The Apple ID password must be saved on the server.":"IPA를 선택하면 저장된 Apple ID로 서명한 뒤 Wi-Fi를 통해 아이폰에 설치합니다. Apple ID 비밀번호를 서버에 저장해야 합니다. 설치하는 동안 아이폰 화면을 잠금 해제한 상태로 유지하는 것을 권장합니다.","Try only once at a time: repeated failures may cause Apple to block sign-ins temporarily.":"한 번에 한 번만 로그인하세요. 반복된 실패는 Apple의 일시적인 로그인 제한을 유발할 수 있습니다.","Nothing yet. Automatic renewal runs every evening when configured on the server.":"아직 기록이 없습니다. 자동 갱신을 설정하면 매일 지정된 시간에 실행됩니다."};
+let locale = "ko";
+try { locale = localStorage.getItem("altkeeper-language") === "en" ? "en" : "ko"; } catch (_) {}
+function t(en) { return locale === "ko" ? (KO[en] || en) : en; }
+function applyStatic() {
+  document.documentElement.lang = locale;
+  document.querySelectorAll("[data-i18n]").forEach(el => {
+    el.textContent = t(el.getAttribute("data-i18n"));
+  });
+  $("language-select").value = locale;
+}
+$("language-select").onchange = (event) => {
+  locale = event.target.value === "en" ? "en" : "ko";
+  try { localStorage.setItem("altkeeper-language", locale); } catch (_) {}
+  applyStatic();
+  if (state) render(state);
+};
+applyStatic();
+
 let state = null, showForm = false, timer = null, sending = false, uploading = false;
 let expandedApps = new Set(), expandedProfiles = new Set(), showPreview = false;
 
@@ -296,6 +331,7 @@ function banner(id, text, cls) {
 
 function render(s) {
   state = s;
+  applyStatic();
   show("no-pairing", !s.pairing);
 
   // iPhone
