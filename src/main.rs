@@ -256,6 +256,21 @@ async fn cmd_renew(
     // scade più tardi, e si rinnova una volta sola (altrimenti ogni giro rifarebbe il rinnovo
     // finché il profilo vecchio non scade).
     let latest = profile::latest_by_bundle(mine);
+    let bundles: Vec<&str> = latest.iter().filter_map(|p| p.bundle_id.as_deref()).collect();
+    // Use the shortest remaining lifetime in each app/extension group, so an
+    // expiring extension triggers renewal for all related profiles.
+    let group_days: std::collections::HashMap<&str, i64> = {
+        let mut result = std::collections::HashMap::new();
+        for p in &latest {
+            if let Some(bundle) = p.bundle_id.as_deref() {
+                let root = profile::group_root(bundle, &bundles, &team_id);
+                result.entry(root).and_modify(|days: &mut i64| {
+                    *days = (*days).min(p.days_left().unwrap_or(-1));
+                }).or_insert_with(|| p.days_left().unwrap_or(-1));
+            }
+        }
+        result
+    };
 
     // When the installed-app lookup fails, explicitly fall back to renewing ALL
     // known team profiles. This is intentional and must be visible in logs.
@@ -290,18 +305,20 @@ async fn cmd_renew(
             say(&format!("   {}: bundle ID cannot be read, skipping", p.name));
             continue;
         };
+        let root = profile::group_root(bundle, &bundles, &team_id);
         if let Some(selected) = bundle_filter {
-            if selected != bundle { continue; }
+            if selected != root { continue; }
             requested_found = true;
         }
         if let Some(apps) = &installed {
-            if !apps.contains(bundle) {
-                say(&format!("   {bundle}: no installed app found, skipping"));
+            if !apps.contains(root) && !apps.contains(bundle) {
+                say(&format!("   {bundle}: host app not installed, skipping"));
                 continue;
             }
         }
         let days = p.days_left().unwrap_or(-1);
-        if !force && !fallback_renew_all && days > min_days {
+        let group_left = *group_days.get(root).unwrap_or(&days);
+        if !force && !fallback_renew_all && group_left > min_days {
             say(&format!("   {bundle}: expires in {days} days, no renewal needed"));
             continue;
         }
@@ -342,6 +359,7 @@ async fn cmd_renew(
         )
         .await?;
         say("      installed on the phone");
+        say(&format!("RENEWED {bundle}"));
         done += 1;
     }
 
