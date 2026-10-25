@@ -179,7 +179,9 @@ impl Application {
             isideload_vfs::fs::remove_dir_all(path)
                 .context("Could not remove an excluded extension")?;
         }
-        self.bundle.retain_app_extensions(&keep);
+        // Re-scan the bundle so removed extensions' nested frameworks and
+        // dylibs are not left in the signing tree.
+        self.bundle = Bundle::new(self.bundle.bundle_dir.clone())?;
         Ok(())
     }
 
