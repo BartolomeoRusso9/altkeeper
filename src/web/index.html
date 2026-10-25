@@ -125,7 +125,7 @@
     </div>
     <label for="auto-time">Run every day at (Korea Standard Time)</label>
     <div class="row">
-      <input type="time" id="auto-time" value="21:17" style="max-width:165px">
+      <input type="time" id="auto-time" value="06:00" style="max-width:165px">
       <button class="primary" id="auto-enable" type="button">Enable auto-renew</button>
       <button id="auto-disable" type="button" hidden>Turn off</button>
     </div>
@@ -298,7 +298,7 @@ function render(s) {
     : s.busy ? "Working…" : "";
 
   // Persistent server-side automatic renewal; UI does not call host systemctl.
-  const auto = s.auto_renew || {enabled:false, time:"21:17", next_run:null};
+  const auto = s.auto_renew || {enabled:false, time:"06:00", next_run:null};
   $("auto-pill").textContent = auto.enabled ? "ON" : "OFF";
   $("auto-pill").className = "pill " + (auto.enabled ? "ok" : "");
   const next = auto.next_run
@@ -309,7 +309,7 @@ function render(s) {
     : null;
   $("auto-next").textContent = auto.enabled ? "Next: " + (next || "checking") + " KST"
     : "Automatic renewal disabled";
-  if (document.activeElement !== $("auto-time")) $("auto-time").value = auto.time || "21:17";
+  if (document.activeElement !== $("auto-time")) $("auto-time").value = auto.time || "06:00";
   $("auto-enable").textContent = auto.enabled ? "Save time" : "Enable auto-renew";
   $("auto-enable").disabled = !s.account.password_saved || !s.account.team;
   $("auto-disable").hidden = !auto.enabled;
