@@ -235,6 +235,34 @@ Removing a profile currently needed by an installed app can prevent that app fro
 To restore a backup: `altkeeper profile-restore profili-salvati/<uuid>.mobileprovision`.
 Neither profile deletion nor renewal removes Apple Developer App IDs.
 
+**Grouped app management and retry controls:** The web UI groups extension profiles with
+their host app when their bundle ID contains the saved team's extension marker
+(e.g. `com.kdt.livecontainer.TEAM.LiveProcess` under `com.kdt.livecontainer`).
+The expandable **Your apps** card renews *every* member profile in a group, rather
+than only the selected host profile. Installed-app filtering also checks the
+host app for an extension; the earliest-expiring member determines when the entire
+group is due. The web preview lists groups that appear due, but the actual run
+performs a fresh phone check and may fall back to all team profiles if the
+installed-app inventory fails.
+
+The web scheduler's **renewal threshold** is adjustable from **1 to 6 days**,
+default **3 days**. On automatic renewal failure it retries up to **two** more
+times, **30 minutes apart** (up to 3 attempts in total). Authentication and
+rate-limit failures are not automatically retried. Enabling Discord failure
+notifications requires saving a webhook URL in the web UI. The secret is saved in
+the private `state/discord-webhook` file and is never returned to the browser;
+only a boolean indicates configuration. The Docker image includes `curl` to send
+an alert only after the last failed attempt (or a non-retryable failure).
+Successful automatic renewals do not send Discord messages.
+
+The web UI also lists previously saved profile backups and offers an explicit
+**Restore** action after confirmation. Restoration verifies the saved profile
+UUID and Apple Team ID and does not change its expiry date. The original file
+is retained. The app summary shows the last known per-group profile-install
+result from `state/app-renew-status.json`, and **Preview renewals** provides a
+non-authoritative overview without signing in to Apple.
+
+
 **Monthly backup cleanup:** When the web service (`serve`, including Docker `serve --altserver`)
 is running, it checks once a day whether a cleanup is due. Every **30 days after the last
 successful sweep** (including the first startup), it removes only saved `.mobileprovision`
