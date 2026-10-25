@@ -33,16 +33,30 @@ impl PhoneProfile {
     }
 }
 
-/// Associate extension bundles with their host app only when the embedded
-/// Team ID marks them as extensions of an existing, exact host bundle.
-/// Never infer a parent from arbitrary dotted reverse-DNS prefixes.
+/// AltStore and other signers may insert their *original* ten-character
+/// Team ID into an extension bundle, even when the provisioned profile
+/// belongs to a different (current) developer team. Match only a complete
+/// parent + team-marker + nonempty extension suffix, not arbitrary prefixes.
+fn extension_of(bundle: &str, parent: &str, team: &str) -> bool {
+    let Some(suffix) = bundle.strip_prefix(parent).and_then(|s| s.strip_prefix('.')) else {
+        return false;
+    };
+    let Some((marker, extension_name)) = suffix.split_once('.') else {
+        return false;
+    };
+    !extension_name.is_empty() && (
+        marker == team ||
+        (marker.len() == 10 &&
+            marker.bytes().all(|b| b.is_ascii_uppercase() || b.is_ascii_digit()))
+    )
+}
+
+/// Resolve an extension to an *existing* host bundle: the longest valid
+/// parent wins to avoid matching adjacent/unrelated dotted app identifiers.
 pub fn group_root<'a>(bundle: &'a str, bundles: &[&'a str], team: &str) -> &'a str {
     bundles.iter().copied()
-        .filter(|candidate| {
-            *candidate != bundle
-                && bundle.starts_with(&format!("{candidate}.{team}."))
-        })
-        .max_by_key(|candidate| candidate.len())
+        .filter(|parent| *parent != bundle && extension_of(bundle, parent, team))
+        .max_by_key(|parent| parent.len())
         .unwrap_or(bundle)
 }
 
@@ -273,6 +287,46 @@ mod tests {
         assert_eq!(group_root(bundles[4], &bundles, "TEAM"), bundles[4]);
         assert_eq!(members_of_group(bundles[2], &bundles, "TEAM").len(), 2);
     }
+    #[test]
+    fn real_altstore_extension_bundles_group_even_if_embedded_team_differs() {
+        // Real bundle shapes seen on iOS; the embedded marker is the app's
+        // original signer, which need not equal this profile's Apple Team ID.
+        let bundles = [
+            "com.google.ios.youtube",
+            "com.google.ios.youtube.PXUL22799Q.OpenYouTube.Extension",
+            "com.kdt.livecontainer",
+            "com.kdt.livecontainer.PXUL22799Q.LaunchAppExtension",
+            "com.kdt.livecontainer.PXUL22799Q.LiveProcess",
+            "com.kdt.livecontainer.PXUL22799Q.ShareExtension",
+        ];
+        let profile_team = "DIFFERENT1";
+        assert_eq!(group_root(bundles[1], &bundles, profile_team), bundles[0]);
+        for extension in &bundles[3..] {
+            assert_eq!(group_root(extension, &bundles, profile_team), bundles[2]);
+        }
+        assert_eq!(members_of_group(bundles[0], &bundles, profile_team).len(), 2);
+        assert_eq!(members_of_group(bundles[2], &bundles, profile_team).len(), 4);
+    }
+
+    #[test]
+    fn malformed_team_markers_do_not_group_unrelated_bundles() {
+        let bundles = [
+            "com.example.app",
+            "com.example.app.feature.widget",
+            "com.example.app.short.Widget",
+            "com.example.app.PXUL22799Q",
+            "com.example.app.PXUL22799q.Widget",
+            "com.example.app.PXUL22799Q.Widget",
+            "com.example.app.PXUL22799Q.", // no extension name
+            "com.example.app.PXUL22799Q.Widget.More",
+        ];
+        for index in [1,2,3,4,6] {
+            assert_eq!(group_root(bundles[index], &bundles, "SAVEDTEAM1"), bundles[index]);
+        }
+        assert_eq!(group_root(bundles[5], &bundles, "SAVEDTEAM1"), bundles[0]);
+        assert_eq!(group_root(bundles[7], &bundles, "SAVEDTEAM1"), bundles[0]);
+    }
+
     #[test]
     fn senza_profili_non_c_e_niente() {
         assert!(latest_by_bundle(&[]).is_empty());
