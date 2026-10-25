@@ -590,7 +590,9 @@ async fn index() -> Html<&'static str> {
 }
 
 fn png_response(bytes: &'static [u8]) -> Response {
-    ([(header::CONTENT_TYPE, "image/png")], bytes).into_response()
+    let mut response = Response::new(axum::body::Body::from(bytes));
+    response.headers_mut().insert(header::CONTENT_TYPE, HeaderValue::from_static("image/png"));
+    response
 }
 
 async fn apple_touch_icon() -> Response { png_response(APPLE_TOUCH_ICON) }
