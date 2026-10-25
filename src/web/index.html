@@ -5,7 +5,9 @@
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <meta name="color-scheme" content="light dark">
 <title>AltKeeper</title>
-<link rel="icon" href="data:,">
+<meta name="theme-color" content="#0a6cff">
+<link rel="apple-touch-icon" sizes="180x180" href="/apple-touch-icon.png">
+<link rel="icon" type="image/png" sizes="32x32" href="/favicon-32.png">
 <style>
   :root {
     --bg: #f4f5f7; --card: #ffffff; --text: #1b1f24; --muted: #5b6673; --line: #dfe3e8;
@@ -164,8 +166,10 @@
     <div class="row" style="margin-top:10px">
       <button id="discord-save" type="button">Save webhook</button>
       <button id="discord-clear" type="button">Clear webhook</button>
+      <button id="discord-test" type="button">Send test notification</button>
     </div>
     <div class="banner bad" id="discord-error" hidden></div>
+    <div class="banner" id="discord-test-result" role="status" aria-live="polite" hidden></div>
   </section>
 
   <section class="card">
@@ -399,6 +403,7 @@ function render(s) {
   $("discord-pill").textContent = auto.discord_configured ? "Configured" : "Not configured";
   $("discord-pill").className = "pill" + (auto.discord_configured ? " ok" : "");
   $("discord-clear").disabled = !auto.discord_configured;
+  $("discord-test").disabled = !auto.discord_configured;
 
   // Show provisioning profiles only when expanded, without moving controls when labels wrap.
   const pu = $("profiles");
@@ -570,6 +575,18 @@ $("discord-save").onclick = () => {
 $("discord-clear").onclick = () => {
   if (confirm("Remove the saved Discord webhook?")) {
     act(() => api("/api/discord", {clear:true}), "discord-error");
+  }
+};
+$("discord-test").onclick = async () => {
+  banner("discord-test-result", "");
+  $("discord-test").disabled = true;
+  try {
+    await api("/api/discord/test", {});
+    banner("discord-test-result", "Test notification sent. Check your Discord channel.", "good");
+  } catch (e) {
+    banner("discord-test-result", e.message, "bad");
+  } finally {
+    refresh();
   }
 };
 $("btn-preview").onclick = () => {showPreview = !showPreview; if(state)render(state);};
