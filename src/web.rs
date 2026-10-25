@@ -413,7 +413,9 @@ pub async fn serve(
         .route("/api/check", post(check))
         .route("/api/renew", post(renew))
         .route("/api/auto-renew", post(update_auto_renew))
+        .route("/api/discord", post(update_discord))
         .route("/api/profile/remove", post(remove_profile))
+        .route("/api/profile/restore", post(restore_profile))
         .route(
             "/api/install",
             post(install).layer(DefaultBodyLimit::max(MAX_IPA_BYTES + 1024 * 1024)),
@@ -657,6 +659,8 @@ async fn state(State(app): State<Arc<App>>) -> Json<Value> {
             "code_error": if asking { code_error } else { None },
         },
         "history": history,
+        "backups": account.as_ref().and_then(|a| a.team_id.as_deref())
+            .map(backup_views).unwrap_or_default(),
         "app_status": std::fs::read_to_string(APP_STATUS_FILE).ok()
             .and_then(|s| serde_json::from_str::<Value>(&s).ok())
             .unwrap_or(json!({})),
@@ -719,6 +723,117 @@ async fn update_auto_renew(
     }
     *config = updated;
     json_ok()
+}
+
+
+fn backup_views(team: &str) -> Vec<Value> {
+    let Ok(entries) = std::fs::read_dir(crate::SAVED_DIR) else { return Vec::new(); };
+    let mut result = Vec::new();
+    for entry in entries.flatten() {
+        if !entry.file_type().is_ok_and(|ft| ft.is_file()) { continue; }
+        let path = entry.path();
+        if path.extension().and_then(|s| s.to_str()) != Some("mobileprovision") { continue; }
+        let Ok(bytes) = std::fs::read(&path) else { continue; };
+        let Some(p) = profile::parse(&bytes) else { continue; };
+        if p.team_id.as_deref() != Some(team)
+            || path.file_stem().and_then(|s| s.to_str())
+                .is_none_or(|stem| !stem.eq_ignore_ascii_case(&p.uuid)) { continue; }
+        result.push(json!({
+            "uuid": p.uuid, "bundle": p.bundle_id, "expires":p.expires_text(),
+            "days": p.days_left()
+        }));
+    }
+    result.sort_by(|a,b| a["bundle"].as_str().cmp(&b["bundle"].as_str()));
+    result
+}
+
+#[derive(Deserialize)]
+struct DiscordReq {
+    #[serde(default)]
+    webhook: Option<String>,
+    #[serde(default)]
+    clear: bool,
+}
+
+async fn update_discord(
+    Json(req): Json<DiscordReq>,
+) -> (StatusCode, Json<Value>) {
+    if req.clear {
+        match std::fs::remove_file(DISCORD_WEBHOOK_FILE) {
+            Ok(()) => return json_ok(),
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => return json_ok(),
+            Err(_) => return json_err(StatusCode::INTERNAL_SERVER_ERROR, "Could not clear webhook"),
+        }
+    }
+    let Some(webhook) = req.webhook else {
+        return json_err(StatusCode::BAD_REQUEST, "Supply a Discord webhook URL.");
+    };
+    if !validate_discord_webhook(&webhook) {
+        return json_err(StatusCode::BAD_REQUEST, "Expected a valid Discord webhook URL.");
+    }
+    if std::fs::create_dir_all("state").is_err()
+        || crate::fsperm::restrict_dir(Path::new("state")).is_err()
+        || crate::fsperm::write_private(Path::new(DISCORD_WEBHOOK_FILE), webhook.as_bytes()).is_err()
+    {
+        return json_err(StatusCode::INTERNAL_SERVER_ERROR, "Could not save webhook");
+    }
+    json_ok()
+}
+
+#[derive(Deserialize)]
+struct RestoreReq {
+    uuid: String,
+}
+
+async fn restore_profile(
+    State(app): State<Arc<App>>,
+    Json(req): Json<RestoreReq>,
+) -> (StatusCode, Json<Value>) {
+    let team = apple::read_account(Path::new(".")).and_then(|a| a.team_id);
+    let Some(team) = team else {
+        return json_err(StatusCode::BAD_REQUEST, "Sign in before restoring profiles.");
+    };
+    if !backup_views(&team).iter().any(|p| p["uuid"].as_str() == Some(&req.uuid)) {
+        return json_err(StatusCode::NOT_FOUND, "Verified profile backup was not found.");
+    }
+    let Some(guard) = try_busy(&app) else {
+        return json_err(StatusCode::CONFLICT, BUSY_MSG);
+    };
+    app.lock().job = JobView {
+        kind:"restore_profile".into(), running:true, lines:Vec::new(), ok:None
+    };
+    spawn_job(guard, move |app| run_restore_profile(app, req.uuid, team));
+    json_ok()
+}
+
+async fn run_restore_profile(app: Arc<App>, uuid: String, team: String) {
+    let result: Result<String, String> = async {
+        // Only original verified UUID-named files for the configured Apple team.
+        if uuid.len() > 64 || uuid.is_empty()
+            || !uuid.bytes().all(|b| b.is_ascii_hexdigit() || b == b'-') {
+            return Err("Invalid profile UUID".into());
+        }
+        let path = Path::new(crate::SAVED_DIR).join(format!("{uuid}.mobileprovision"));
+        let bytes = std::fs::read(path).map_err(crate::phone::dbg)?;
+        let p = profile::parse(&bytes).ok_or("Invalid backup data")?;
+        if !p.uuid.eq_ignore_ascii_case(&uuid) || p.team_id.as_deref() != Some(&team) {
+            return Err("Backup does not belong to the configured Apple team".into());
+        }
+        let (_, mut link) = phone::connect_auto(app.phone, PAIRING_FILE, |_: &str| {}).await?;
+        phone::with_timeout("Profile restore", Duration::from_secs(60),
+            link.install_profile(bytes)).await?;
+        Ok(format!("Restored profile {}. Original backup retained.", uuid))
+    }.await;
+    let ok = result.is_ok();
+    match result {
+        Ok(line) => app.push_line(&line),
+        Err(e) => app.push_line(&format!("Error: {}", short_error(&e))),
+    }
+    {
+        let mut g=app.lock();
+        g.job.running=false; g.job.ok=Some(ok);
+    }
+    run_check(app).await;
 }
 
 #[derive(Deserialize)]
