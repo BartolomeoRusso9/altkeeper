@@ -93,7 +93,7 @@ async function checkDashboardState() {
   // needs many unrelated DOM controls.
   const helper = source.match(/function syncAutoRenewInputs\(auto\) \{[\s\S]*?\n\}\nfor \(const id of \["auto-time", "auto-days"\]\) \{[\s\S]*?\n\}/);
   assert(helper);
-  vm.runInContext('const $ = id => document.getElementById(id); let autoDraftDirty = false;\n' + helper[0], context);
+  vm.runInContext('const $ = id => document.getElementById(id); let autoDraftDirty = false, autoSavePending = false;\n' + helper[0], context);
   vm.runInContext('syncAutoRenewInputs({time:"21:17",min_days:3})', context);
   controls["auto-time"].value = "22:30";
   controls["auto-time"].listeners.input();
@@ -102,8 +102,11 @@ async function checkDashboardState() {
   vm.runInContext('syncAutoRenewInputs({time:"21:17",min_days:3})', context);
   assert.equal(controls["auto-time"].value, "22:30");
   assert.equal(controls["auto-days"].value, "5");
-  vm.runInContext('autoDraftDirty = false; syncAutoRenewInputs({time:"22:30",min_days:5})', context);
+  vm.runInContext('autoSavePending = true; syncAutoRenewInputs({time:"21:17",min_days:3})', context);
+  assert.equal(controls["auto-time"].value, "22:30", "an old response after save must not reset the draft");
+  vm.runInContext('syncAutoRenewInputs({time:"22:30",min_days:5})', context);
   assert.equal(controls["auto-time"].value, "22:30");
+  assert.equal(vm.runInContext('autoDraftDirty', context), false, "server confirmation clears the draft");
 
   const api = source.match(/async function api\(path, body, signal\) \{[\s\S]*?\n\}/);
   const refresh = source.match(/async function refresh\(\) \{[\s\S]*?\n\}/);
