@@ -1405,7 +1405,7 @@ async fn run_login(app: Arc<App>, apple_id: String, password: String, save: bool
 // ---------------------------------------------------------------------------------------------
 
 fn label_of(bundle: &str, team: &str) -> String {
-    bundle.strip_suffix(&format!(".{team}")).unwrap_or(bundle).to_string()
+    profile::profile_app_id(bundle, team).to_string()
 }
 
 fn level_for(days: i64) -> &'static str {
@@ -1869,6 +1869,33 @@ mod tests {
         let live = apps.iter().find(|a| a.bundle == "com.kdt.livecontainer").unwrap();
         assert_eq!(live.members.len(), 4);
         assert_eq!(live.days, 2);
+        let views = profile_views(&all, team);
+        assert_eq!(views.iter().filter(|p| p.root == youtube.bundle).count(), 2);
+        assert_eq!(views.iter().filter(|p| p.root == live.bundle).count(), 4);
+    }
+
+    #[test]
+    fn real_raw_profile_ids_from_phone_display_as_two_grouped_apps() {
+        // Screenshots show these IDs after the UI has hidden the last
+        // ".PXUL22799Q". The phone's raw provisioning IDs contain that
+        // extra suffix; testing display-only names missed the regression.
+        let team = "PXUL22799Q";
+        let all = vec![
+            profile("a", team, "com.google.ios.youtube.PXUL22799Q", 6),
+            profile("b", team, "com.google.ios.youtube.PXUL22799Q.OpenYouTube.Extension.PXUL22799Q", 6),
+            profile("c", team, "com.kdt.livecontainer.PXUL22799Q", 6),
+            profile("d", team, "com.kdt.livecontainer.PXUL22799Q.LaunchAppExtension.PXUL22799Q", 6),
+            profile("e", team, "com.kdt.livecontainer.PXUL22799Q.LiveProcess.PXUL22799Q", 6),
+            profile("f", team, "com.kdt.livecontainer.PXUL22799Q.ShareExtension.PXUL22799Q", 6),
+        ];
+        let apps = app_views(&all, team);
+        assert_eq!(apps.len(), 2, "UI must show two apps, not six profiles");
+        let youtube = apps.iter().find(|a| a.label == "com.google.ios.youtube").unwrap();
+        assert_eq!(youtube.members.len(), 2);
+        assert_eq!(youtube.bundle, "com.google.ios.youtube.PXUL22799Q");
+        let live = apps.iter().find(|a| a.label == "com.kdt.livecontainer").unwrap();
+        assert_eq!(live.members.len(), 4);
+        assert_eq!(live.bundle, "com.kdt.livecontainer.PXUL22799Q");
         let views = profile_views(&all, team);
         assert_eq!(views.iter().filter(|p| p.root == youtube.bundle).count(), 2);
         assert_eq!(views.iter().filter(|p| p.root == live.bundle).count(), 4);
