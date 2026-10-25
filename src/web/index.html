@@ -43,7 +43,7 @@
   .locale-toolbar label { margin: 0; font-size: .85rem; color: var(--muted); }
   .locale-toolbar select { min-width: 112px; text-align: center; }
   .action-row { justify-content: center; align-items: stretch; }
-  .action-row > button { flex: 1 1 148px; min-width: 136px; }
+  .action-row > button { flex: 0 0 184px; width: 184px; min-height: 54px; padding: 6px 10px; }
   .item-head button { width: 106px; flex: 0 0 106px; }
   .app-name { overflow-wrap: anywhere; }
   .item-info { flex: 1 1 0; min-width: 0; overflow-wrap: anywhere; }
@@ -55,8 +55,8 @@
     border-radius: 10px; background: var(--bg); color: var(--text); }
   @media(max-width:420px) {
     .item-head { gap: 6px; }
-    .item-head button { width: 84px; flex-basis: 84px; padding: 8px 5px; font-size: .81rem; }
-    .action-row > button { flex-basis: 145px; min-width: 128px; }
+    .item-head button { width: 90px; flex-basis: 90px; padding: 8px 3px; font-size: .77rem; white-space: normal; }
+    .action-row > button { flex-basis: 184px; width: 184px; }
   }
   .grow { flex: 1 1 auto; }
   .pill {
@@ -367,7 +367,7 @@ function render(s) {
         " · " + profilesText(members.length))));
     const last = (s.app_status || {})[a.bundle];
     if (last) {
-      const date = new Date(last.at * 1000).toLocaleString("ko-KR", {timeZone:"Asia/Seoul"});
+      const date = new Date(last.at * 1000).toLocaleString((locale === "ko" ? "ko-KR" : "en-US"), {timeZone:"Asia/Seoul"});
       details.append(div("muted", document.createTextNode(t("Last profile install: ") +
         last.status + " · " + date + " KST (" + last.renewed + "/" + last.total + ")")));
     }
@@ -430,7 +430,7 @@ function render(s) {
   $("auto-pill").textContent = auto.enabled ? t("ON") : t("OFF");
   $("auto-pill").className = "pill " + (auto.enabled ? "ok" : "");
   const next = auto.next_run
-    ? new Date(auto.next_run * 1000).toLocaleString("ko-KR", {
+    ? new Date(auto.next_run * 1000).toLocaleString(locale === "ko" ? "ko-KR" : "en-US", {
         timeZone:"Asia/Seoul", year:"numeric", month:"2-digit", day:"2-digit",
         hour:"2-digit", minute:"2-digit", hour12:false
       }) : null;
