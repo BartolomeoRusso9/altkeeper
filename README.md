@@ -427,6 +427,24 @@ prove Windows 11, other shell hosts, AltServer installation or unattended renewa
    `renew.ps1` keeps the same `renew.log`, the same optional `notify.conf` (ntfy) and the same
    once-a-day error notification as `renew.sh`. It needs the PC to be on and awake at that time.
 
+5. **System tray icon (no terminal).** Double-click `altkeeper.exe`, or run
+   `.\altkeeper.exe tray`: it starts AltServer and the web page like `serve --altserver`, but
+   with an icon next to the clock (the AltKeeper logo; grey while the iPhone is not reachable)
+   and no console window. Double-click the icon, or use the menu: *Open AltKeeper* (the page in
+   its own window; closing it only hides it), *Show logs*, *Start with Windows* (on by default
+   the first time), *Check for updates* and *Quit*. Toast notifications tell you when profiles
+   are renewed, an app is installed or something fails. The window needs the Microsoft Edge
+   WebView2 runtime, which Windows 11 and recent Windows 10 already have. `--console` keeps the
+   console, `--dir` chooses the data folder (default: the folder of the `.exe`).
+
+   The icon also checks the GitHub releases of the fork once a day; *Update now* downloads the new
+   `altkeeper.exe`, verifies its SHA-256, restarts, and goes back to the old version if the new
+   one does not start. Releases are built by `.github/workflows/release.yml` when you push a tag
+   equal to the `version` in `Cargo.toml` (for example `v0.3.0`).
+
+   Every server line (AltServer, web page, DNS-SD) is also written, with date and time, to
+   `altkeeper.log` (rotated at 5 MB) and shown in the **Logs** section of the web page.
+
 Everything else in this guide (commands, environment variables, outside-the-home setup) is the
 same; only the paths use `\`, and `cron` and `renew.sh` are replaced by the Task Scheduler and
 `renew.ps1`.
@@ -594,6 +612,7 @@ If it says it cannot find the server, watch the DNS with
 | `serve [--bind ip:port] [--pin PIN] [--dir folder] [--phone ip:port] [--altserver] [--altserver-port N]` | web page (and, with `--altserver`, AltServer) |
 | `profile-remove <uuid>` | takes one profile off the phone, saving a copy in `profili-salvati/` |
 | `profile-restore <file>` | puts a saved profile back |
+| `tray [--dir folder] [--phone ip:port] [--console]` | Windows only: AltServer + web page with a system tray icon, no terminal (the default when you double-click the `.exe`) |
 
 `ALTKEEPER_PHONE=ip:port` can replace `--phone`; without either the phone is found by itself (see
 step 2). `ALTKEEPER_NO_MDNS=1` turns Bonjour off (networks that block multicast, or to test the scan).

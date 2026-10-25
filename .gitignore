@@ -23,3 +23,6 @@ notify.conf
 renew.log
 .ultimo-errore
 /profili-salvati/
+altkeeper.log
+altkeeper.log.1
+altkeeper.new.exe

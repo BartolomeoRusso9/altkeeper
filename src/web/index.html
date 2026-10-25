@@ -123,6 +123,15 @@
     max-height: 240px; overflow-y: auto; margin: 10px 0 0; white-space: pre-wrap; word-break: break-word;
   }
   .hist .ico { width: 1.4em; display: inline-block; }
+  pre.logs { max-height: 60vh; white-space: pre; }
+  .quotas-row { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; }
+  .quota-badge {
+    display: inline-flex; align-items: center; padding: 3px 10px;
+    border-radius: 999px; font-size: .83rem; font-weight: 600;
+    background: var(--track); color: var(--muted); border: 1px solid var(--line);
+  }
+  .quota-badge.near-limit { background: var(--soon-bg); color: var(--soon); border-color: var(--soon); }
+  .quota-badge.at-limit { background: var(--urgent-bg); color: var(--urgent); border-color: var(--urgent); }
   [hidden] { display: none !important; }
   footer { color: var(--muted); font-size: .85rem; text-align: center; margin-top: 20px; }
 </style>
@@ -147,7 +156,13 @@
   </section>
 
   <section class="card">
-    <h2 data-i18n="Your apps">Your apps</h2>
+    <div class="row" style="justify-content:space-between; margin-bottom: 8px;">
+      <h2 data-i18n="Your apps" style="margin:0">Your apps</h2>
+      <div class="quotas-row" id="quotas-row" hidden>
+        <span class="quota-badge" id="quota-apps"></span>
+        <span class="quota-badge" id="quota-appids"></span>
+      </div>
+    </div>
     <p class="muted" id="apps-empty" hidden></p>
     <ul class="plain" id="apps"></ul>
     <div class="row action-row" style="margin-top:14px">
@@ -298,6 +313,16 @@
     <ul class="plain" id="hist"></ul>
   </section>
 
+  <section class="card" id="logs">
+    <h2 data-i18n="Logs">Logs</h2>
+    <div class="row">
+      <span class="muted grow" data-i18n="Live server log, newest at the bottom.">Live server log, newest at the bottom.</span>
+      <button id="btn-logs-copy" type="button" data-i18n="Copy">Copy</button>
+      <button id="btn-logs-clear" type="button" data-i18n="Clear view">Clear view</button>
+    </div>
+    <pre class="log logs" id="logs-view"></pre>
+  </section>
+
   <footer data-i18n="For use on your home network only.">For use on your home network only.</footer>
 </main>
 
@@ -410,6 +435,23 @@ function render(s) {
   const err = p.reachable === false ? p.error : "";
   banner("phone-error", err, "bad");
   $("phone-error").title = p.detail || "";
+
+  // Free-account limits: 3 active sideloaded apps, 10 App IDs per week.
+  const qRow = $("quotas-row");
+  if (s.quotas && s.account.present && p.reachable === true) {
+    qRow.hidden = false;
+    const appsUsed = s.quotas.installed_apps, maxApps = s.quotas.max_installed_apps || 3;
+    const idsUsed = s.quotas.app_ids_used, maxIds = s.quotas.max_app_ids || 10;
+    const qApps = $("quota-apps"), qAppIds = $("quota-appids");
+    qApps.textContent = appsUsed + "/" + maxApps + " " + t("Apps");
+    qApps.className = appsUsed >= maxApps ? "quota-badge at-limit" : appsUsed >= maxApps - 1 ? "quota-badge near-limit" : "quota-badge";
+    qApps.title = appsUsed + " / " + maxApps + " " + t("active sideloaded apps on this iPhone");
+    qAppIds.textContent = idsUsed + "/" + maxIds + " " + t("App IDs");
+    qAppIds.className = idsUsed >= maxIds ? "quota-badge at-limit" : idsUsed >= 7 ? "quota-badge near-limit" : "quota-badge";
+    qAppIds.title = idsUsed + " / " + maxIds + " " + t("App IDs in use (an estimate: Apple's live quota is not checked)");
+  } else {
+    qRow.hidden = true;
+  }
 
   // One app per host bundle. Members are separate signing profiles.
   const canRenew = s.account.present && s.account.password_saved && s.account.team && !s.busy;
@@ -846,7 +888,28 @@ $("code-form").onsubmit = async (ev) => {
 };
 $("btn-resend").onclick = () => act(() => api("/api/login/resend", {}), "code-error");
 
+// Logs: only new lines are fetched; the view keeps the last 2,000.
+let logSeq = 0;
+async function pollLogs() {
+  try {
+    const r = await api("/api/logs?since=" + logSeq);
+    if (r.lines.length) {
+      const v = $("logs-view");
+      const atEnd = v.scrollTop + v.clientHeight >= v.scrollHeight - 4;
+      const all = (v.textContent ? v.textContent + "\n" : "") + r.lines.join("\n");
+      v.textContent = all.split("\n").slice(-2000).join("\n");
+      if (atEnd) v.scrollTop = v.scrollHeight;
+    }
+    logSeq = r.seq;
+  } catch (_) {}
+  setTimeout(pollLogs, 2000);
+}
+$("btn-logs-copy").onclick = () => navigator.clipboard.writeText($("logs-view").textContent);
+$("btn-logs-clear").onclick = () => { $("logs-view").textContent = ""; };
+
 refresh();
+pollLogs();
+if (location.hash === "#logs") $("logs").scrollIntoView();
 </script>
 </body>
 </html>

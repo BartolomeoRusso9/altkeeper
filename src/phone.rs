@@ -409,6 +409,23 @@ pub async fn connect(addr: SocketAddr, pairing_path: &str) -> Result<PhoneLink, 
     })
 }
 
+/// Indirizzo di usbmuxd: `USBMUXD_SOCKET_ADDRESS` se c'è. Su Windows, senza la variabile, si usa
+/// il usbmuxd che Apple Devices / iTunes mette in ascolto su 127.0.0.1:27015, così la via USB
+/// funziona senza configurare niente.
+pub fn usbmuxd_addr() -> Result<UsbmuxdAddr, String> {
+    if let Ok(addr) = UsbmuxdAddr::from_env_var() {
+        return Ok(addr);
+    }
+    #[cfg(windows)]
+    {
+        Ok(UsbmuxdAddr::TcpSocket("127.0.0.1:27015".parse().unwrap()))
+    }
+    #[cfg(not(windows))]
+    {
+        UsbmuxdAddr::from_env_var().map_err(dbg)
+    }
+}
+
 /// Si collega via USB, se un iPhone è collegato alla macchina su cui gira AltKeeper (o a un
 /// usbmuxd raggiungibile con `USBMUXD_SOCKET_ADDRESS`). Usa il tunnel CoreDeviceProxy: serve
 /// solo che il telefono si fidi già del computer ("Registra"), non il pairing remoto.
@@ -417,7 +434,7 @@ pub async fn connect_usb(say: &mut impl FnMut(&str)) -> Result<Option<PhoneLink>
     if crate::env::is_set("NO_USB") {
         return Ok(None);
     }
-    let addr = UsbmuxdAddr::from_env_var().map_err(dbg)?;
+    let addr = usbmuxd_addr()?;
     let Ok(Ok(mut mux)) = tokio::time::timeout(Duration::from_secs(2), addr.connect(1)).await
     else {
         return Ok(None);

@@ -1,0 +1,38 @@
+# Compila altkeeper.exe per Windows e lo pubblica in una GitHub Release, con il suo SHA-256.
+# L'aggiornamento dall'icona nella barra di sistema scarica proprio questi due file.
+#
+# Si lancia con un tag, per esempio: git tag v0.3.1 && git push origin v0.3.1
+# Il numero del tag deve coincidere con `version` in Cargo.toml.
+name: release
+
+on:
+  push:
+    tags: ["v*"]
+
+jobs:
+  windows:
+    runs-on: windows-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v7
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+      - name: Check that the tag matches Cargo.toml
+        shell: pwsh
+        run: |
+          $version = (Select-String -Path Cargo.toml -Pattern '^version = "(.+)"').Matches[0].Groups[1].Value
+          if ("v$version" -ne "${{ github.ref_name }}") { throw "tag ${{ github.ref_name }} != Cargo.toml v$version" }
+      - run: cargo test --locked
+      - run: cargo build --release --locked
+      - name: SHA-256
+        shell: pwsh
+        run: |
+          Copy-Item target/release/altkeeper.exe altkeeper.exe
+          $hash = (Get-FileHash altkeeper.exe -Algorithm SHA256).Hash.ToLower()
+          Set-Content -Path altkeeper.exe.sha256 -Value "$hash  altkeeper.exe" -NoNewline
+      - uses: softprops/action-gh-release@v2
+        with:
+          files: |
+            altkeeper.exe
+            altkeeper.exe.sha256

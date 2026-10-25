@@ -19,7 +19,7 @@ use std::time::{Duration, SystemTime, UNIX_EPOCH};
 use axum::{
     Json, Router,
     extract::{DefaultBodyLimit, Multipart, Request, State},
-    http::{HeaderMap, HeaderValue, Method, StatusCode, header},
+    http::{HeaderMap, HeaderValue, Method, StatusCode, Uri, header},
     middleware::{self, Next},
     response::{Html, IntoResponse, Response},
     routing::{get, post},
@@ -127,6 +127,7 @@ impl App {
     }
 
     fn push_line(&self, s: &str) {
+        crate::log::line(&format!("[web] {s}"));
         let mut g = self.lock();
         g.job.lines.push(s.to_string());
         if g.job.lines.len() > MAX_JOB_LINES {
@@ -421,6 +422,7 @@ pub async fn serve(
         .route("/apple-touch-icon.png", get(apple_touch_icon))
         .route("/favicon-32.png", get(favicon_32))
         .route("/api/state", get(state))
+        .route("/api/logs", get(logs))
         .route("/api/check", post(check))
         .route("/api/renew", post(renew))
         .route("/api/auto-renew", post(update_auto_renew))
@@ -446,7 +448,7 @@ pub async fn serve(
     let listener = tokio::net::TcpListener::bind(bind)
         .await
         .map_err(|e| crate::tr!(format!("non riesco ad ascoltare su {bind}: {e}"), format!("cannot listen on {bind}: {e}")))?;
-    println!("{}", crate::tr!(
+    crate::log::line(&crate::tr!(
         format!("Interfaccia web su http://{bind} ({})", if app.pin.is_some() {
             "protetta da PIN: il nome utente può essere qualsiasi"
         } else { "raggiungibile solo da questo computer" }),
@@ -616,6 +618,17 @@ fn json_ok() -> (StatusCode, Json<Value>) {
 
 const BUSY_MSG: &str = "Another operation is already running: please wait for it to finish.";
 
+/// Le righe di log dopo `?since=N` (0 = tutte quelle in memoria), per la sezione Logs.
+async fn logs(uri: Uri) -> Json<Value> {
+    let since = uri
+        .query()
+        .and_then(|q| q.split('&').find_map(|kv| kv.strip_prefix("since=")))
+        .and_then(|v| v.parse().ok())
+        .unwrap_or(0);
+    let (seq, lines) = crate::log::since(since);
+    Json(json!({ "seq": seq, "lines": lines }))
+}
+
 async fn state(State(app): State<Arc<App>>) -> Json<Value> {
     expire_pending_ipa(&app);
     let account = apple::read_account(Path::new("."));
@@ -674,6 +687,13 @@ async fn state(State(app): State<Arc<App>>) -> Json<Value> {
             "error": g.snapshot.error,
             "detail": g.snapshot.detail,
             "profiles_total": g.snapshot.profiles_total,
+        },
+        "quotas": {
+            "installed_apps": g.snapshot.apps.len(),
+            "max_installed_apps": 3,
+            // Ogni profilo più recente per bundle (app principale + estensioni) è un App ID.
+            "app_ids_used": g.snapshot.apps.iter().map(|a| a.members.len()).sum::<usize>(),
+            "max_app_ids": 10,
         },
         "apps": g.snapshot.apps.iter().map(|a| json!({
             "bundle": a.bundle, "label": a.label, "days": a.days,
@@ -1993,6 +2013,30 @@ fn append_log(lines: &[String], ok: bool) {
 
 #[cfg(test)]
 mod tests {
+    #[tokio::test]
+    async fn api_logs_returns_new_lines() {
+        let mine = |v: &Value| -> Vec<String> {
+            v["lines"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .filter_map(|l| l.as_str())
+                .filter(|l| l.contains("logs-api-test"))
+                .map(String::from)
+                .collect()
+        };
+        let (before, _) = crate::log::since(u64::MAX);
+        crate::log::line("logs-api-test a");
+        crate::log::line("logs-api-test b");
+        let Json(v) = logs(format!("/api/logs?since={before}").parse().unwrap()).await;
+        let got = mine(&v);
+        assert_eq!(got.len(), 2);
+        assert!(got[0].ends_with("] logs-api-test a"));
+        let seq = v["seq"].as_u64().unwrap();
+        let Json(v) = logs(format!("/api/logs?since={seq}").parse().unwrap()).await;
+        assert!(mine(&v).is_empty());
+    }
+
     #[test]
     fn signing_error_keeps_cause_after_an_empty_first_line() {
         let cause = "Failed to retrieve certificate identity: test cause";

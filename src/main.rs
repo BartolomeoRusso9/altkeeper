@@ -14,6 +14,9 @@
 //!   altkeeper altserver [--port N] [--dir cartella] [--phone ip:porta]
 //!                    [--dns-domain D --dns-address IP [--dns-port N]]
 //!                                                  fa da AltServer per AltStore (Refresh All e installazioni)
+//!   altkeeper tray [--dir cartella] [--phone ip:porta] [--console]
+//!                                                  (solo Windows) icona nella barra di sistema: come
+//!                                                  `serve --altserver` ma senza terminale
 //!
 //! Se non indichi il telefono (`--phone` o ALTKEEPER_PHONE) lo cerca in rete via Bonjour.
 //!
@@ -27,9 +30,14 @@ mod env;
 mod fsperm;
 mod i18n;
 mod install_archive;
+mod log;
 mod phone;
 mod profile;
 mod terminal;
+#[cfg(windows)]
+mod tray;
+#[cfg(windows)]
+mod update;
 mod web;
 
 use std::net::SocketAddr;
@@ -518,6 +526,10 @@ async fn run() -> Result<(), String> {
         .init();
 
     let mut args: Vec<String> = std::env::args().skip(1).collect();
+    // Su Windows un doppio clic sull'exe (nessun argomento) apre la versione con l'icona.
+    if args.is_empty() && cfg!(windows) {
+        args.push("tray".into());
+    }
     if args.is_empty() {
         return Err(crate::tr!(USAGE, USAGE_EN).into());
     }
@@ -583,6 +595,7 @@ async fn run() -> Result<(), String> {
             if let Some(dir) = opt("--dir") {
                 std::env::set_current_dir(&dir).map_err(|e| crate::tr!(format!("--dir {dir}: {e}"), format!("--dir {dir}: {e}")))?;
             }
+            log::init(Path::new("."));
             let phone = phone_addr(opt("--phone"))?;
             web::check_options(bind, &pin)?;
             apple::anisette_url(env::var("ANISETTE_URL").as_deref())?;
@@ -594,14 +607,69 @@ async fn run() -> Result<(), String> {
             }
             web::serve(bind, pin, phone).await
         }
+        #[cfg(windows)]
+        "tray" => {
+            // Senza --dir si usa la cartella dell'exe: all'avvio con Windows la cartella di
+            // lavoro è un'altra.
+            let dir = match opt("--dir") {
+                Some(d) => std::path::PathBuf::from(d),
+                None => std::env::current_exe()
+                    .map_err(dbg)?
+                    .parent()
+                    .ok_or(crate::tr!("cartella dell'exe non trovata", "cannot find the exe folder"))?
+                    .to_path_buf(),
+            };
+            std::env::set_current_dir(&dir).map_err(|e| format!("--dir {}: {e}", dir.display()))?;
+            let dir = std::env::current_dir().map_err(dbg)?;
+            log::init(&dir);
+            if !flag("--console") {
+                tray::hide_console();
+            }
+            // Avviato da un aggiornamento: prima si aspetta che la versione vecchia liberi le porte.
+            let replacing = opt("--replacing").and_then(|p| p.parse::<u32>().ok());
+            if let Some(pid) = replacing {
+                tray::wait_for_exit(pid);
+            }
+            let exe = std::env::current_exe().map_err(dbg)?;
+            let bind: SocketAddr = "127.0.0.1:8787".parse().map_err(dbg)?;
+            let phone = phone_addr(opt("--phone"))?;
+            let start = || -> Result<(), String> {
+                apple::anisette_url(env::var("ANISETTE_URL").as_deref())?;
+                let port = altserver::start(altserver_port(opt("--altserver-port"))?, phone)?;
+                start_dnssd(&opt, port)
+            };
+            if let Err(e) = start() {
+                log::err(&e);
+                // La versione nuova non parte: si rimette quella vecchia e si riavvia quella.
+                if replacing.is_some() && update::rollback(&exe) {
+                    log::err("[update] the new version did not start, going back to the old one");
+                    let _ = std::process::Command::new(&exe).arg("tray").arg("--dir").arg(&dir).spawn();
+                    return Err(e);
+                }
+                tray::message_box(&format!("AltKeeper cannot start:\n\n{e}"));
+                return Err(e);
+            }
+            update::cleanup(&exe);
+            let rt = tokio::runtime::Handle::current();
+            tokio::task::block_in_place(|| {
+                tray::run(bind, &dir, |proxy| {
+                    rt.spawn(async move {
+                        if let Err(e) = web::serve(bind, None, phone).await {
+                            let _ = proxy.send_event(tray::UserEvent::ServerFailed(e));
+                        }
+                    });
+                })
+            })
+        }
         "altserver" => {
             if let Some(dir) = opt("--dir") {
                 std::env::set_current_dir(&dir).map_err(|e| crate::tr!(format!("--dir {dir}: {e}"), format!("--dir {dir}: {e}")))?;
             }
+            log::init(Path::new("."));
             apple::anisette_url(env::var("ANISETTE_URL").as_deref())?;
             let port = altserver::start(altserver_port(opt("--port"))?, phone_addr(opt("--phone"))?)?;
             start_dnssd(&opt, port)?;
-            println!("{}", crate::tr!("AltServer attivo. Ctrl-C per fermarlo.", "AltServer running. Press Ctrl-C to stop."));
+            log::line(&crate::tr!("AltServer attivo. Ctrl-C per fermarlo.", "AltServer running. Press Ctrl-C to stop.").to_string());
             tokio::select! {
                 r = tokio::signal::ctrl_c() => r.map_err(dbg)?,
                 _ = terminated() => {}

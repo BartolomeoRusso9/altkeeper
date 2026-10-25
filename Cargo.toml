@@ -1,13 +1,14 @@
 [package]
 default-run = "altkeeper"
 name = "altkeeper"
-version = "0.2.0"
+version = "0.3.0"
 edition = "2021"
 description = "AltServer for iOS 17+ that runs on your home server (Docker): renews and installs sideloaded iPhone apps over Wi-Fi, no computer or VPN"
 license = "MIT"
 readme = "README.md"
 
 [dependencies]
+chrono = { version = "0.4", default-features = false, features = ["clock"] }
 axum = { version = "0.8.9", default-features = false, features = ["http1", "tokio", "json", "multipart"] }
 idevice = { version = "0.1.68", default-features = false, features = [
   "ring",
@@ -36,6 +37,19 @@ tokio = { version = "1", features = ["full"] }
 tempfile = "3.27"
 zip = { version = "8.6", default-features = false, features = ["deflate"] }
 tracing-subscriber = { version = "0.3", features = ["env-filter"] }
+
+[target.'cfg(windows)'.build-dependencies]
+winresource = "0.1"
+
+[target.'cfg(windows)'.dependencies]
+tao = "0.37"
+sha2 = "0.10"
+tauri-winrt-notification = "0.8"
+reqwest = { version = "0.13", default-features = false, features = ["blocking", "json", "rustls-no-provider"] }
+tray-icon = "0.26"
+winreg = "0.56"
+windows-sys = { version = "0.61", features = ["Win32_Foundation", "Win32_System_Console", "Win32_System_Threading", "Win32_UI_WindowsAndMessaging"] }
+wry = "0.57"
 
 # La copia in vendor/ è isideload 0.4.6 (upstream 8ca39b62) con due modifiche locali:
 # gli accessor di AnisetteData usati dal ponte AltStore e il logging ALTKEEPER_DEBUG /
