@@ -111,7 +111,7 @@ i JSON o la pagina web. I comandi del menu 2FA restano `d`, `r` (se disponibile)
 `-macos-x86_64` (Intel), ciascuno con il suo file `.sha256` (verifica con `sha256sum -c`). Decomprimi e
 usa il binario `altkeeper`. Le build Linux richiedono glibc 2.35 o più recente; su sistemi più vecchi
 o Alpine usa Docker o compila da te. Le build macOS non sono firmate: se Gatekeeper le blocca, lancia
-`xattr -d com.apple.quarantine altkeeper`. Si aggiorna da solo solo l'`.exe` di Windows.
+`xattr -dr com.apple.quarantine altkeeper`. Su macOS c'è anche `AltKeeper-<versione>-macos-<arch>.zip` con `AltKeeper.app`: doppio clic e avvia il server e apre la pagina web (i dati stanno in `~/Library/Application Support/AltKeeper`; non c'è l'icona nella barra dei menu, per chiuderla usa Forza uscita dal Dock). Per l'app vale lo stesso comando, su `AltKeeper.app`. Si aggiorna da solo solo l'`.exe` di Windows.
 
 **Oppure compilalo tu:**
 
@@ -369,8 +369,9 @@ end-to-end.
 
    L'icona controlla anche, una volta al giorno, le release GitHub; *Update now* scarica il
    nuovo `altkeeper.exe`, ne verifica lo SHA-256, si riavvia e torna alla versione vecchia se la
-   nuova non parte. Le release (Windows, Linux e macOS) le compila `.github/workflows/release.yml` quando pubblichi un tag
-   uguale alla `version` di `Cargo.toml` (per esempio `v0.3.0`).
+   nuova non parte. Le release (Windows, Linux e macOS) le compila `.github/workflows/release.yml` quando le avvii a mano
+   (GitHub → Actions → release → *Run workflow*). Il tag è `v` + la `version` di `Cargo.toml` e lo crea la release
+   stessa: alza prima la versione, altrimenti il workflow si ferma perché il tag esiste già.
 
    Ogni riga del server (AltServer, pagina web, DNS-SD) viene scritta con data e ora anche in
    `altkeeper.log` (ruotato a 5 MB) e mostrata nella sezione **Logs** della pagina web.

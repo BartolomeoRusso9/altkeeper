@@ -107,8 +107,10 @@ and server logs, **not** the HTML web page, protocol or JSON. The same 2FA menu 
 `altkeeper-<version>-linux-x86_64.tar.gz`, `-linux-aarch64`, `-macos-aarch64` (Apple Silicon) and
 `-macos-x86_64` (Intel), each with a `.sha256` file (check with `sha256sum -c`). Unpack it and use the
 `altkeeper` binary inside. The Linux builds need glibc 2.35 or newer; on older systems or Alpine, use
-Docker or build it yourself. The macOS builds are not signed: if Gatekeeper blocks it, run
-`xattr -d com.apple.quarantine altkeeper`. Only the Windows `.exe` updates itself.
+Docker or build it yourself. On macOS there is also `AltKeeper-<version>-macos-<arch>.zip` with `AltKeeper.app`: double-click it and it starts the
+server and opens the web page (data lives in `~/Library/Application Support/AltKeeper`; there is no menu-bar icon, so
+quit it from the Dock with Force Quit). The macOS builds are not notarized: if Gatekeeper blocks them, run
+`xattr -dr com.apple.quarantine AltKeeper.app` (or `altkeeper` for the tar.gz). Only the Windows `.exe` updates itself.
 
 **Or build it yourself:**
 
@@ -448,8 +450,9 @@ prove Windows 11, other shell hosts, AltServer installation or unattended renewa
 
    The icon also checks the GitHub releases once a day; *Update now* downloads the new
    `altkeeper.exe`, verifies its SHA-256, restarts, and goes back to the old version if the new
-   one does not start. Releases (Windows, Linux and macOS) are built by `.github/workflows/release.yml` when you push a
-   tag equal to the `version` in `Cargo.toml` (for example `v0.3.0`).
+   one does not start. Releases (Windows, Linux and macOS) are built by `.github/workflows/release.yml` when you start it by hand
+   (GitHub → Actions → release → *Run workflow*). The tag is `v` + the `version` in `Cargo.toml`, created by the
+   release itself; bump the version first, or the run stops because the tag already exists.
 
    Every server line (AltServer, web page, DNS-SD) is also written, with date and time, to
    `altkeeper.log` (rotated at 5 MB) and shown in the **Logs** section of the web page.
