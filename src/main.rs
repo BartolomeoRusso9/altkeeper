@@ -300,7 +300,7 @@ async fn cmd_renew(
     // accede affatto (meno login, meno rischio che Apple limiti le richieste).
     let mut due: Vec<(&str, i64)> = Vec::new();
     let mut requested_found = false;
-    for p in latest {
+    for p in &latest {
         let Some(bundle) = p.bundle_id.as_deref() else {
             say(&format!("   {}: bundle ID cannot be read, skipping", p.name));
             continue;
