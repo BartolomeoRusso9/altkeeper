@@ -71,6 +71,7 @@ pub fn group_root<'a>(bundle: &'a str, bundles: &[&'a str], team: &str) -> &'a s
         .unwrap_or(bundle)
 }
 
+#[cfg(test)]
 pub fn members_of_group<'a>(root: &str, bundles: &'a [&'a str], team: &str) -> Vec<&'a str> {
     bundles.iter().copied()
         .filter(|b| group_root(b, bundles, team) == root)

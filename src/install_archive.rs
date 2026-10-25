@@ -1,11 +1,11 @@
 //! Package a *signed* .app as one IPA before staging it over Wi-Fi.
 //! The old directory-based sideload path remains available as a rollback.
 use std::fs::{self, File, Metadata};
-use std::io::{Read, Seek, Write};
+use std::io::{Seek, Write};
 use std::path::Path;
 
 use idevice::{
-    IdeviceService, ReadWrite, RsdService,
+    RsdService,
     afc::{AfcClient, opcode::AfcFopenMode},
     installation_proxy::InstallationProxyClient,
     rsd::RsdHandshake,
@@ -196,6 +196,7 @@ pub(crate) async fn install_signed_app_rsd(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::io::Read;
 
     #[test]
     fn packages_signed_app_with_payload_and_nested_files() {
