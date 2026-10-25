@@ -37,8 +37,19 @@ impl PhoneProfile {
 /// Team ID into an extension bundle, even when the provisioned profile
 /// belongs to a different (current) developer team. Match only a complete
 /// parent + team-marker + nonempty extension suffix, not arbitrary prefixes.
+/// Apple provisioning App IDs may have a *second* Team ID suffix that
+/// the UI deliberately hides (e.g. host "com.foo.PXUL22799Q" is shown as
+/// "com.foo"). Keep the raw ID for Apple renewals, but ignore this final
+/// suffix while comparing parent and extension relationships.
+pub fn profile_app_id<'a>(bundle: &'a str, team: &str) -> &'a str {
+    if team.is_empty() { return bundle; }
+    bundle.strip_suffix(&format!(".{team}")).unwrap_or(bundle)
+}
+
 fn extension_of(bundle: &str, parent: &str, team: &str) -> bool {
-    let Some(suffix) = bundle.strip_prefix(parent).and_then(|s| s.strip_prefix('.')) else {
+    let child_id = profile_app_id(bundle, team);
+    let parent_id = profile_app_id(parent, team);
+    let Some(suffix) = child_id.strip_prefix(parent_id).and_then(|s| s.strip_prefix('.')) else {
         return false;
     };
     let Some((marker, extension_name)) = suffix.split_once('.') else {
@@ -306,6 +317,45 @@ mod tests {
         }
         assert_eq!(members_of_group(bundles[0], &bundles, profile_team).len(), 2);
         assert_eq!(members_of_group(bundles[2], &bundles, profile_team).len(), 4);
+    }
+
+    #[test]
+    fn real_provisioning_app_ids_include_trailing_team_suffix() {
+        // The web UI strips the final ".PXUL22799Q" from each raw profile
+        // bundle when it displays the names seen in the user screenshot.
+        // Previous tests used the displayed IDs and missed this failure.
+        let team = "PXUL22799Q";
+        let raw = [
+            "com.google.ios.youtube.PXUL22799Q",
+            "com.google.ios.youtube.PXUL22799Q.OpenYouTube.Extension.PXUL22799Q",
+            "com.kdt.livecontainer.PXUL22799Q",
+            "com.kdt.livecontainer.PXUL22799Q.LaunchAppExtension.PXUL22799Q",
+            "com.kdt.livecontainer.PXUL22799Q.LiveProcess.PXUL22799Q",
+            "com.kdt.livecontainer.PXUL22799Q.ShareExtension.PXUL22799Q",
+        ];
+        assert_eq!(profile_app_id(raw[0], team), "com.google.ios.youtube");
+        assert_eq!(
+            profile_app_id(raw[1], team),
+            "com.google.ios.youtube.PXUL22799Q.OpenYouTube.Extension"
+        );
+        assert_eq!(group_root(raw[1], &raw, team), raw[0]);
+        for ext in &raw[3..] {
+            assert_eq!(group_root(ext, &raw, team), raw[2]);
+        }
+        assert_eq!(members_of_group(raw[0], &raw, team).len(), 2);
+        assert_eq!(members_of_group(raw[2], &raw, team).len(), 4);
+    }
+
+    #[test]
+    fn trailing_suffix_must_match_current_profile_team_exactly() {
+        let raw = [
+            "com.example.app.AAAAAAAAAA",
+            "com.example.app.BBBBBBBBBB.Ext.AAAAAAAAAA",
+            "com.example.app.AAAAAAAAAA.other",
+        ];
+        assert_eq!(group_root(raw[1], &raw, "AAAAAAAAAA"), raw[0]);
+        assert_eq!(group_root(raw[2], &raw, "AAAAAAAAAA"), raw[2]);
+        assert_eq!(profile_app_id(raw[0], "BBBBBBBBBB"), raw[0]);
     }
 
     #[test]
