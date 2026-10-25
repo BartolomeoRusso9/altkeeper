@@ -167,10 +167,10 @@ fn now() -> u64 {
 /// compreso), così una configurazione sbagliata non lascia annunci Bonjour orfani.
 pub fn check_options(bind: SocketAddr, pin: &Option<String>) -> Result<(), String> {
     match pin {
-        None if !bind.ip().is_loopback() => Err("per ascoltare fuori da questo computer serve un \
-                                                 PIN: imposta ALTKEEPER_WEB_PIN (o usa --pin)"
+        None if !bind.ip().is_loopback() => Err("listening beyond this computer needs a \
+                                                 PIN: set ALTKEEPER_WEB_PIN (or use --pin)"
             .into()),
-        Some(p) if p.chars().count() < 4 => Err("il PIN deve avere almeno 4 caratteri".into()),
+        Some(p) if p.chars().count() < 4 => Err("the PIN must be at least 4 characters".into()),
         _ => Ok(()),
     }
 }
@@ -206,13 +206,13 @@ pub async fn serve(
 
     let listener = tokio::net::TcpListener::bind(bind)
         .await
-        .map_err(|e| format!("non riesco ad ascoltare su {bind}: {e}"))?;
+        .map_err(|e| format!("cannot listen on {bind}: {e}"))?;
     println!(
-        "Interfaccia web su http://{bind} ({})",
+        "Web UI at http://{bind} ({})",
         if app.pin.is_some() {
-            "protetta da PIN: il nome utente può essere qualsiasi"
+            "PIN protected: any user name works"
         } else {
-            "raggiungibile solo da questo computer"
+            "only reachable from this computer"
         }
     );
     axum::serve(listener, router).await.map_err(|e| format!("{e:?}"))
@@ -224,13 +224,13 @@ pub async fn serve(
 
 async fn guard(State(app): State<Arc<App>>, req: Request, next: Next) -> Response {
     if app.pin.is_none() && !host_is_local(req.headers()) {
-        return (StatusCode::FORBIDDEN, "host non ammesso").into_response();
+        return (StatusCode::FORBIDDEN, "host not allowed").into_response();
     }
     if let Some(pin) = &app.pin {
         if !basic_password_ok(req.headers(), pin) {
             // Rallenta chi prova PIN a caso.
             tokio::time::sleep(Duration::from_secs(1)).await;
-            let mut res = (StatusCode::UNAUTHORIZED, "serve il PIN").into_response();
+            let mut res = (StatusCode::UNAUTHORIZED, "PIN required").into_response();
             res.headers_mut().insert(
                 header::WWW_AUTHENTICATE,
                 HeaderValue::from_static("Basic realm=\"altkeeper\""),
@@ -241,7 +241,7 @@ async fn guard(State(app): State<Arc<App>>, req: Request, next: Next) -> Respons
     if req.method() == Method::POST
         && req.headers().get("x-requested-with").map(|v| v.as_bytes()) != Some(b"altkeeper")
     {
-        return (StatusCode::FORBIDDEN, "richiesta non valida").into_response();
+        return (StatusCode::FORBIDDEN, "invalid request").into_response();
     }
     let mut res = next.run(req).await;
     let h = res.headers_mut();
@@ -693,14 +693,14 @@ async fn run_check(app: Arc<App>) {
         }
         Err(_) => {
             g.snapshot.reachable = Some(false);
-            g.snapshot.error = Some(friendly_error("non risponde"));
-            g.snapshot.detail = Some("nessuna risposta entro 45 secondi".into());
+            g.snapshot.error = Some(friendly_error("did not respond"));
+            g.snapshot.detail = Some("no response within 45 seconds".into());
         }
     }
 }
 
 async fn run_renew(app: Arc<App>, force: bool) {
-    let mut say = |s: &str| app.push_line(&english_job_line(s));
+    let mut say = |s: &str| app.push_line(s);
     let result = crate::cmd_renew(app.phone, false, force, 3, &mut say).await;
 
     let ok = result.is_ok();
@@ -911,15 +911,15 @@ fn app_views(profiles: &[profile::PhoneProfile], team: &str) -> Vec<AppView> {
 /// Traduce gli errori tecnici in una frase comprensibile.
 fn friendly_error(err: &str) -> String {
     let e = err.to_lowercase();
-    if e.contains("manca il pairing") {
+    if e.contains("remote pairing file") && e.contains("is missing") {
         "iPhone pairing is missing. Set it up once over USB (see the guide)."
             .into()
-    } else if e.contains("early eof") || e.contains("pairing con l'iphone non riuscito") {
+    } else if e.contains("early eof") || e.contains("iphone pairing failed") {
         "The iPhone no longer recognizes the pairing: set it up again over USB.".into()
     } else if e.contains("no route to host")
         || e.contains("hostunreachable")
-        || e.contains("non risponde")
-        || e.contains("non trovo l'iphone")
+        || e.contains("did not respond")
+        || e.contains("cannot find the iphone")
         || e.contains("timed out")
         || e.contains("refused")
     {
@@ -935,86 +935,7 @@ fn short_error(err: &str) -> String {
         .map(str::trim)
         .find(|l| !l.is_empty())
         .unwrap_or(err);
-    let translated = if let Some(detail) = one_line.strip_prefix("login Apple ID non riuscito: ") {
-        format!("Apple ID sign-in failed: {detail}")
-    } else if let Some(detail) = one_line.strip_prefix("sessione sviluppatore non riuscita: ") {
-        format!("Developer session failed: {detail}")
-    } else if let Some(detail) = one_line.strip_prefix("registrazione iPhone non riuscita: ") {
-        format!("iPhone registration failed: {detail}")
-    } else if one_line.starts_with("pairing con l'iPhone non riuscito") {
-        "iPhone pairing failed. Set it up again over USB.".to_string()
-    } else if one_line.starts_with("manca account.json: ") {
-        "account.json is missing: first run `altkeeper login <apple-id>`.".to_string()
-    } else if let Some((path, _)) = one_line
-        .strip_prefix("manca il pairing remoto ")
-        .and_then(|s| s.split_once(": crealo con "))
-    {
-        format!("Remote pairing file {path} is missing. Create it with `altkeeper pair-usb`.")
-    } else {
-        if let Some(team) = one_line
-            .strip_prefix("il team ")
-            .and_then(|s| s.strip_suffix(" non esiste su questo Apple ID"))
-        {
-            format!("Team {team} does not exist for this Apple ID.")
-        } else {
-            match one_line {
-                "nessun team sviluppatore su questo Apple ID" => {
-                    "No developer team is available for this Apple ID.".to_string()
-                }
-                "password non salvata: rifai `altkeeper login` e scegli di salvarla" => {
-                    "Password not saved: run `altkeeper login` again and choose to save it."
-                        .to_string()
-                }
-                "il telefono non risponde via USB" => {
-                    "The iPhone is not responding over USB.".to_string()
-                }
-                "non trovo l'iPhone in rete: è acceso e sul Wi-Fi di casa?" => {
-                    "Cannot find the iPhone on the network. Is it on and connected to your home Wi-Fi?"
-                        .to_string()
-                }
-                _ => one_line.to_string(),
-            }
-        }
-    };
-    translated.chars().take(400).collect()
-}
-
-fn english_job_line(line: &str) -> String {
-    if line == "Collegato via USB" {
-        return "Connected via USB".into();
-    }
-    if line == "Cerco il telefono in rete..." {
-        return "Searching the network for the iPhone...".into();
-    }
-    if line == "Bonjour non risponde: cerco sulla rete locale..." {
-        return "Bonjour did not respond; scanning the local network...".into();
-    }
-    if let Some(address) = line.strip_prefix("Telefono trovato a ") {
-        return format!("Found iPhone at {address}");
-    }
-    if let Some(address) = line
-        .strip_prefix("Trovato un telefono a ")
-        .and_then(|s| s.strip_suffix(", provo..."))
-    {
-        return format!("Found an iPhone at {address}; trying to connect...");
-    }
-    if let Some(address) = line
-        .split_once(" non risponde, cerco il telefono in rete...")
-        .map(|(address, _)| address)
-    {
-        return format!("{address} did not respond; searching the network...");
-    }
-    if let Some(detail) = line
-        .strip_prefix("USB non riuscita (")
-        .and_then(|s| s.strip_suffix("), provo in Wi-Fi..."))
-    {
-        return format!("USB connection failed ({}); trying Wi-Fi...", short_error(detail));
-    }
-    if let Some(date) = line.strip_prefix("      nuovo profilo valido fino al ") {
-        return format!("      New profile valid until {date}");
-    }
-    line.replace(" scade ", " expires ")
-        .replace(" giorni)", " days)")
+    one_line.chars().take(400).collect()
 }
 
 /// Dall'errore lungo del login prende la frase utile, e traduce i casi più comuni.
@@ -1073,7 +994,7 @@ fn parse_history(text: &str, max: usize) -> Vec<Value> {
                     .find(|l| {
                         !l.is_empty() && !l.starts_with("esito:") && !l.starts_with("result:")
                     })
-                    .unwrap_or("errore");
+                    .unwrap_or("error");
                 friendly_error(last)
             } else if installed > 0 {
                 format!("Renewed {installed} apps")
@@ -1246,32 +1167,21 @@ mod tests {
 
     #[test]
     fn errori_in_parole_semplici() {
-        assert!(friendly_error("manca il pairing remoto rp-pairing.plist: crealo").contains("missing"));
-        assert!(friendly_error("pairing con l'iPhone non riuscito (Socket(... early eof ...))")
+        assert!(friendly_error("remote pairing file rp-pairing.plist is missing: create it")
+            .contains("missing"));
+        assert!(friendly_error("iPhone pairing failed (Socket(... early eof ...))")
             .contains("no longer recognizes"));
         assert!(friendly_error("Os { code: 113, kind: HostUnreachable, message: \"No route to host\" }")
             .contains("cannot find the iPhone"));
-        assert!(friendly_error("non trovo l'iPhone in rete: è acceso").contains("cannot find"));
+        assert!(friendly_error("cannot find the iPhone on the network: is it on").contains("cannot find"));
+        assert!(friendly_error("192.168.1.2:49152 did not respond").contains("cannot find"));
         assert_eq!(friendly_error("boh"), "boh");
     }
 
     #[test]
-    fn messaggi_web_in_inglese() {
-        assert_eq!(english_job_line("Collegato via USB"), "Connected via USB");
+    fn short_error_keeps_the_first_line() {
         assert_eq!(
-            english_job_line("192.168.1.2 non risponde, cerco il telefono in rete..."),
-            "192.168.1.2 did not respond; searching the network..."
-        );
-        assert_eq!(
-            english_job_line("      nuovo profilo valido fino al 2026-12-01"),
-            "      New profile valid until 2026-12-01"
-        );
-        assert_eq!(
-            short_error("nessun team sviluppatore su questo Apple ID"),
-            "No developer team is available for this Apple ID."
-        );
-        assert_eq!(
-            short_error("login Apple ID non riuscito: temporary failure"),
+            short_error("\n  Apple ID sign-in failed: temporary failure\nmore"),
             "Apple ID sign-in failed: temporary failure"
         );
     }

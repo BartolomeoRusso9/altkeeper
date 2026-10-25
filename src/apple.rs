@@ -47,10 +47,10 @@ pub struct Account {
 
 pub fn load_account(dir: &Path) -> Result<Account, String> {
     let raw = std::fs::read_to_string(dir.join(ACCOUNT_FILE))
-        .map_err(|_| "manca account.json: esegui prima `altkeeper login <apple-id>`".to_string())?;
+        .map_err(|_| "account.json is missing: first run `altkeeper login <apple-id>`".to_string())?;
     let acc: Account = serde_json::from_str(&raw).map_err(dbg)?;
     if acc.password.is_empty() {
-        return Err("password non salvata: rifai `altkeeper login` e scegli di salvarla".into());
+        return Err("password not saved: run `altkeeper login` again and choose to save it".into());
     }
     Ok(acc)
 }
@@ -100,7 +100,7 @@ pub fn anisette_url(value: Option<&str>) -> Result<Option<String>, String> {
         Some(u) if u.starts_with("https://") || u.starts_with("http://") => {
             Ok(Some(u.trim_end_matches('/').to_string()))
         }
-        Some(_) => Err("ALTKEEPER_ANISETTE_URL deve iniziare con http:// o https://".into()),
+        Some(_) => Err("ALTKEEPER_ANISETTE_URL must start with http:// or https://".into()),
     }
 }
 
@@ -181,8 +181,8 @@ pub async fn anisette_for_altstore(dir: &Path) -> Result<serde_json::Value, Stri
         Err(e) if needs_reprovision(&e) => {
             if retire_anisette_state(dir)? {
                 println!(
-                    "[anisette] il server non riconosce l'identità salvata ({e}); \
-                     la metto da parte in state/anisette_state.stale e ne creo una nuova"
+                    "[anisette] the server does not recognize the saved identity ({e}); \
+                     moving it to state/anisette_state.stale and creating a new one"
                 );
                 anisette_for_altstore_once(dir).await
             } else {
@@ -304,11 +304,11 @@ pub async fn open_session_web(
         .anisette_provider(provider)
         .login(password, get_2fa_code)
         .await
-        .map_err(|e| format!("login Apple ID non riuscito: {e}"))?;
+        .map_err(|e| format!("Apple ID sign-in failed: {e}"))?;
 
     DeveloperSession::from_account(&mut account)
         .await
-        .map_err(|e| format!("sessione sviluppatore non riuscita: {e}"))
+        .map_err(|e| format!("developer session failed: {e}"))
 }
 
 /// Login e sessione verso i servizi sviluppatori di Apple.
@@ -325,23 +325,23 @@ pub async fn open_session(
             return Ok(TwoFactorCallbackResponse::SubmitCode(String::new()));
         }
         if params.unknown {
-            println!("L'ultimo metodo 2FA non ha funzionato, prova un altro.");
+            println!("The last 2FA method did not work, try another one.");
         } else {
             println!(
-                "Inserisci il codice a 6 cifre inviato a {}:",
+                "Enter the 6-digit code sent to {}:",
                 if params.sms {
                     params
                         .numbers
                         .iter()
                         .find(|n| Some(n.id) == params.selected_number_id)
                         .map(|n| n.number_with_dial_code.clone())
-                        .unwrap_or_else(|| "il tuo telefono".to_string())
+                        .unwrap_or_else(|| "your phone".to_string())
                 } else {
-                    "i tuoi dispositivi".to_string()
+                    "your devices".to_string()
                 }
             );
         }
-        println!("(d = invia ai dispositivi, r = reinvia, p<id> = SMS al numero <id>)");
+        println!("(d = send to devices, r = resend, p<id> = SMS to number <id>)");
         for n in params
             .numbers
             .iter()
@@ -370,11 +370,11 @@ pub async fn open_session(
         .anisette_provider(provider)
         .login(password, get_2fa_code)
         .await
-        .map_err(|e| format!("login Apple ID non riuscito: {e}"))?;
+        .map_err(|e| format!("Apple ID sign-in failed: {e}"))?;
 
     DeveloperSession::from_account(&mut account)
         .await
-        .map_err(|e| format!("sessione sviluppatore non riuscita: {e}"))
+        .map_err(|e| format!("developer session failed: {e}"))
 }
 
 /// Sceglie il team: quello indicato, l'unico disponibile, o (in interattivo) chiede.
@@ -385,35 +385,35 @@ pub async fn pick_team(
 ) -> Result<DeveloperTeam, String> {
     let teams = sess.list_teams().await.map_err(|e| e.to_string())?;
     if teams.is_empty() {
-        return Err("nessun team sviluppatore su questo Apple ID".into());
+        return Err("no developer team on this Apple ID".into());
     }
     if let Some(id) = wanted {
         return teams
             .into_iter()
             .find(|t| t.team_id == id)
-            .ok_or_else(|| format!("il team {id} non esiste su questo Apple ID"));
+            .ok_or_else(|| format!("team {id} does not exist on this Apple ID"));
     }
     if teams.len() == 1 || !interactive {
         return Ok(teams.into_iter().next().unwrap());
     }
-    println!("Team disponibili:");
+    println!("Available teams:");
     for (i, t) in teams.iter().enumerate() {
         println!(
             "  {}: {} ({})",
             i + 1,
-            t.name.as_deref().unwrap_or("<senza nome>"),
+            t.name.as_deref().unwrap_or("<no name>"),
             t.team_id
         );
     }
-    print!("Scegli il numero: ");
+    print!("Choose a number: ");
     let _ = std::io::stdout().flush();
     let mut s = String::new();
     let _ = std::io::stdin().read_line(&mut s);
-    let n: usize = s.trim().parse().map_err(|_| "scelta non valida".to_string())?;
+    let n: usize = s.trim().parse().map_err(|_| "invalid choice".to_string())?;
     teams
         .into_iter()
         .nth(n.wrapping_sub(1))
-        .ok_or_else(|| "scelta non valida".to_string())
+        .ok_or_else(|| "invalid choice".to_string())
 }
 
 pub async fn app_ids(
@@ -472,7 +472,7 @@ pub async fn sign_ipa(
 ) -> Result<SignedApp, String> {
     let filename = ipa
         .file_name()
-        .ok_or("nome del file IPA mancante")?
+        .ok_or("IPA file name missing")?
         .to_string_lossy();
     let cleanup_dir = std::env::temp_dir().join(format!("{filename}_extracted"));
     let storage_path = Path::new(STATE_DIR).join("sideload");
@@ -481,7 +481,7 @@ pub async fn sign_ipa(
 
     sess.ensure_device_registered(&team, device_name, udid, DeveloperDeviceType::Ios)
         .await
-        .map_err(|e| format!("registrazione iPhone non riuscita: {e}"))?;
+        .map_err(|e| format!("iPhone registration failed: {e}"))?;
 
     let mut sideloader = SideloaderBuilder::new(sess, account.apple_id.clone())
         .storage(Box::new(FsStorage::new(storage_path)))
@@ -510,7 +510,7 @@ pub async fn sign_ipa(
                      vanno poi rinnovate con un Refresh."
                 )
             } else {
-                format!("firma dell'app non riuscita: {e}")
+                format!("app signing failed: {e}")
             }
         })?;
     Ok(SignedApp {
