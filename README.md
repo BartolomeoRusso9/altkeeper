@@ -213,12 +213,12 @@ do not check installed apps; `--installed-only` can be used with CLI `--force` t
 No unattended schedule is enabled by merely running the Docker container (default: OFF).
 
 **Optional built-in scheduler in the web UI:** Use **Automatic renewal** to enable/disable a
-once-daily job and choose a time in **Asia/Seoul (KST, UTC+09:00)**. The default clock
-time is 06:00 KST and the switch is initially OFF. When enabled, AltKeeper runs
+once-daily job and choose a time in **UTC**. The default clock
+time is 06:00 UTC and the switch is initially OFF. When enabled, AltKeeper runs
 the same installed-app-aware renewal as **Renew expiring apps**, with the documented
 all-profile fallback if installed-app listing fails. The server needs a saved
 Apple ID password, must be running, and the iPhone must be reachable.
-Only one scheduled *attempt* is made per KST calendar day (including failures).
+Only one scheduled *attempt* is made per UTC calendar day (including failures).
 A server that starts after the scheduled time on a day with no attempt will run
 that day's job when it starts; enabling or changing the scheduled time after
 today's slot does **not** trigger an immediate refresh. The next slot is tomorrow.

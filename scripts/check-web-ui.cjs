@@ -12,11 +12,8 @@ assert(embedded, "embedded dashboard JavaScript missing");
 new vm.Script(embedded[1], { filename: "src/web/index.html" });
 
 for (const snippet of [
-  '<html lang="ko">',
-  'id="language-select"',
-  'function applyStatic()',
+  '<html lang="en">',
   'function profilesText(n)',
-  'locale === "ko"',
   'data-i18n="Your apps"',
   'data-i18n="Send test notification"',
   'data-i18n="Sign and install"',
@@ -40,10 +37,11 @@ for (const snippet of [
   '"/api/install/confirm"',
   'function showExtensionOptions(info)',
   'function updateExtensionSummary()',
-  'const KO =',
 ]) {
   assert(html.includes(snippet), "Missing localized/responsive UI: " + snippet);
 }
+assert(!/[\u1100-\u11FF\u3130-\u318F\uAC00-\uD7A3]/.test(html), "dashboard must not contain Korean text");
+assert(!html.includes("language-select") && !html.includes("locale ==="), "language switcher was removed");
 for (const id of [
   "btn-due", "btn-all", "btn-preview",
   "auto-enable", "auto-disable",

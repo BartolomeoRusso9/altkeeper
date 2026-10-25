@@ -38,7 +38,6 @@ const DISCORD_WEBHOOK_FILE: &str = "state/discord-webhook";
 const APP_STATUS_FILE: &str = "state/app-renew-status.json";
 const RETRY_SECONDS: u64 = 30 * 60;
 const MAX_RETRIES: u8 = 2;
-const KST_OFFSET_SECS: u64 = 9 * 60 * 60;
 const DAY_SECS: u64 = 24 * 60 * 60;
 const MAX_JOB_LINES: usize = 300;
 const MAX_IPA_BYTES: usize = 1024 * 1024 * 1024;
@@ -194,11 +193,11 @@ fn now() -> u64 {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 struct AutoRenewConfig {
     enabled: bool,
-    /// HH:MM in Asia/Seoul (fixed UTC+09:00), independent of container TZ.
+    /// HH:MM in UTC (no daylight saving), independent of container TZ.
     time: String,
     #[serde(default = "default_min_days")]
     min_days: u8,
-    /// KST calendar day of the most recent automatic attempt.
+    /// UTC calendar day of the most recent automatic attempt.
     last_attempt_day: Option<u64>,
     #[serde(default)]
     retry_count: u8,
@@ -223,7 +222,7 @@ impl Default for AutoRenewConfig {
     }
 }
 
-fn parse_kst_time(value: &str) -> Option<u64> {
+fn parse_utc_time(value: &str) -> Option<u64> {
     let (hh, mm) = value.split_once(':')?;
     if hh.len() != 2 || mm.len() != 2 { return None; }
     if !hh.bytes().chain(mm.bytes()).all(|b| b.is_ascii_digit()) { return None; }
@@ -232,23 +231,23 @@ fn parse_kst_time(value: &str) -> Option<u64> {
     (hour < 24 && minute < 60).then_some(hour * 3600 + minute * 60)
 }
 
-fn kst_day(now_secs: u64) -> u64 {
-    now_secs.saturating_add(KST_OFFSET_SECS) / DAY_SECS
+fn utc_day(now_secs: u64) -> u64 {
+    now_secs / DAY_SECS
 }
 
-fn kst_seconds_of_day(now_secs: u64) -> u64 {
-    now_secs.saturating_add(KST_OFFSET_SECS) % DAY_SECS
+fn utc_seconds_of_day(now_secs: u64) -> u64 {
+    now_secs % DAY_SECS
 }
 
 fn next_auto_run(config: &AutoRenewConfig, now_secs: u64) -> Option<u64> {
     if !config.enabled { return None; }
     if let Some(retry_at) = config.retry_at { return Some(retry_at); }
-    let target = parse_kst_time(&config.time)?;
-    let today = kst_day(now_secs);
-    let can_run_today = kst_seconds_of_day(now_secs) < target
+    let target = parse_utc_time(&config.time)?;
+    let today = utc_day(now_secs);
+    let can_run_today = utc_seconds_of_day(now_secs) < target
         && config.last_attempt_day != Some(today);
     let scheduled_day = if can_run_today { today } else { today + 1 };
-    Some(scheduled_day * DAY_SECS + target - KST_OFFSET_SECS)
+    Some(scheduled_day * DAY_SECS + target)
 }
 
 fn load_auto_renew() -> AutoRenewConfig {
@@ -261,7 +260,7 @@ fn load_auto_renew() -> AutoRenewConfig {
         }
     };
     match serde_json::from_str::<AutoRenewConfig>(&raw) {
-        Ok(config) if parse_kst_time(&config.time).is_some() && (1..=6).contains(&config.min_days) => config,
+        Ok(config) if parse_utc_time(&config.time).is_some() && (1..=6).contains(&config.min_days) => config,
         _ => {
             eprintln!("[auto-renew] Invalid schedule config; automatic renewal disabled");
             AutoRenewConfig::default()
@@ -340,23 +339,23 @@ async fn auto_renew_loop(app: Arc<App>) {
         let guard = {
             let config = app.auto_renew.lock().unwrap_or_else(|e| e.into_inner());
             let retry_due = config.retry_at.is_some_and(|at| at <= now_secs);
-            let scheduled_due = parse_kst_time(&config.time)
-                .is_some_and(|target| kst_seconds_of_day(now_secs) >= target)
-                && config.last_attempt_day != Some(kst_day(now_secs));
+            let scheduled_due = parse_utc_time(&config.time)
+                .is_some_and(|target| utc_seconds_of_day(now_secs) >= target)
+                && config.last_attempt_day != Some(utc_day(now_secs));
             if config.enabled && (retry_due || scheduled_due) { try_busy(&app) } else { None }
         };
         if let Some(guard) = guard {
             let mut config = app.auto_renew.lock().unwrap_or_else(|e| e.into_inner());
             if config.enabled {
                 let is_retry = config.retry_at.is_some_and(|t| t <= now_secs);
-                let is_new_day = config.last_attempt_day != Some(kst_day(now_secs))
+                let is_new_day = config.last_attempt_day != Some(utc_day(now_secs))
                     && config.retry_at.is_none();
                 if is_retry || is_new_day {
                     let mut updated = config.clone();
                     if is_retry {
                         updated.retry_count = updated.retry_count.saturating_add(1);
                     } else {
-                        updated.last_attempt_day = Some(kst_day(now_secs));
+                        updated.last_attempt_day = Some(utc_day(now_secs));
                         updated.retry_count = 0;
                     }
                     updated.retry_at = None;
@@ -370,7 +369,7 @@ async fn auto_renew_loop(app: Arc<App>) {
                         app.lock().job = JobView {
                             kind: "auto_renew".into(),
                             running: true,
-                            lines: vec![format!("Scheduled renewal attempt {attempt}/3 (Asia/Seoul).")],
+                            lines: vec![format!("Scheduled renewal attempt {attempt}/3 (UTC).")],
                             ok: None,
                         };
                         spawn_job(guard, move |app| run_renew(app, false, None, true, threshold, true));
@@ -658,7 +657,7 @@ async fn state(State(app): State<Arc<App>>) -> Json<Value> {
             "retry_at": schedule.retry_at,
             "last_error": schedule.last_error,
             "discord_configured": discord_configured(),
-            "time_zone": "Asia/Seoul",
+            "time_zone": "UTC",
             "next_run": next_scheduled,
         },
         "account": {
@@ -727,7 +726,7 @@ async fn update_auto_renew(
     State(app): State<Arc<App>>,
     Json(req): Json<AutoRenewReq>,
 ) -> (StatusCode, Json<Value>) {
-    let Some(target) = parse_kst_time(&req.time) else {
+    let Some(target) = parse_utc_time(&req.time) else {
         return json_err(StatusCode::BAD_REQUEST, "Use a valid 24-hour time (HH:MM).");
     };
     if !(1..=6).contains(&req.min_days) {
@@ -745,9 +744,9 @@ async fn update_auto_renew(
     // Turning on or changing the clock time after today's scheduled time
     // must NOT immediately trigger an unrequested refresh.
     if req.enabled && (!config.enabled || config.time != req.time)
-        && kst_seconds_of_day(now()) >= target
+        && utc_seconds_of_day(now()) >= target
     {
-        updated.last_attempt_day = Some(kst_day(now()));
+        updated.last_attempt_day = Some(utc_day(now()));
     }
     updated.enabled = req.enabled;
     updated.time = req.time;
@@ -2078,9 +2077,9 @@ mod tests {
     #[test]
     fn custom_identity_accepts_independent_name_or_bundle_and_rejects_invalid_ids() {
         assert!(validated_install_identity(None, None, "com.example.app").unwrap().is_none());
-        let renamed = validated_install_identity(Some(" 새 이름 ".into()), None, "com.example.app")
+        let renamed = validated_install_identity(Some(" New name ".into()), None, "com.example.app")
             .unwrap().unwrap();
-        assert_eq!(renamed.display_name.as_deref(), Some("새 이름"));
+        assert_eq!(renamed.display_name.as_deref(), Some("New name"));
         assert!(renamed.bundle_id.is_none());
         let cloned = validated_install_identity(None, Some("com.example.clone".into()), "com.example.app")
             .unwrap().unwrap();
@@ -2103,20 +2102,20 @@ mod tests {
     }
 
     #[test]
-    fn auto_renew_kst_time_validation_and_next_run() {
-        assert_eq!(parse_kst_time("06:00"), Some(6 * 3600));
+    fn auto_renew_utc_time_validation_and_next_run() {
+        assert_eq!(parse_utc_time("06:00"), Some(6 * 3600));
         for invalid in ["24:00", "21:60", "9:01", "abc", "21:17:00"] {
-            assert_eq!(parse_kst_time(invalid), None);
+            assert_eq!(parse_utc_time(invalid), None);
         }
-        // Day 20 in KST: scheduled for 06:00, 05:00 currently.
+        // Day 20 in UTC: scheduled for 06:00, 05:00 currently.
         let day = 20_u64;
-        let now_secs = day * DAY_SECS + 5 * 3600 - KST_OFFSET_SECS;
+        let now_secs = day * DAY_SECS + 5 * 3600;
         let mut conf = AutoRenewConfig { enabled: true, time: "06:00".into(), last_attempt_day: None, ..AutoRenewConfig::default() };
         assert_eq!(next_auto_run(&conf, now_secs),
-            Some(day * DAY_SECS + 6 * 3600 - KST_OFFSET_SECS));
+            Some(day * DAY_SECS + 6 * 3600));
         conf.last_attempt_day = Some(day);
         assert_eq!(next_auto_run(&conf, now_secs),
-            Some((day + 1) * DAY_SECS + 6 * 3600 - KST_OFFSET_SECS));
+            Some((day + 1) * DAY_SECS + 6 * 3600));
         conf.enabled = false;
         assert_eq!(next_auto_run(&conf, now_secs), None);
     }
@@ -2198,9 +2197,9 @@ mod tests {
     #[test]
     fn new_install_identity_validation_keeps_name_and_id_independent() {
         assert!(validated_install_identity(None, None, "com.example.app").unwrap().is_none());
-        let renamed = validated_install_identity(Some("복제 앱".into()), None, "com.example.app")
+        let renamed = validated_install_identity(Some("Cloned app".into()), None, "com.example.app")
             .unwrap().unwrap();
-        assert_eq!(renamed.display_name.as_deref(), Some("복제 앱"));
+        assert_eq!(renamed.display_name.as_deref(), Some("Cloned app"));
         assert!(renamed.bundle_id.is_none());
         assert_eq!(renamed.source_bundle_id, "com.example.app");
         let cloned = validated_install_identity(None, Some("com.example.clone".into()),
