@@ -64,3 +64,79 @@ assert(html.includes('rel="apple-touch-icon"'));
 assert(html.includes('rel="icon"'));
 assert(html.includes('"/api/discord/test"'));
 console.log("Localized dashboard JavaScript syntax, actions, labels and layout OK");
+
+// Exercise the actual dashboard functions with controlled responses. An edit
+// must survive polling, and a snapshot started before an action must not paint
+// over the newer state once another refresh has been requested.
+async function checkDashboardState() {
+  const controls = { "auto-time": { value: "" }, "auto-days": { value: "" } };
+  for (const control of Object.values(controls)) {
+    control.listeners = {};
+    control.addEventListener = (event, fn) => { control.listeners[event] = fn; };
+  }
+  const pending = [], rendered = [], timers = new Map();
+  let nextTimer = 0;
+  const context = vm.createContext({
+    document: { getElementById: id => controls[id] },
+    fetch: (_path, options) => new Promise((resolve, reject) => {
+      pending.push({ resolve, reject, signal: options.signal });
+      options.signal?.addEventListener("abort", () => reject(new Error("aborted")));
+    }),
+    AbortController,
+    setTimeout: (fn, delay) => { timers.set(++nextTimer, { fn, delay }); return nextTimer; },
+    clearTimeout: id => timers.delete(id),
+    render: s => rendered.push(s.version),
+    banner() {}, t: x => x,
+  });
+  const source = embedded[1];
+  // Run only the draft declaration/helper/listeners: the full browser render
+  // needs many unrelated DOM controls.
+  const helper = source.match(/function syncAutoRenewInputs\(auto\) \{[\s\S]*?\r?\n\}\r?\nfor \(const id of \["auto-time", "auto-days"\]\) \{[\s\S]*?\r?\n\}/);
+  assert(helper);
+  vm.runInContext('const $ = id => document.getElementById(id); let autoDraftDirty = false, autoSavePending = false;\n' + helper[0], context);
+  vm.runInContext('syncAutoRenewInputs({time:"21:17",min_days:3})', context);
+  controls["auto-time"].value = "22:30";
+  controls["auto-time"].listeners.input();
+  controls["auto-days"].value = "5";
+  controls["auto-days"].listeners.change();
+  vm.runInContext('syncAutoRenewInputs({time:"21:17",min_days:3})', context);
+  assert.equal(controls["auto-time"].value, "22:30");
+  assert.equal(controls["auto-days"].value, "5");
+  vm.runInContext('autoSavePending = true; syncAutoRenewInputs({time:"21:17",min_days:3})', context);
+  assert.equal(controls["auto-time"].value, "22:30", "an old response after save must not reset the draft");
+  vm.runInContext('syncAutoRenewInputs({time:"22:30",min_days:5})', context);
+  assert.equal(controls["auto-time"].value, "22:30");
+  assert.equal(vm.runInContext('autoDraftDirty', context), false, "server confirmation clears the draft");
+
+  const api = source.match(/async function api\(path, body, signal\) \{[\s\S]*?\r?\n\}/);
+  const refresh = source.match(/async function refresh\(\) \{[\s\S]*?\r?\n\}/);
+  assert(api && refresh);
+  vm.runInContext('let timer = null, refreshInFlight = false, refreshQueued = false;\n' + api[0] + '\n' + refresh[0], context);
+  const snapshot = version => ({ version, busy:false, phone:{checking:false}, login:{phase:""}, job:{running:false} });
+  const reply = (request, version) => request.resolve({ ok:true, json:async () => snapshot(version) });
+  const first = vm.runInContext('refresh()', context);
+  await vm.runInContext('refresh()', context);
+  assert.equal(pending.length, 1, "concurrent refresh should share one active request");
+  reply(pending[0], "older");
+  await first;
+  assert.deepEqual(rendered, [], "queued refresh must suppress the stale response");
+  const queued = [...timers.values()].find(t => t.delay === 0);
+  assert(queued, "queued refresh should start immediately");
+  queued.fn();
+  assert.equal(pending.length, 2);
+  reply(pending[1], "newer");
+  await new Promise(resolve => setImmediate(resolve));
+  assert.deepEqual(rendered, ["newer"]);
+  const nextPoll = [...timers.values()].find(t => t.delay === 15000);
+  assert(nextPoll, "polling should continue after a response");
+  nextPoll.fn();
+  assert.equal(pending.length, 3);
+  const timeout = [...timers.values()].find(t => t.delay === 10000);
+  assert(timeout, "status requests need a timeout");
+  timeout.fn();
+  await new Promise(resolve => setImmediate(resolve));
+  assert(pending[2].signal.aborted);
+  assert([...timers.values()].some(t => t.delay === 15000), "polling should recover after timeout");
+}
+checkDashboardState().catch(error => { console.error(error); process.exitCode = 1; });
+
