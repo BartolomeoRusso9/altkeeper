@@ -75,6 +75,7 @@ impl<C: MaxCertsCallback> Sideloader<C> {
         progress_callback: Option<F>,
         pairing_file: Option<&[u8]>,
         device_udid: Option<&str>,
+        selected_extensions: Option<&[String]>,
     ) -> Result<(PathBuf, Option<SpecialApp>), Report>
     where
         F: Fn(f32) -> Fut,
@@ -100,6 +101,9 @@ impl<C: MaxCertsCallback> Sideloader<C> {
         }
 
         let mut app = Application::new(app_path)?;
+        if let Some(selected) = selected_extensions {
+            app.retain_extensions(selected)?;
+        }
         let special = app.get_special_app();
 
         let main_bundle_id = app.main_bundle_id()?;
@@ -273,6 +277,7 @@ impl<C: MaxCertsCallback> Sideloader<C> {
                 progress_callback,
                 pairing_file,
                 Some(&device_info.udid),
+                None,
             )
             .await?;
 
