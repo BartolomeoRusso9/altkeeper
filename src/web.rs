@@ -1425,7 +1425,7 @@ fn app_views(profiles: &[profile::PhoneProfile], team: &str) -> Vec<AppView> {
     let bundles: Vec<&str> = latest.iter().filter_map(|p| p.bundle_id.as_deref()).collect();
     let mut groups: std::collections::BTreeMap<String, Vec<MemberView>> =
         std::collections::BTreeMap::new();
-    for p in latest {
+    for p in &latest {
         let Some(bundle) = p.bundle_id.as_deref() else { continue; };
         let root = profile::group_root(bundle, &bundles, team).to_owned();
         groups.entry(root).or_default().push(MemberView {
