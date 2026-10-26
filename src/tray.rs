@@ -28,7 +28,7 @@ use wry::{WebView, WebViewBuilder};
 const RUN_KEY: &str = r"Software\Microsoft\Windows\CurrentVersion\Run";
 /// Su Windows il nome del valore nella chiave Run, su macOS l'etichetta del LaunchAgent.
 #[cfg(windows)]
-const RUN_VALUE: &str = "AltKeeperPlus";
+const RUN_VALUE: &str = "AltKeeper";
 #[cfg(target_os = "macos")]
 const RUN_VALUE: &str = "io.github.altkeeper";
 const AUTOSTART_MARKER: &str = "autostart-initialised";
@@ -78,7 +78,7 @@ fn check_updates(proxy: &EventLoopProxy<UserEvent>, manual: bool) {
     }
     if manual {
         match &latest {
-            Ok(None) => toast(&format!("AltKeeperPlus {} is up to date.", env!("CARGO_PKG_VERSION"))),
+            Ok(None) => toast(&format!("AltKeeper {} is up to date.", env!("CARGO_PKG_VERSION"))),
             Err(e) => toast(&format!("Update check failed: {e}")),
             Ok(Some(_)) => {}
         }
@@ -99,7 +99,7 @@ pub fn hide_console() {
 pub fn message_box(text: &str) {
     use windows_sys::Win32::UI::WindowsAndMessaging::{MB_ICONERROR, MB_OK, MessageBoxW};
     let wide = |s: &str| s.encode_utf16().chain(Some(0)).collect::<Vec<u16>>();
-    let (text, title) = (wide(text), wide("AltKeeperPlus"));
+    let (text, title) = (wide(text), wide("AltKeeper"));
     unsafe {
         MessageBoxW(std::ptr::null_mut(), text.as_ptr(), title.as_ptr(), MB_OK | MB_ICONERROR);
     }
@@ -116,7 +116,7 @@ fn osascript(script: &str, text: &str) {
 
 #[cfg(target_os = "macos")]
 pub fn message_box(text: &str) {
-    osascript(r#"display alert "AltKeeperPlus" message (item 1 of argv) as critical"#, text);
+    osascript(r#"display alert "AltKeeper" message (item 1 of argv) as critical"#, text);
 }
 
 /// Logo di AltKeeper (assets/logo.png) già ridotto in RGBA grezzo: a colori quando il telefono
@@ -248,7 +248,7 @@ fn ensure_autostart_default_as(name: &str, state_dir: &Path, exe: &Path, dir: &P
 /// Testo del tooltip: quante app e la scadenza più vicina (`days` = giorni rimasti per app).
 pub fn summary(days: &[i64]) -> String {
     let Some(&min) = days.iter().min() else {
-        return "AltKeeperPlus: no apps".into();
+        return "AltKeeper: no apps".into();
     };
     let n = days.len();
     let apps = if n == 1 { "1 app".to_string() } else { format!("{n} apps") };
@@ -258,7 +258,7 @@ pub fn summary(days: &[i64]) -> String {
         1 => "next expiry in 1 day".to_string(),
         d => format!("next expiry in {d} days"),
     };
-    format!("AltKeeperPlus: {apps}, {next}")
+    format!("AltKeeper: {apps}, {next}")
 }
 
 #[derive(Debug, PartialEq)]
@@ -319,12 +319,12 @@ impl FailGate {
 #[cfg(windows)]
 fn toast(text: &str) {
     use tauri_winrt_notification::Toast;
-    let _ = Toast::new(Toast::POWERSHELL_APP_ID).title("AltKeeperPlus").text1(text).show();
+    let _ = Toast::new(Toast::POWERSHELL_APP_ID).title("AltKeeper").text1(text).show();
 }
 
 #[cfg(target_os = "macos")]
 fn toast(text: &str) {
-    osascript(r#"display notification (item 1 of argv) with title "AltKeeperPlus""#, text);
+    osascript(r#"display notification (item 1 of argv) with title "AltKeeper""#, text);
 }
 
 /// Apre un indirizzo nel browser predefinito.
@@ -397,7 +397,7 @@ fn show(
         return;
     }
     let window = match WindowBuilder::new()
-        .with_title("AltKeeperPlus")
+        .with_title("AltKeeper")
         .with_inner_size(tao::dpi::LogicalSize::new(560.0, 860.0))
         .with_window_icon(tao::window::Icon::from_rgba(LOGO_64.to_vec(), 64, 64).ok())
         .build(target)
@@ -461,7 +461,7 @@ fn build_tray(menu: &Menu) -> TrayIcon {
             .with_menu(Box::new(menu.clone()))
             // Su macOS un clic sull'icona della barra dei menu apre il menu, come AltServer.
             .with_menu_on_left_click(cfg!(target_os = "macos"))
-            .with_tooltip("AltKeeperPlus")
+            .with_tooltip("AltKeeper")
             .with_icon(logo(false))
             .build()
     };
@@ -470,7 +470,7 @@ fn build_tray(menu: &Menu) -> TrayIcon {
             build().map_err(|_| std::thread::sleep(Duration::from_secs(2))).ok()
         })
         .unwrap_or_else(|| {
-            message_box("AltKeeperPlus cannot create its tray icon. Start it again.");
+            message_box("AltKeeper cannot create its tray icon. Start it again.");
             std::process::exit(1)
         })
 }
@@ -652,7 +652,7 @@ pub fn run(bind: SocketAddr, dir: &Path, start: impl FnOnce(EventLoopProxy<UserE
                         crate::log::err(&format!("[update] cannot start the new version: {e}"));
                         message_box(&format!(
                             "The update could not start ({e}). The previous version was kept.\n\n\
-                             Start AltKeeperPlus again."
+                             Start AltKeeper again."
                         ));
                         std::process::exit(1);
                     }
@@ -667,7 +667,7 @@ pub fn run(bind: SocketAddr, dir: &Path, start: impl FnOnce(EventLoopProxy<UserE
             }
             Event::UserEvent(UserEvent::ServerFailed(msg)) => {
                 crate::log::err(&msg);
-                message_box(&format!("AltKeeperPlus cannot start:\n\n{msg}"));
+                message_box(&format!("AltKeeper cannot start:\n\n{msg}"));
                 std::process::exit(1);
             }
             Event::WindowEvent { event: WindowEvent::CloseRequested, .. } => {
@@ -694,11 +694,11 @@ mod tests {
 
     #[test]
     fn summary_text() {
-        assert_eq!(summary(&[]), "AltKeeperPlus: no apps");
-        assert_eq!(summary(&[1]), "AltKeeperPlus: 1 app, next expiry in 1 day");
-        assert_eq!(summary(&[6, 4, 5]), "AltKeeperPlus: 3 apps, next expiry in 4 days");
-        assert_eq!(summary(&[0, 3]), "AltKeeperPlus: 2 apps, one expires today");
-        assert_eq!(summary(&[-2]), "AltKeeperPlus: 1 app, one has expired");
+        assert_eq!(summary(&[]), "AltKeeper: no apps");
+        assert_eq!(summary(&[1]), "AltKeeper: 1 app, next expiry in 1 day");
+        assert_eq!(summary(&[6, 4, 5]), "AltKeeper: 3 apps, next expiry in 4 days");
+        assert_eq!(summary(&[0, 3]), "AltKeeper: 2 apps, one expires today");
+        assert_eq!(summary(&[-2]), "AltKeeper: 1 app, one has expired");
     }
 
     #[test]
@@ -740,7 +740,7 @@ mod tests {
     }
 
     #[cfg(windows)]
-    const TEST_VALUE: &str = "AltKeeperPlus-test";
+    const TEST_VALUE: &str = "AltKeeper-test";
     #[cfg(target_os = "macos")]
     const TEST_VALUE: &str = "io.github.altkeeper.test";
 
