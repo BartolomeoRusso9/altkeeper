@@ -26,7 +26,18 @@ impl Sink {
     }
 
     fn open(&mut self, path: PathBuf) {
-        self.file = OpenOptions::new().create(true).append(true).open(&path).ok();
+        let mut options = OpenOptions::new();
+        options.create(true).append(true);
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::OpenOptionsExt as _;
+            options.mode(0o600);
+        }
+        self.file = options.open(&path).ok();
+        // Il log può contenere dati sensibili: se non lo si riesce a proteggere, non lo si scrive.
+        if self.file.is_some() && crate::fsperm::restrict_file(&path).is_err() {
+            self.file = None;
+        }
         self.size = self.file.as_ref().and_then(|f| f.metadata().ok()).map_or(0, |m| m.len());
         self.path = Some(path);
     }
@@ -157,5 +168,20 @@ mod tests {
         s.open(d.clone()); // una cartella non si apre come file
         s.record("still fine");
         assert_eq!(s.since(0).1, vec!["still fine".to_string()]);
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn log_files_are_private() {
+        use std::os::unix::fs::PermissionsExt as _;
+        let d = temp_dir("private");
+        let mut s = Sink::new(100);
+        s.open(d.join(FILE_NAME));
+        for _ in 0..10 {
+            s.record("0123456789012345678901234567890123456789");
+        }
+        for path in [d.join(FILE_NAME), d.join("altkeeper.log.1")] {
+            assert_eq!(std::fs::metadata(path).unwrap().permissions().mode() & 0o777, 0o600);
+        }
     }
 }

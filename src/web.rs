@@ -256,14 +256,14 @@ fn load_auto_renew() -> AutoRenewConfig {
         Ok(raw) => raw,
         Err(e) if e.kind() == std::io::ErrorKind::NotFound => return AutoRenewConfig::default(),
         Err(e) => {
-            eprintln!("[auto-renew] Cannot read config ({e}); automatic renewal disabled");
+            crate::log::err(&format!("[auto-renew] Cannot read config ({e}); automatic renewal disabled"));
             return AutoRenewConfig::default();
         }
     };
     match serde_json::from_str::<AutoRenewConfig>(&raw) {
         Ok(config) if parse_utc_time(&config.time).is_some() && (1..=6).contains(&config.min_days) => config,
         _ => {
-            eprintln!("[auto-renew] Invalid schedule config; automatic renewal disabled");
+            crate::log::err("[auto-renew] Invalid schedule config; automatic renewal disabled");
             AutoRenewConfig::default()
         }
     }
@@ -361,7 +361,7 @@ async fn auto_renew_loop(app: Arc<App>) {
                     }
                     updated.retry_at = None;
                     if let Err(err) = save_auto_renew(&updated) {
-                        eprintln!("[auto-renew] Could not persist attempt: {err}");
+                        crate::log::err(&format!("[auto-renew] Could not persist attempt: {err}"));
                     } else {
                         let threshold = updated.min_days as i64;
                         let attempt = updated.retry_count + 1;
@@ -1454,7 +1454,7 @@ async fn run_renew(
             }
         }
         if let Err(e) = save_auto_renew(&updated) {
-            eprintln!("[auto-renew] Could not persist retry state: {e}");
+            crate::log::err(&format!("[auto-renew] Could not persist retry state: {e}"));
             retry_message = None;
         } else {
             *config = updated;

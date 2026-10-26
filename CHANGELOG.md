@@ -3,6 +3,12 @@
 ## 0.3.0
 
 ### Fixed
+- **Tray panicked on Windows ("Initializing the event loop outside of the main thread", #19).**
+  The tao event loop is now created with `with_any_thread(true)`, because `main()` runs everything
+  on the `altkeeper-main` thread. Not compiled on Windows here: please test `altkeeper.exe tray`.
+- **Log file is private and auto-renew errors reach it.** `altkeeper.log` (and its rotation) is
+  created with owner-only permissions, and the auto-renew errors that went to stderr (invisible in
+  the tray) now go through the log.
 - **USB on Windows without configuration.** When `USBMUXD_SOCKET_ADDRESS` is not set, Windows now
   uses the usbmuxd of iTunes / Apple Devices on `127.0.0.1:27015` instead of failing to find the
   phone. Ported from the USB-fix branch.

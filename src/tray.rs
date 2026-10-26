@@ -9,6 +9,7 @@ use std::time::{Duration, Instant};
 
 use tao::event::{Event, WindowEvent};
 use tao::event_loop::{ControlFlow, EventLoopBuilder, EventLoopProxy, EventLoopWindowTarget};
+use tao::platform::windows::EventLoopBuilderExtWindows;
 use tao::window::{Window, WindowBuilder};
 use tray_icon::menu::{CheckMenuItem, Menu, MenuEvent, MenuItem, PredefinedMenuItem};
 use tray_icon::{Icon, MouseButton, TrayIconBuilder, TrayIconEvent};
@@ -292,7 +293,12 @@ fn show(
 /// server. Non ritorna: "Quit" chiude il processo.
 pub fn run(bind: SocketAddr, dir: &Path, start: impl FnOnce(EventLoopProxy<UserEvent>)) -> ! {
     let url = format!("http://{bind}/");
-    let event_loop = EventLoopBuilder::<UserEvent>::with_user_event().build();
+    // Il ciclo degli eventi gira sul thread `altkeeper-main` (main() sposta tutto lì per avere uno
+    // stack più grande), e tao su Windows rifiuta di crearlo fuori dal main thread se non lo si
+    // permette. Finestra, icona e ciclo vivono tutti su questo stesso thread, quindi è sicuro.
+    let mut builder = EventLoopBuilder::<UserEvent>::with_user_event();
+    builder.with_any_thread(true);
+    let event_loop = builder.build();
     let proxy = event_loop.create_proxy();
     let p = proxy.clone();
     TrayIconEvent::set_event_handler(Some(move |e| {
