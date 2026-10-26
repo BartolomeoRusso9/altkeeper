@@ -780,11 +780,13 @@ mod tests {
     #[cfg(target_os = "macos")]
     #[test]
     fn translocated_app_is_not_started_at_login() {
+        // Un nome suo: i test girano in parallelo e `autostart_roundtrip...` attiva TEST_VALUE.
+        const NAME: &str = "io.github.altkeeper.test-translocated";
         let exe = Path::new("/private/var/folders/x/AppTranslocation/ABC/d/AltKeeper.app/Contents/MacOS/altkeeper");
-        assert!(set_autostart_as(TEST_VALUE, true, exe, Path::new("/tmp")).is_err());
-        assert!(!autostart_enabled_as(TEST_VALUE));
+        assert!(set_autostart_as(NAME, true, exe, Path::new("/tmp")).is_err());
+        assert!(!autostart_enabled_as(NAME));
         let d = temp_dir("translocated");
-        ensure_autostart_default_as(TEST_VALUE, &d.join("state"), exe, &d);
+        ensure_autostart_default_as(NAME, &d.join("state"), exe, &d);
         assert!(!d.join("state").join(AUTOSTART_MARKER).exists());
     }
 
