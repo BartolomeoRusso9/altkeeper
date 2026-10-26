@@ -516,6 +516,23 @@ inside the app) uses another folder.
 The web page listens only on `127.0.0.1:8787` (no PIN needed); AltServer listens on port 49500 for
 the whole network, exactly like `serve --altserver`.
 
+**Build it yourself.** From the project folder (the release build takes a few minutes):
+
+```sh
+cargo build --release
+scripts/macos-app.sh target/release/altkeeper 0.3.1 dist   # creates dist/AltKeeper.app
+ditto dist/AltKeeper.app /Applications/AltKeeper.app
+mkdir -p ~/Library/Application\ Support/AltKeeper
+cp rp-pairing.plist ~/Library/Application\ Support/AltKeeper/   # if you already paired
+open /Applications/AltKeeper.app
+```
+
+An app built on your own Mac has no quarantine flag, so Gatekeeper does not ask. To see its
+output while trying it, start it from a terminal instead:
+`/Applications/AltKeeper.app/Contents/MacOS/altkeeper tray` (stop it with *Quit* or Ctrl-C).
+Remember that the first start turns *Start at login* on; uncheck it in the menu if you only want
+to try the app.
+
 **Status:** built and unit-tested on macOS (Apple Silicon); the menu-bar app has not yet been
 confirmed end to end with a real iPhone and AltStore.
 

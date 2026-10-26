@@ -439,6 +439,23 @@ o quello dentro l'app) usa un'altra cartella.
 La pagina web ascolta solo su `127.0.0.1:8787` (niente PIN); AltServer ascolta sulla porta 49500 per
 tutta la rete, esattamente come `serve --altserver`.
 
+**Compilarla da te.** Dalla cartella del progetto (la compilazione release richiede qualche minuto):
+
+```sh
+cargo build --release
+scripts/macos-app.sh target/release/altkeeper 0.3.1 dist   # crea dist/AltKeeper.app
+ditto dist/AltKeeper.app /Applications/AltKeeper.app
+mkdir -p ~/Library/Application\ Support/AltKeeper
+cp rp-pairing.plist ~/Library/Application\ Support/AltKeeper/   # se hai già fatto il pairing
+open /Applications/AltKeeper.app
+```
+
+Un'app compilata sul tuo Mac non ha la quarantena, quindi Gatekeeper non chiede niente. Per vedere
+i messaggi mentre la provi, avviala invece da terminale:
+`/Applications/AltKeeper.app/Contents/MacOS/altkeeper tray` (si ferma con *Quit* o Ctrl-C).
+Ricorda che il primo avvio attiva *Start at login*: se vuoi solo provare l'app, togli la spunta
+dal menu.
+
 **Stato:** compilata e con i test unitari superati su macOS (Apple Silicon); l'app nella barra dei
 menu non è ancora stata confermata end-to-end con un iPhone e AltStore veri.
 
