@@ -1,5 +1,7 @@
 //! Controllo e installazione degli aggiornamenti dalle release GitHub di AltKeeper.
-//! Solo Windows: lo usa l'icona nella barra di sistema.
+//! Lo usa l'icona nella barra di sistema. Solo su Windows l'exe si sostituisce da solo; su macOS
+//! l'icona si limita a controllare e ad aprire la pagina della release.
+#![cfg_attr(not(windows), allow(dead_code))]
 
 use std::path::Path;
 use std::time::Duration;

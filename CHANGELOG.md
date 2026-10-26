@@ -1,5 +1,27 @@
 # Changelog
 
+## 0.3.1
+
+### Added
+- **macOS menu-bar app (`AltKeeper.app`).** Double-clicking the app now starts `altkeeper tray`,
+  the same program as the Windows tray: an icon in the menu bar like AltServer (no Dock icon,
+  `LSUIElement`), grey while the iPhone is unreachable, with *Open AltKeeper* (the web page in a
+  WKWebView window), *Show logs*, *Start at login* (a LaunchAgent in
+  `~/Library/LaunchAgents/io.github.altkeeper.plist`, on by default the first time, refused while
+  the app runs from App Translocation), *Check for updates* (opens the release page: the signed app
+  does not replace itself) and *Quit*. Notifications go to Notification Center. Data lives in
+  `~/Library/Application Support/AltKeeper`. On macOS the event loop runs on the process's main
+  thread, as AppKit requires; the tokio runtime stays on `altkeeper-main`.
+- `scripts/macos-app.sh` builds `AltKeeper.app` (icon, `Info.plist` with the Local Network usage
+  description and Bonjour services, ad-hoc signature); the release workflow uses it.
+
+### Changed
+- `release.yml`: the macOS `.app` is no longer a shell launcher that opened the browser and could
+  only be stopped with Force Quit. The macOS jobs now also run the tests, and the duplicated header
+  comment was removed.
+- The tray icon is created once the event loop has started, on Windows too (required on macOS).
+- READMEs: new "macOS menu-bar app" and "Releases" sections.
+
 ## 0.3.0
 
 ### Fixed

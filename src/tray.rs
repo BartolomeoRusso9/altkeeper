@@ -1,25 +1,42 @@
-//! Icona nella barra di sistema e finestra con la pagina web (solo Windows). Comando
-//! `altkeeper tray`: AltServer e la pagina girano come con `serve --altserver`, senza terminale.
-//! Chiudere la finestra la nasconde soltanto; il programma si ferma solo con "Quit".
+//! Icona nella barra di sistema (Windows) o nella barra dei menu (macOS) e finestra con la pagina
+//! web. Comando `altkeeper tray`: AltServer e la pagina girano come con `serve --altserver`, senza
+//! terminale. Chiudere la finestra la nasconde soltanto; il programma si ferma solo con "Quit".
 
 use std::io::{self, Read as _, Write as _};
 use std::net::{SocketAddr, TcpStream};
 use std::path::Path;
+#[cfg(target_os = "macos")]
+use std::path::PathBuf;
 use std::time::{Duration, Instant};
 
-use tao::event::{Event, WindowEvent};
+use tao::event::{Event, StartCause, WindowEvent};
 use tao::event_loop::{ControlFlow, EventLoopBuilder, EventLoopProxy, EventLoopWindowTarget};
+#[cfg(target_os = "macos")]
+use tao::platform::macos::{ActivationPolicy, EventLoopExtMacOS};
+#[cfg(windows)]
 use tao::platform::windows::EventLoopBuilderExtWindows;
 use tao::window::{Window, WindowBuilder};
 use tray_icon::menu::{CheckMenuItem, Menu, MenuEvent, MenuItem, PredefinedMenuItem};
-use tray_icon::{Icon, MouseButton, TrayIconBuilder, TrayIconEvent};
+use tray_icon::{Icon, MouseButton, TrayIcon, TrayIconBuilder, TrayIconEvent};
+#[cfg(windows)]
 use winreg::RegKey;
+#[cfg(windows)]
 use winreg::enums::HKEY_CURRENT_USER;
 use wry::{WebView, WebViewBuilder};
 
+#[cfg(windows)]
 const RUN_KEY: &str = r"Software\Microsoft\Windows\CurrentVersion\Run";
+/// Su Windows il nome del valore nella chiave Run, su macOS l'etichetta del LaunchAgent.
+#[cfg(windows)]
 const RUN_VALUE: &str = "AltKeeperPlus";
+#[cfg(target_os = "macos")]
+const RUN_VALUE: &str = "io.github.altkeeper";
 const AUTOSTART_MARKER: &str = "autostart-initialised";
+
+#[cfg(windows)]
+const AUTOSTART_LABEL: &str = "Start with Windows";
+#[cfg(target_os = "macos")]
+const AUTOSTART_LABEL: &str = "Start at login";
 
 pub enum UserEvent {
     Tray(TrayIconEvent),
@@ -27,12 +44,15 @@ pub enum UserEvent {
     ServerFailed(String),
     Status { reachable: bool, tip: String },
     Updates(Option<crate::update::Release>),
+    #[cfg_attr(not(windows), allow(dead_code))]
     Restart,
+    #[cfg_attr(not(windows), allow(dead_code))]
     UpdateFailed(String),
 }
 
 /// Aspetta (al massimo 20 s) che il processo `pid` finisca: dopo un aggiornamento la versione
 /// vecchia deve liberare le porte prima che la nuova le apra.
+#[cfg(windows)]
 pub fn wait_for_exit(pid: u32) {
     use windows_sys::Win32::Foundation::CloseHandle;
     use windows_sys::Win32::System::Threading::{
@@ -68,12 +88,14 @@ fn check_updates(proxy: &EventLoopProxy<UserEvent>, manual: bool) {
 }
 
 /// Stacca il processo dal terminale: lanciato con un doppio clic, la finestra nera si chiude.
+#[cfg(windows)]
 pub fn hide_console() {
     unsafe {
         windows_sys::Win32::System::Console::FreeConsole();
     }
 }
 
+#[cfg(windows)]
 pub fn message_box(text: &str) {
     use windows_sys::Win32::UI::WindowsAndMessaging::{MB_ICONERROR, MB_OK, MessageBoxW};
     let wide = |s: &str| s.encode_utf16().chain(Some(0)).collect::<Vec<u16>>();
@@ -81,6 +103,20 @@ pub fn message_box(text: &str) {
     unsafe {
         MessageBoxW(std::ptr::null_mut(), text.as_ptr(), title.as_ptr(), MB_OK | MB_ICONERROR);
     }
+}
+
+/// Esegue uno script AppleScript passandogli `text` come argomento: niente da mettere tra
+/// virgolette, qualsiasi carattere arriva così com'è.
+#[cfg(target_os = "macos")]
+fn osascript(script: &str, text: &str) {
+    let _ = std::process::Command::new("osascript")
+        .args(["-e", "on run argv", "-e", script, "-e", "end run", text])
+        .output();
+}
+
+#[cfg(target_os = "macos")]
+pub fn message_box(text: &str) {
+    osascript(r#"display alert "AltKeeperPlus" message (item 1 of argv) as critical"#, text);
 }
 
 /// Logo di AltKeeper (assets/logo.png) già ridotto in RGBA grezzo: a colori quando il telefono
@@ -94,18 +130,22 @@ pub fn logo(reachable: bool) -> Icon {
     Icon::from_rgba(rgba.to_vec(), 32, 32).expect("valid icon")
 }
 
+#[cfg(windows)]
 fn run_key() -> io::Result<RegKey> {
     RegKey::predef(HKEY_CURRENT_USER).create_subkey(RUN_KEY).map(|(k, _)| k)
 }
 
+#[cfg(windows)]
 pub fn autostart_command(exe: &Path, dir: &Path) -> String {
     format!("\"{}\" tray --dir \"{}\"", exe.display(), dir.display())
 }
 
+#[cfg(windows)]
 fn autostart_enabled_as(name: &str) -> bool {
     run_key().and_then(|k| k.get_value::<String, _>(name)).is_ok()
 }
 
+#[cfg(windows)]
 fn set_autostart_as(name: &str, on: bool, exe: &Path, dir: &Path) -> io::Result<()> {
     let key = run_key()?;
     if on {
@@ -118,12 +158,86 @@ fn set_autostart_as(name: &str, on: bool, exe: &Path, dir: &Path) -> io::Result<
     }
 }
 
-/// Alla prima esecuzione attiva l'avvio con Windows; dopo rispetta la scelta fatta dal menu.
-/// Se è attivo riscrive il comando, così vale anche se l'exe è stato spostato.
+/// Cartella dei LaunchAgent dell'utente: macOS avvia al login quelli che trova qui.
+#[cfg(target_os = "macos")]
+fn agents_dir() -> PathBuf {
+    if cfg!(test) {
+        return std::env::temp_dir().join(format!("altkeeper-agents-{}", std::process::id()));
+    }
+    let home = std::env::var_os("HOME").map(PathBuf::from).unwrap_or_default();
+    home.join("Library/LaunchAgents")
+}
+
+#[cfg(target_os = "macos")]
+fn agent_path(name: &str) -> PathBuf {
+    agents_dir().join(format!("{name}.plist"))
+}
+
+#[cfg(target_os = "macos")]
+fn xml_escape(s: &str) -> String {
+    s.replace('&', "&amp;").replace('<', "&lt;").replace('>', "&gt;").replace('"', "&quot;")
+}
+
+/// Il LaunchAgent che al login avvia `exe tray --dir dir`.
+#[cfg(target_os = "macos")]
+pub fn launch_agent(name: &str, exe: &Path, dir: &Path) -> String {
+    let arg = |s: &str| format!("    <string>{}</string>\n", xml_escape(s));
+    format!(
+        "<?xml version=\"1.0\" encoding=\"UTF-8\"?>\n\
+         <!DOCTYPE plist PUBLIC \"-//Apple//DTD PLIST 1.0//EN\" \"http://www.apple.com/DTDs/PropertyList-1.0.dtd\">\n\
+         <plist version=\"1.0\">\n<dict>\n\
+         \x20 <key>Label</key>\n  <string>{}</string>\n\
+         \x20 <key>ProgramArguments</key>\n  <array>\n{}{}{}{}  </array>\n\
+         \x20 <key>RunAtLoad</key>\n  <true/>\n\
+         \x20 <key>ProcessType</key>\n  <string>Interactive</string>\n\
+         </dict>\n</plist>\n",
+        xml_escape(name),
+        arg(&exe.to_string_lossy()),
+        arg("tray"),
+        arg("--dir"),
+        arg(&dir.to_string_lossy()),
+    )
+}
+
+/// Un'app aperta direttamente da Download (o dall'immagine disco) gira da una copia temporanea
+/// in sola lettura ("App Translocation"): un avvio al login che puntasse lì non funzionerebbe.
+#[cfg(target_os = "macos")]
+fn translocated(exe: &Path) -> bool {
+    exe.to_string_lossy().contains("/AppTranslocation/")
+}
+
+#[cfg(target_os = "macos")]
+fn autostart_enabled_as(name: &str) -> bool {
+    agent_path(name).exists()
+}
+
+/// Il LaunchAgent vale dal prossimo login: non lo si carica subito, altrimenti partirebbe una
+/// seconda copia del programma.
+#[cfg(target_os = "macos")]
+fn set_autostart_as(name: &str, on: bool, exe: &Path, dir: &Path) -> io::Result<()> {
+    let path = agent_path(name);
+    if !on {
+        return match std::fs::remove_file(&path) {
+            Err(e) if e.kind() == io::ErrorKind::NotFound => Ok(()),
+            r => r,
+        };
+    }
+    if translocated(exe) {
+        return Err(io::Error::other("move AltKeeper.app to the Applications folder first"));
+    }
+    std::fs::create_dir_all(agents_dir())?;
+    std::fs::write(&path, launch_agent(name, exe, dir))
+}
+
+/// Alla prima esecuzione attiva l'avvio automatico; dopo rispetta la scelta fatta dal menu.
+/// Se è attivo riscrive il comando, così vale anche se il programma è stato spostato.
 fn ensure_autostart_default_as(name: &str, state_dir: &Path, exe: &Path, dir: &Path) {
     let marker = state_dir.join(AUTOSTART_MARKER);
     if !marker.exists() {
-        let _ = set_autostart_as(name, true, exe, dir);
+        // Da una copia temporanea non si decide niente: ci si riprova quando l'app è al suo posto.
+        if set_autostart_as(name, true, exe, dir).is_err() {
+            return;
+        }
         let _ = std::fs::create_dir_all(state_dir);
         let _ = std::fs::write(&marker, "");
     } else if autostart_enabled_as(name) {
@@ -202,9 +316,21 @@ impl FailGate {
     }
 }
 
+#[cfg(windows)]
 fn toast(text: &str) {
     use tauri_winrt_notification::Toast;
     let _ = Toast::new(Toast::POWERSHELL_APP_ID).title("AltKeeperPlus").text1(text).show();
+}
+
+#[cfg(target_os = "macos")]
+fn toast(text: &str) {
+    osascript(r#"display notification (item 1 of argv) with title "AltKeeperPlus""#, text);
+}
+
+/// Apre un indirizzo nel browser predefinito.
+#[cfg(target_os = "macos")]
+fn open_in_browser(url: &str) {
+    let _ = std::process::Command::new("open").arg(url).spawn();
 }
 
 /// Guarda le righe di log nuove e mostra gli avvisi.
@@ -280,25 +406,90 @@ fn show(
         Err(e) => return crate::log::err(&format!("[tray] cannot open the window: {e}")),
     };
     match WebViewBuilder::new().with_url(url).build(&window) {
-        Ok(webview) => *slot = Some((window, webview)),
+        Ok(webview) => {
+            // Su macOS l'app non ha un'icona nel Dock: la finestra va portata davanti a mano.
+            window.set_focus();
+            *slot = Some((window, webview))
+        }
         Err(e) => {
-            let msg = format!("Cannot show the page (is Microsoft Edge WebView2 installed?): {e}");
+            let msg = if cfg!(windows) {
+                format!("Cannot show the page (is Microsoft Edge WebView2 installed?): {e}")
+            } else {
+                format!("Cannot show the page: {e}")
+            };
             crate::log::err(&format!("[tray] {msg}"));
             message_box(&format!("{msg}\n\nThe page is also at {url}"));
         }
     }
 }
 
+/// Su macOS le scorciatoie (⌘C, ⌘V, ⌘A, ⌘W...) passano dal menu dell'applicazione, anche quando
+/// non si vede: senza, nella finestra non si potrebbe incollare la password dell'Apple ID.
+#[cfg(target_os = "macos")]
+fn app_menu() -> Menu {
+    use tray_icon::menu::Submenu;
+    let app = Submenu::with_items(
+        "AltKeeper",
+        true,
+        &[&PredefinedMenuItem::hide(None), &PredefinedMenuItem::close_window(None)],
+    );
+    let edit = Submenu::with_items(
+        "Edit",
+        true,
+        &[
+            &PredefinedMenuItem::undo(None),
+            &PredefinedMenuItem::redo(None),
+            &PredefinedMenuItem::separator(),
+            &PredefinedMenuItem::cut(None),
+            &PredefinedMenuItem::copy(None),
+            &PredefinedMenuItem::paste(None),
+            &PredefinedMenuItem::select_all(None),
+        ],
+    );
+    let menu = Menu::new();
+    if let (Ok(app), Ok(edit)) = (app, edit) {
+        let _ = menu.append_items(&[&app, &edit]);
+    }
+    menu
+}
+
+/// Crea l'icona. All'avvio con Windows l'area di notifica può non essere ancora pronta: si
+/// riprova per un minuto prima di arrendersi.
+fn build_tray(menu: &Menu) -> TrayIcon {
+    let build = || {
+        TrayIconBuilder::new()
+            .with_menu(Box::new(menu.clone()))
+            // Su macOS un clic sull'icona della barra dei menu apre il menu, come AltServer.
+            .with_menu_on_left_click(cfg!(target_os = "macos"))
+            .with_tooltip("AltKeeperPlus")
+            .with_icon(logo(false))
+            .build()
+    };
+    (0..30)
+        .find_map(|_| {
+            build().map_err(|_| std::thread::sleep(Duration::from_secs(2))).ok()
+        })
+        .unwrap_or_else(|| {
+            message_box("AltKeeperPlus cannot create its tray icon. Start it again.");
+            std::process::exit(1)
+        })
+}
+
 /// Avvia il ciclo degli eventi con l'icona; `start` riceve il proxy per segnalare errori del
-/// server. Non ritorna: "Quit" chiude il processo.
+/// server. Non ritorna: "Quit" chiude il processo. Su macOS va chiamata dal thread principale.
 pub fn run(bind: SocketAddr, dir: &Path, start: impl FnOnce(EventLoopProxy<UserEvent>)) -> ! {
     let url = format!("http://{bind}/");
+    let mut builder = EventLoopBuilder::<UserEvent>::with_user_event();
     // Il ciclo degli eventi gira sul thread `altkeeper-main` (main() sposta tutto lì per avere uno
     // stack più grande), e tao su Windows rifiuta di crearlo fuori dal main thread se non lo si
     // permette. Finestra, icona e ciclo vivono tutti su questo stesso thread, quindi è sicuro.
-    let mut builder = EventLoopBuilder::<UserEvent>::with_user_event();
+    #[cfg(windows)]
     builder.with_any_thread(true);
-    let event_loop = builder.build();
+    #[allow(unused_mut)]
+    let mut event_loop = builder.build();
+    // Solo l'icona nella barra dei menu, niente Dock né ⌘-Tab: come AltServer.
+    #[cfg(target_os = "macos")]
+    event_loop.set_activation_policy(ActivationPolicy::Accessory);
     let proxy = event_loop.create_proxy();
     let p = proxy.clone();
     TrayIconEvent::set_event_handler(Some(move |e| {
@@ -311,11 +502,15 @@ pub fn run(bind: SocketAddr, dir: &Path, start: impl FnOnce(EventLoopProxy<UserE
 
     let exe = std::env::current_exe().unwrap_or_default();
     ensure_autostart_default_as(RUN_VALUE, &dir.join("state"), &exe, dir);
+    #[cfg(target_os = "macos")]
+    if translocated(&exe) {
+        toast("Move AltKeeper.app to the Applications folder to start it at login.");
+    }
 
     let open = MenuItem::new("Open AltKeeper", true, None);
     let logs = MenuItem::new("Show logs", true, None);
     let autostart =
-        CheckMenuItem::new("Start with Windows", true, autostart_enabled_as(RUN_VALUE), None);
+        CheckMenuItem::new(AUTOSTART_LABEL, true, autostart_enabled_as(RUN_VALUE), None);
     let check = MenuItem::new("Check for updates", true, None);
     let update_now = MenuItem::new("Up to date", false, None);
     let quit = MenuItem::new("Quit", true, None);
@@ -330,24 +525,10 @@ pub fn run(bind: SocketAddr, dir: &Path, start: impl FnOnce(EventLoopProxy<UserE
         &PredefinedMenuItem::separator(),
         &quit,
     ]);
-    // All'avvio con Windows l'area di notifica può non essere ancora pronta: si riprova per un
-    // minuto prima di arrendersi.
-    let build = || {
-        TrayIconBuilder::new()
-            .with_menu(Box::new(menu.clone()))
-            .with_menu_on_left_click(false)
-            .with_tooltip("AltKeeperPlus")
-            .with_icon(logo(false))
-            .build()
-    };
-    let tray = (0..30)
-        .find_map(|_| {
-            build().map_err(|_| std::thread::sleep(Duration::from_secs(2))).ok()
-        })
-        .unwrap_or_else(|| {
-            message_box("AltKeeperPlus cannot create its tray icon. Start it again.");
-            std::process::exit(1)
-        });
+    #[cfg(target_os = "macos")]
+    let app_menu = app_menu();
+    // L'icona si crea quando il ciclo degli eventi è già partito: su macOS prima non comparirebbe.
+    let mut tray: Option<TrayIcon> = None;
 
     std::thread::spawn(watch_log);
     let p = proxy.clone();
@@ -371,6 +552,11 @@ pub fn run(bind: SocketAddr, dir: &Path, start: impl FnOnce(EventLoopProxy<UserE
     event_loop.run(move |event, target, control_flow| {
         *control_flow = ControlFlow::Wait;
         match event {
+            Event::NewEvents(StartCause::Init) => {
+                #[cfg(target_os = "macos")]
+                app_menu.init_for_nsapp();
+                tray = Some(build_tray(&menu));
+            }
             Event::UserEvent(UserEvent::Tray(TrayIconEvent::DoubleClick {
                 button: MouseButton::Left,
                 ..
@@ -383,13 +569,22 @@ pub fn run(bind: SocketAddr, dir: &Path, start: impl FnOnce(EventLoopProxy<UserE
                 } else if e.id == autostart.id() {
                     let on = autostart.is_checked();
                     if let Err(err) = set_autostart_as(RUN_VALUE, on, &exe, &dir) {
-                        crate::log::err(&format!("[tray] cannot change Start with Windows: {err}"));
+                        crate::log::err(&format!("[tray] cannot change {AUTOSTART_LABEL}: {err}"));
+                        #[cfg(target_os = "macos")]
+                        toast(&format!("Cannot change {AUTOSTART_LABEL}: {err}"));
                         autostart.set_checked(!on);
                     }
                 } else if e.id == check.id() {
                     let p = check_proxy.clone();
                     std::thread::spawn(move || check_updates(&p, true));
                 } else if e.id == update_now.id() && !staging {
+                    // Su macOS l'app firmata non si sostituisce da sola: si apre la pagina della
+                    // release, da cui si scarica il nuovo AltKeeper.app.
+                    #[cfg(target_os = "macos")]
+                    if let Some(r) = &pending {
+                        open_in_browser(&r.page);
+                    }
+                    #[cfg(windows)]
                     if let Some(r) = pending.clone() {
                         staging = true;
                         update_now.set_enabled(false);
@@ -408,18 +603,31 @@ pub fn run(bind: SocketAddr, dir: &Path, start: impl FnOnce(EventLoopProxy<UserE
                 }
             }
             Event::UserEvent(UserEvent::Status { reachable, tip }) => {
-                let _ = tray.set_icon(Some(logo(reachable)));
-                let _ = tray.set_tooltip(Some(tip));
+                if let Some(tray) = &tray {
+                    let _ = tray.set_icon(Some(logo(reachable)));
+                    let _ = tray.set_tooltip(Some(tip));
+                }
             }
             Event::UserEvent(UserEvent::Updates(latest)) if !staging => {
                 if let Some(r) = &latest {
-                    update_now.set_text(format!("Update now to {}", r.tag));
+                    if cfg!(windows) {
+                        update_now.set_text(format!("Update now to {}", r.tag));
+                    } else {
+                        update_now.set_text(format!("Download {}", r.tag));
+                    }
                     update_now.set_enabled(true);
                     if announced != r.tag {
-                        toast(&format!(
-                            "{} is available. Right-click the tray icon and choose Update now.",
-                            r.tag
-                        ));
+                        toast(&if cfg!(windows) {
+                            format!(
+                                "{} is available. Right-click the tray icon and choose Update now.",
+                                r.tag
+                            )
+                        } else {
+                            format!(
+                                "{} is available. Click the AltKeeper icon in the menu bar and choose Download.",
+                                r.tag
+                            )
+                        });
                         announced = r.tag.clone();
                     }
                 }
@@ -470,6 +678,14 @@ pub fn run(bind: SocketAddr, dir: &Path, start: impl FnOnce(EventLoopProxy<UserE
             _ => {}
         }
     })
+}
+
+/// Cartella dei dati di `tray` su macOS quando non si indica `--dir`: l'interno di
+/// AltKeeper.app non va toccato (romperebbe la firma) e può essere in sola lettura.
+#[cfg(target_os = "macos")]
+pub fn default_dir() -> Result<PathBuf, String> {
+    let home = std::env::var_os("HOME").ok_or("HOME is not set")?;
+    Ok(PathBuf::from(home).join("Library/Application Support/AltKeeper"))
 }
 
 #[cfg(test)]
@@ -523,7 +739,10 @@ mod tests {
         assert!(gate.allow(t0 + std::time::Duration::from_secs(11 * 60)));
     }
 
+    #[cfg(windows)]
     const TEST_VALUE: &str = "AltKeeperPlus-test";
+    #[cfg(target_os = "macos")]
+    const TEST_VALUE: &str = "io.github.altkeeper.test";
 
     fn temp_dir(name: &str) -> std::path::PathBuf {
         let d = std::env::temp_dir().join(format!("altkeeper-tray-{name}-{}", std::process::id()));
@@ -532,10 +751,41 @@ mod tests {
         d
     }
 
+    #[cfg(windows)]
     #[test]
     fn autostart_command_is_quoted() {
         let cmd = autostart_command(Path::new(r"C:\Alt Keeper\altkeeper.exe"), Path::new(r"C:\Alt Keeper"));
         assert_eq!(cmd, r#""C:\Alt Keeper\altkeeper.exe" tray --dir "C:\Alt Keeper""#);
+    }
+
+    #[cfg(target_os = "macos")]
+    #[test]
+    fn launch_agent_runs_tray_with_escaped_paths() {
+        let plist = launch_agent(
+            "io.github.altkeeper",
+            Path::new("/Applications/Alt & Keeper.app/Contents/MacOS/altkeeper"),
+            Path::new("/Users/me/Library/Application Support/AltKeeper"),
+        );
+        assert!(plist.contains("<string>io.github.altkeeper</string>"));
+        assert!(plist.contains(
+            "<string>/Applications/Alt &amp; Keeper.app/Contents/MacOS/altkeeper</string>\n    \
+             <string>tray</string>\n    <string>--dir</string>\n    \
+             <string>/Users/me/Library/Application Support/AltKeeper</string>"
+        ));
+        assert!(plist.contains("<key>RunAtLoad</key>\n  <true/>"));
+        let parsed: plist::Value = plist::from_bytes(plist.as_bytes()).unwrap();
+        assert_eq!(parsed.as_dictionary().unwrap()["ProgramArguments"].as_array().unwrap().len(), 4);
+    }
+
+    #[cfg(target_os = "macos")]
+    #[test]
+    fn translocated_app_is_not_started_at_login() {
+        let exe = Path::new("/private/var/folders/x/AppTranslocation/ABC/d/AltKeeper.app/Contents/MacOS/altkeeper");
+        assert!(set_autostart_as(TEST_VALUE, true, exe, Path::new("/tmp")).is_err());
+        assert!(!autostart_enabled_as(TEST_VALUE));
+        let d = temp_dir("translocated");
+        ensure_autostart_default_as(TEST_VALUE, &d.join("state"), exe, &d);
+        assert!(!d.join("state").join(AUTOSTART_MARKER).exists());
     }
 
     #[test]

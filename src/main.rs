@@ -15,8 +15,8 @@
 //!                    [--dns-domain D --dns-address IP [--dns-port N]]
 //!                                                  fa da AltServer per AltStore (Refresh All e installazioni)
 //!   altkeeper tray [--dir cartella] [--phone ip:porta] [--console]
-//!                                                  (solo Windows) icona nella barra di sistema: come
-//!                                                  `serve --altserver` ma senza terminale
+//!                                                  (Windows e macOS) icona nella barra di sistema o
+//!                                                  dei menu: come `serve --altserver` ma senza terminale
 //!
 //! Se non indichi il telefono (`--phone` o ALTKEEPER_PHONE) lo cerca in rete via Bonjour.
 //!
@@ -34,9 +34,9 @@ mod log;
 mod phone;
 mod profile;
 mod terminal;
-#[cfg(windows)]
+#[cfg(any(windows, target_os = "macos"))]
 mod tray;
-#[cfg(windows)]
+#[cfg(any(windows, target_os = "macos"))]
 mod update;
 mod web;
 
@@ -496,22 +496,63 @@ async fn terminated() {
     std::future::pending::<()>().await
 }
 
+/// Su macOS la barra dei menu e le finestre funzionano solo dal thread principale del processo,
+/// che però qui aspetta il thread `altkeeper-main`: il comando `tray` gli manda il ciclo degli
+/// eventi da eseguire attraverso questo canale.
+#[cfg(target_os = "macos")]
+type MainJob = Box<dyn FnOnce() + Send>;
+#[cfg(target_os = "macos")]
+static MAIN_JOB: std::sync::Mutex<Option<std::sync::mpsc::Sender<MainJob>>> =
+    std::sync::Mutex::new(None);
+
+/// Chiude il canale quando il thread `altkeeper-main` finisce (anche in panico), così il thread
+/// principale smette di aspettare.
+#[cfg(target_os = "macos")]
+struct ReleaseMainThread;
+
+#[cfg(target_os = "macos")]
+impl Drop for ReleaseMainThread {
+    fn drop(&mut self) {
+        MAIN_JOB.lock().unwrap_or_else(|e| e.into_inner()).take();
+    }
+}
+
 fn main() -> Result<(), String> {
+    #[cfg(target_os = "macos")]
+    let jobs = {
+        let (tx, rx) = std::sync::mpsc::channel::<MainJob>();
+        *MAIN_JOB.lock().unwrap_or_else(|e| e.into_inner()) = Some(tx);
+        rx
+    };
     // Il future di `run()` è grande in debug: su Windows lo stack di main è di 1 MB e
     // andrebbe in overflow, quindi il runtime gira su un thread con 16 MiB di stack.
-    std::thread::Builder::new()
+    let worker = std::thread::Builder::new()
         .name("altkeeper-main".into())
         .stack_size(16 * 1024 * 1024)
         .spawn(|| -> Result<(), String> {
+            #[cfg(target_os = "macos")]
+            let _release = ReleaseMainThread;
             tokio::runtime::Builder::new_multi_thread()
                 .enable_all()
                 .build()
                 .map_err(|e| e.to_string())?
                 .block_on(run())
         })
-        .map_err(|e| e.to_string())?
-        .join()
-        .unwrap_or_else(|_| Err("main thread panicked".to_string()))
+        .map_err(|e| e.to_string())?;
+    // Il ciclo degli eventi non ritorna: "Quit" chiude il processo.
+    #[cfg(target_os = "macos")]
+    if let Ok(job) = jobs.recv() {
+        job();
+    }
+    worker.join().unwrap_or_else(|_| Err("main thread panicked".to_string()))
+}
+
+/// Su macOS, aperto con un doppio clic su AltKeeper.app: l'eseguibile sta in `*.app/Contents/MacOS`.
+#[cfg(target_os = "macos")]
+fn in_app_bundle() -> bool {
+    std::env::current_exe()
+        .map(|p| p.to_string_lossy().contains(".app/Contents/MacOS/"))
+        .unwrap_or(false)
 }
 
 async fn run() -> Result<(), String> {
@@ -526,8 +567,15 @@ async fn run() -> Result<(), String> {
         .init();
 
     let mut args: Vec<String> = std::env::args().skip(1).collect();
-    // Su Windows un doppio clic sull'exe (nessun argomento) apre la versione con l'icona.
-    if args.is_empty() && cfg!(windows) {
+    // Le versioni vecchie di macOS passano `-psn_...` alle app aperte dal Finder.
+    args.retain(|a| !a.starts_with("-psn_"));
+    // Su Windows un doppio clic sull'exe (nessun argomento) apre la versione con l'icona, e su
+    // macOS lo stesso fa AltKeeper.app.
+    #[cfg(target_os = "macos")]
+    let double_clicked = in_app_bundle();
+    #[cfg(not(target_os = "macos"))]
+    let double_clicked = cfg!(windows);
+    if args.is_empty() && double_clicked {
         args.push("tray".into());
     }
     if args.is_empty() {
@@ -607,26 +655,35 @@ async fn run() -> Result<(), String> {
             }
             web::serve(bind, pin, phone).await
         }
-        #[cfg(windows)]
+        #[cfg(any(windows, target_os = "macos"))]
         "tray" => {
-            // Senza --dir si usa la cartella dell'exe: all'avvio con Windows la cartella di
-            // lavoro è un'altra.
+            // Senza --dir: su Windows la cartella dell'exe (all'avvio con Windows la cartella di
+            // lavoro è un'altra), su macOS ~/Library/Application Support/AltKeeper.
             let dir = match opt("--dir") {
                 Some(d) => std::path::PathBuf::from(d),
+                #[cfg(windows)]
                 None => std::env::current_exe()
                     .map_err(dbg)?
                     .parent()
                     .ok_or(crate::tr!("cartella dell'exe non trovata", "cannot find the exe folder"))?
                     .to_path_buf(),
+                #[cfg(target_os = "macos")]
+                None => {
+                    let d = tray::default_dir()?;
+                    std::fs::create_dir_all(&d).map_err(|e| format!("{}: {e}", d.display()))?;
+                    d
+                }
             };
             std::env::set_current_dir(&dir).map_err(|e| format!("--dir {}: {e}", dir.display()))?;
             let dir = std::env::current_dir().map_err(dbg)?;
             log::init(&dir);
+            #[cfg(windows)]
             if !flag("--console") {
                 tray::hide_console();
             }
             // Avviato da un aggiornamento: prima si aspetta che la versione vecchia liberi le porte.
             let replacing = opt("--replacing").and_then(|p| p.parse::<u32>().ok());
+            #[cfg(windows)]
             if let Some(pid) = replacing {
                 tray::wait_for_exit(pid);
             }
@@ -651,15 +708,31 @@ async fn run() -> Result<(), String> {
             }
             update::cleanup(&exe);
             let rt = tokio::runtime::Handle::current();
-            tokio::task::block_in_place(|| {
-                tray::run(bind, &dir, |proxy| {
-                    rt.spawn(async move {
-                        if let Err(e) = web::serve(bind, None, phone).await {
-                            let _ = proxy.send_event(tray::UserEvent::ServerFailed(e));
-                        }
-                    });
-                })
-            })
+            let start_web = move |proxy: tao::event_loop::EventLoopProxy<tray::UserEvent>| {
+                rt.spawn(async move {
+                    if let Err(e) = web::serve(bind, None, phone).await {
+                        let _ = proxy.send_event(tray::UserEvent::ServerFailed(e));
+                    }
+                });
+            };
+            #[cfg(windows)]
+            let done: Result<(), String> =
+                tokio::task::block_in_place(|| tray::run(bind, &dir, start_web));
+            // Il ciclo degli eventi passa al thread principale; questo thread tiene vivo il
+            // runtime di tokio, su cui girano la pagina web e il resto.
+            #[cfg(target_os = "macos")]
+            let done: Result<(), String> = {
+                let job: MainJob = Box::new(move || tray::run(bind, &dir, start_web));
+                MAIN_JOB
+                    .lock()
+                    .unwrap_or_else(|e| e.into_inner())
+                    .as_ref()
+                    .ok_or("main thread not available")?
+                    .send(job)
+                    .map_err(dbg)?;
+                std::future::pending().await
+            };
+            done
         }
         "altserver" => {
             if let Some(dir) = opt("--dir") {

@@ -4,17 +4,9 @@
 #   sistema scarica proprio questi due file: i nomi non vanno cambiati.
 # - Linux (x86-64 e arm64) e macOS (Apple Silicon e Intel): `altkeeper-<tag>-<sistema>-<arch>.tar.gz`
 #   con il suo `.sha256`. Sono download manuali: l'auto-aggiornamento è solo per Windows.
-#
-# Si lancia con un tag, per esempio: git tag v0.3.1 && git push origin v0.3.1
-# Il numero del tag deve coincidere con `version` in Cargo.toml.
-# Compila AltKeeper per Windows, Linux e macOS e pubblica tutto in una GitHub Release.
-#
-# - Windows: `altkeeper.exe` + `altkeeper.exe.sha256`. L'aggiornamento dall'icona nella barra di
-#   sistema scarica proprio questi due file: i nomi non vanno cambiati.
-# - Linux (x86-64 e arm64) e macOS (Apple Silicon e Intel): `altkeeper-<tag>-<sistema>-<arch>.tar.gz`
-#   con il suo `.sha256`. Sono download manuali: l'auto-aggiornamento è solo per Windows.
-# - macOS: in più `AltKeeper-<tag>-macos-<arch>.zip` con `AltKeeper.app` (doppio clic: avvia il
-#   server e apre la pagina web) e il suo `.sha256`.
+# - macOS: in più `AltKeeper-<tag>-macos-<arch>.zip` con `AltKeeper.app` (doppio clic: icona nella
+#   barra dei menu come AltServer, AltServer e pagina web; vedi scripts/macos-app.sh) e il suo
+#   `.sha256`. L'icona avvisa delle nuove versioni e apre la pagina della release.
 #
 # Parte SOLO a mano: GitHub -> Actions -> release -> "Run workflow" (scegli il branch).
 # Il tag della release è `v` + `version` di Cargo.toml e viene creato dalla release stessa.
@@ -61,10 +53,10 @@ jobs:
             test: true
           - name: macos-aarch64
             runner: macos-latest
-            test: false
+            test: true
           - name: macos-x86_64
             runner: macos-15-intel
-            test: false
+            test: true
     runs-on: ${{ matrix.runner }}
     permissions:
       contents: read
@@ -107,55 +99,11 @@ jobs:
       - name: Package (macOS .app)
         if: startsWith(matrix.name, 'macos')
         run: |
-          app="dist/AltKeeper.app"
-          mkdir -p "$app/Contents/MacOS" "$app/Contents/Resources"
-          cp target/release/altkeeper "$app/Contents/MacOS/altkeeper"
-          # Il binario non ha icona nella barra dei menu su macOS: l'app è un avviatore che
-          # prepara la cartella dati, apre la pagina web e lascia il server in esecuzione.
-          cat > "$app/Contents/MacOS/AltKeeper" <<'LAUNCHER'
-          #!/bin/bash
-          here="$(cd "$(dirname "$0")" && pwd)"
-          data="$HOME/Library/Application Support/AltKeeper"
-          mkdir -p "$data"
-          ( sleep 3; open "http://127.0.0.1:8787" ) &
-          exec "$here/altkeeper" serve --altserver --dir "$data"
-          LAUNCHER
-          chmod +x "$app/Contents/MacOS/AltKeeper" "$app/Contents/MacOS/altkeeper"
-          # Icona .icns dal logo
-          iconset="$RUNNER_TEMP/AltKeeper.iconset"
-          mkdir -p "$iconset"
-          for s in 16 32 64 128 256; do sips -z $s $s assets/logo.png --out "$iconset/tmp_$s.png" >/dev/null; done
-          mv "$iconset/tmp_16.png"  "$iconset/icon_16x16.png"
-          cp "$iconset/tmp_32.png"  "$iconset/icon_16x16@2x.png"
-          mv "$iconset/tmp_32.png"  "$iconset/icon_32x32.png"
-          cp "$iconset/tmp_64.png"  "$iconset/icon_32x32@2x.png"
-          mv "$iconset/tmp_128.png" "$iconset/icon_128x128.png"
-          cp "$iconset/tmp_256.png" "$iconset/icon_128x128@2x.png"
-          mv "$iconset/tmp_256.png" "$iconset/icon_256x256.png"
-          rm -f "$iconset"/tmp_*.png
-          iconutil -c icns "$iconset" -o "$app/Contents/Resources/AltKeeper.icns"
-          version="${TAG#v}"
-          cat > "$app/Contents/Info.plist" <<PLIST
-          <?xml version="1.0" encoding="UTF-8"?>
-          <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
-          <plist version="1.0">
-          <dict>
-            <key>CFBundleName</key><string>AltKeeper</string>
-            <key>CFBundleDisplayName</key><string>AltKeeper</string>
-            <key>CFBundleIdentifier</key><string>io.github.altkeeper</string>
-            <key>CFBundleExecutable</key><string>AltKeeper</string>
-            <key>CFBundleIconFile</key><string>AltKeeper</string>
-            <key>CFBundlePackageType</key><string>APPL</string>
-            <key>CFBundleShortVersionString</key><string>${version}</string>
-            <key>CFBundleVersion</key><string>${version}</string>
-            <key>LSMinimumSystemVersion</key><string>11.0</string>
-            <key>NSHighResolutionCapable</key><true/>
-          </dict>
-          </plist>
-          PLIST
-          # Firma ad-hoc (senza account Apple Developer): serve su Apple Silicon, ma Gatekeeper
-          # chiederà comunque conferma al primo avvio (vedi README).
-          codesign --force --deep -s - "$app"
+          # Icona nella barra dei menu, Info.plist (LSUIElement, permesso Rete locale) e firma ad-hoc.
+          app=$(scripts/macos-app.sh target/release/altkeeper "${TAG#v}" dist)
+          # Controllo minimo: l'app deve avviare proprio il binario con l'icona.
+          test "$(plutil -extract CFBundleExecutable raw "$app/Contents/Info.plist")" = altkeeper
+          codesign --verify --strict "$app"
           zip="AltKeeper-${TAG}-${{ matrix.name }}.zip"
           ditto -c -k --keepParent "$app" "dist/$zip"
           rm -rf "$app"

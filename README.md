@@ -91,7 +91,8 @@ and server logs, **not** the HTML web page, protocol or JSON. The same 2FA menu 
 
 - An iPhone on **iOS 17 or later**, with Developer Mode on, on the same Wi-Fi as the server.
 - A machine that is always on in your home network. Tested: Debian 13 (x86-64); a Mac also
-  works. On **Windows 10**, the native build, tests and interactive Apple ID / 2FA login have
+  works (from the terminal, or as a menu-bar app like AltServer, see
+  [macOS](#11-macos-menu-bar-app)). On **Windows 10**, the native build, tests and interactive Apple ID / 2FA login have
   been verified. Windows 11 and the full Windows AltServer/renewal workflow remain unverified
   end to end (see [Windows](#10-windows-native-no-docker)).
 - For AltServer mode: **AltStore Classic** on the iPhone, with the *Local Network* permission.
@@ -107,10 +108,17 @@ and server logs, **not** the HTML web page, protocol or JSON. The same 2FA menu 
 `altkeeper-<version>-linux-x86_64.tar.gz`, `-linux-aarch64`, `-macos-aarch64` (Apple Silicon) and
 `-macos-x86_64` (Intel), each with a `.sha256` file (check with `sha256sum -c`). Unpack it and use the
 `altkeeper` binary inside. The Linux builds need glibc 2.35 or newer; on older systems or Alpine, use
-Docker or build it yourself. On macOS there is also `AltKeeper-<version>-macos-<arch>.zip` with `AltKeeper.app`: double-click it and it starts the
-server and opens the web page (data lives in `~/Library/Application Support/AltKeeper`; there is no menu-bar icon, so
-quit it from the Dock with Force Quit). The macOS builds are not notarized: if Gatekeeper blocks them, run
-`xattr -dr com.apple.quarantine AltKeeper.app` (or `altkeeper` for the tar.gz). Only the Windows `.exe` updates itself.
+Docker or build it yourself.
+
+- **Windows:** `altkeeper.exe` (double-click: system tray icon, see [Windows](#10-windows-native-no-docker)).
+- **macOS:** besides the tar.gz there is `AltKeeper-<version>-macos-aarch64.zip` (Apple Silicon) and
+  `-macos-x86_64.zip` (Intel) with **`AltKeeper.app`**: double-click it and an icon appears in the
+  menu bar, like AltServer, with AltServer and the web page running behind it (see
+  [macOS menu-bar app](#11-macos-menu-bar-app)).
+
+The macOS builds are not notarized: if Gatekeeper blocks them, run
+`xattr -dr com.apple.quarantine AltKeeper.app` (or `altkeeper` for the tar.gz). Only the Windows
+`.exe` updates itself; on macOS the menu-bar icon tells you about a new version and opens its page.
 
 **Or build it yourself:**
 
@@ -126,7 +134,9 @@ The binary is `target/release/altkeeper`. Notes:
   about 5 to 7 minutes).
 - If you also build for the Mac in the same folder, add `-e CARGO_TARGET_DIR=/w/target-linux` so
   the two builds do not overwrite each other.
-- On a Mac you can simply run `cargo build --release`.
+- On a Mac you can simply run `cargo build --release`, and wrap the binary in `AltKeeper.app` with
+  `scripts/macos-app.sh target/release/altkeeper <version> <output folder>` (the same script the
+  release uses).
 - Or use the Docker image (see [Docker](#9-docker)).
 
 On the server, create a folder (for example `/srv/altkeeper`) and copy there the `altkeeper`
@@ -450,9 +460,7 @@ prove Windows 11, other shell hosts, AltServer installation or unattended renewa
 
    The icon also checks the GitHub releases once a day; *Update now* downloads the new
    `altkeeper.exe`, verifies its SHA-256, restarts, and goes back to the old version if the new
-   one does not start. Releases (Windows, Linux and macOS) are built by `.github/workflows/release.yml` when you start it by hand
-   (GitHub → Actions → release → *Run workflow*). The tag is `v` + the `version` in `Cargo.toml`, created by the
-   release itself; bump the version first, or the run stops because the tag already exists.
+   one does not start (see [Releases](#releases)).
 
    Every server line (AltServer, web page, DNS-SD) is also written, with date and time, to
    `altkeeper.log` (rotated at 5 MB) and shown in the **Logs** section of the web page.
@@ -460,6 +468,72 @@ prove Windows 11, other shell hosts, AltServer installation or unattended renewa
 Everything else in this guide (commands, environment variables, outside-the-home setup) is the
 same; only the paths use `\`, and `cron` and `renew.sh` are replaced by the Task Scheduler and
 `renew.ps1`.
+
+### 11. macOS menu-bar app
+
+`AltKeeper.app` works like AltServer on a Mac: it has no Dock icon, only an icon in the menu bar,
+and while it runs the Mac answers AltStore and serves the web page. It is the same program as the
+Windows tray (`altkeeper tray`), so it behaves the same way.
+
+1. **Install.** Download `AltKeeper-<version>-macos-aarch64.zip` (Apple Silicon) or
+   `-macos-x86_64.zip` (Intel) from the [releases](https://github.com/BartolomeoRusso9/altkeeper/releases),
+   unzip it and **move `AltKeeper.app` to Applications** (started from Downloads, macOS runs it from
+   a temporary read-only copy and *Start at login* cannot be turned on).
+2. **First start.** The app is signed ad hoc, not notarized: the first time, right-click it →
+   *Open* → *Open* (on macOS 15 and later: *System Settings → Privacy & Security → Open Anyway*),
+   or run `xattr -dr com.apple.quarantine /Applications/AltKeeper.app`. Allow **Local Network**
+   access when macOS asks (needed to find the iPhone and to be found by AltStore), and incoming
+   connections if the firewall asks.
+3. **Quit AltServer** if it is installed on this Mac: only one AltServer should run on the network.
+4. **Use it.** Click the AltKeeper logo in the menu bar (grey while the iPhone is not reachable;
+   hover it for the number of apps and the next expiry):
+   - *Open AltKeeper*: the web page in its own window (closing it only hides it). ⌘C / ⌘V work,
+     so you can paste the Apple ID password.
+   - *Show logs*: the same window, on the **Logs** section.
+   - *Start at login*: on by default the first time; it writes
+     `~/Library/LaunchAgents/io.github.altkeeper.plist` (unchecking it removes the file).
+   - *Check for updates*: when a new release exists, *Download vX.Y.Z* opens its page. The app
+     does not replace itself on macOS: download the new zip and replace `AltKeeper.app`.
+   - *Quit*: stops AltServer (removing its Bonjour announcement) and the web page.
+
+   Notifications (profiles renewed, app installed, failures, new version) appear in Notification
+   Center; they are sent through AppleScript, so macOS may list them under *Script Editor*.
+
+**Data folder.** The app keeps everything in `~/Library/Application Support/AltKeeper`: put
+`rp-pairing.plist` there (see [Pair](#3-pair-once-over-usb)); `account.json`, `state/`,
+`profili-salvati/` and `altkeeper.log` end up there too. To sign in for unattended renewal, run
+the program inside the app from that folder:
+
+```sh
+cd ~/Library/Application\ Support/AltKeeper
+/Applications/AltKeeper.app/Contents/MacOS/altkeeper login your.apple.id@example.com
+```
+
+Or sign in from the web page (*Open AltKeeper*). Every other command works the same way from that
+folder. `altkeeper tray --dir <folder>` (from a terminal, with the binary from the tar.gz or from
+inside the app) uses another folder.
+
+The web page listens only on `127.0.0.1:8787` (no PIN needed); AltServer listens on port 49500 for
+the whole network, exactly like `serve --altserver`.
+
+**Status:** built and unit-tested on macOS (Apple Silicon); the menu-bar app has not yet been
+confirmed end to end with a real iPhone and AltStore.
+
+## Releases
+
+Releases are built by `.github/workflows/release.yml`, started by hand: GitHub → Actions →
+release → *Run workflow*. The tag is `v` + the `version` in `Cargo.toml` and is created by the
+release itself: bump the version (and `Cargo.lock`, with `cargo build`) first, or the run stops
+because the tag already exists. It runs the tests on Windows, Linux and macOS, and publishes:
+
+| File | What it is |
+| --- | --- |
+| `altkeeper.exe` + `.sha256` | Windows; the tray downloads exactly these two names to update itself |
+| `altkeeper-<tag>-linux-x86_64.tar.gz`, `-linux-aarch64` + `.sha256` | Linux binary (glibc 2.35+), `LICENSE`, READMEs, `examples/` |
+| `altkeeper-<tag>-macos-aarch64.tar.gz`, `-macos-x86_64` + `.sha256` | macOS command-line binary, same contents |
+| `AltKeeper-<tag>-macos-aarch64.zip`, `-macos-x86_64` + `.sha256` | `AltKeeper.app`, the macOS menu-bar app (built by `scripts/macos-app.sh`) |
+
+The Docker image is published separately by `.github/workflows/docker.yml` (see [Docker](#9-docker)).
 
 ## Using it from outside your home network
 
@@ -624,7 +698,7 @@ If it says it cannot find the server, watch the DNS with
 | `serve [--bind ip:port] [--pin PIN] [--dir folder] [--phone ip:port] [--altserver] [--altserver-port N]` | web page (and, with `--altserver`, AltServer) |
 | `profile-remove <uuid>` | takes one profile off the phone, saving a copy in `profili-salvati/` |
 | `profile-restore <file>` | puts a saved profile back |
-| `tray [--dir folder] [--phone ip:port] [--console]` | Windows only: AltServer + web page with a system tray icon, no terminal (the default when you double-click the `.exe`) |
+| `tray [--dir folder] [--phone ip:port] [--console]` | Windows and macOS: AltServer + web page with an icon in the system tray / menu bar, no terminal (what a double-click on `altkeeper.exe` or `AltKeeper.app` starts). Default folder: the `.exe`'s on Windows, `~/Library/Application Support/AltKeeper` on macOS; `--console` is Windows only |
 
 `ALTKEEPER_PHONE=ip:port` can replace `--phone`; without either the phone is found by itself (see
 step 2). `ALTKEEPER_NO_MDNS=1` turns Bonjour off (networks that block multicast, or to test the scan).
