@@ -25,6 +25,7 @@
 
 mod altserver;
 mod apple;
+mod devices;
 mod dnssd;
 mod env;
 mod fsperm;
@@ -167,18 +168,20 @@ fn start_dnssd(opt: impl Fn(&str) -> Option<String>, altserver_port: u16) -> Res
 
 /// Si collega al telefono, all'indirizzo indicato o a quello trovato in rete.
 async fn open_phone(
+    dir: &Path,
     addr: Option<SocketAddr>,
     say: &mut dyn FnMut(&str),
 ) -> Result<phone::PhoneLink, String> {
-    let (_, link) = open_phone_with_route(addr, say).await?;
+    let (_, link) = open_phone_with_route(dir, addr, say).await?;
     Ok(link)
 }
 
 async fn open_phone_with_route(
+    dir: &Path,
     addr: Option<SocketAddr>,
     say: &mut dyn FnMut(&str),
 ) -> Result<(phone::Via, phone::PhoneLink), String> {
-    let (found, link) = phone::connect_auto(addr, PAIRING_FILE, &mut *say).await?;
+    let (found, link) = phone::connect_auto_in(dir, addr, PAIRING_FILE, &mut *say).await?;
     if found == phone::Via::Usb {
         say(crate::tr!("Collegato via USB", "Connected via USB"));
     } else if addr.map(phone::Via::Wifi) != Some(found) {
@@ -216,7 +219,7 @@ fn print_profile(p: &profile::PhoneProfile) {
 }
 
 async fn cmd_phone(addr: Option<SocketAddr>) -> Result<(), String> {
-    let mut link = open_phone(addr, &mut |s| println!("{s}")).await?;
+    let mut link = open_phone(Path::new("."), addr, &mut |s| println!("{s}")).await?;
     let profiles = phone_profiles(&mut link).await?;
     println!(
         "{}",
@@ -317,6 +320,7 @@ async fn cmd_apps() -> Result<(), String> {
 }
 
 async fn cmd_renew(
+    dir: &Path,
     addr: Option<SocketAddr>,
     dry_run: bool,
     force: bool,
@@ -329,11 +333,12 @@ async fn cmd_renew(
     let _auto_pair_pause = phone::pause_auto_pairing();
     let standalone_control = renewal_wait::Control::default();
     let wait_control = wait_control.unwrap_or(&standalone_control);
-    let acc = apple::load_account(Path::new("."))?;
+    wait_control.reset();
+    let acc = apple::load_account(dir)?;
     let team_id = acc.team_id.clone().ok_or("team not saved: sign in again")?;
 
     say("Connecting to the phone...");
-    let (route, mut link) = open_phone_with_route(addr, &mut *say).await?;
+    let (route, mut link) = open_phone_with_route(dir, addr, &mut *say).await?;
     let profiles = phone_profiles(&mut link).await?;
     let mine: Vec<&profile::PhoneProfile> = profiles
         .iter()
@@ -574,6 +579,7 @@ fn renewal_completion(missing_app_ids: &[&str], renewed: usize) -> Result<(), St
 /// Validate an exact UUID, back up its original bytes, then remove only that profile.
 /// The web endpoint also restricts deletion to the configured Apple team.
 async fn remove_profile_with_backup(
+    dir: &Path,
     link: &mut phone::PhoneLink,
     uuid: &str,
     required_team: Option<&str>,
@@ -599,9 +605,10 @@ async fn remove_profile_with_backup(
         }
     }
 
-    std::fs::create_dir_all(SAVED_DIR).map_err(dbg)?;
-    fsperm::restrict_dir(Path::new(SAVED_DIR)).map_err(dbg)?;
-    let path = Path::new(SAVED_DIR).join(format!("{}.mobileprovision", parsed.uuid));
+    let saved_dir = dir.join(SAVED_DIR);
+    std::fs::create_dir_all(&saved_dir).map_err(dbg)?;
+    fsperm::restrict_dir(&saved_dir).map_err(dbg)?;
+    let path = saved_dir.join(format!("{}.mobileprovision", parsed.uuid));
     fsperm::write_private(&path, found).map_err(dbg)?;
     if std::fs::read(&path).map_err(dbg)? != *found {
         return Err("Profile backup verification failed; nothing was removed.".into());
@@ -615,8 +622,8 @@ async fn cmd_profile_remove(addr: Option<SocketAddr>, uuid: Option<String>) -> R
         "uso: altkeeper profile-remove <uuid>",
         "usage: altkeeper profile-remove <uuid>"
     ))?;
-    let mut link = open_phone(addr, &mut |s| println!("{s}")).await?;
-    let parsed = remove_profile_with_backup(&mut link, &uuid, None).await?;
+    let mut link = open_phone(Path::new("."), addr, &mut |s| println!("{s}")).await?;
+    let parsed = remove_profile_with_backup(Path::new("."), &mut link, &uuid, None).await?;
     println!(
         "{}",
         crate::tr!(
@@ -644,7 +651,7 @@ async fn cmd_profile_restore(addr: Option<SocketAddr>, file: Option<String>) -> 
         "il file non è un profilo valido",
         "the file is not a valid provisioning profile"
     ))?;
-    let mut link = open_phone(addr, &mut |s| println!("{s}")).await?;
+    let mut link = open_phone(Path::new("."), addr, &mut |s| println!("{s}")).await?;
     link.install_profile(bytes).await?;
     println!(
         "{}",
@@ -826,6 +833,7 @@ async fn run() -> Result<(), String> {
             // Explicit --force without --installed-only retains manual override behavior.
             let installed_only = flag("--installed-only") || (!force && bundle.is_none());
             cmd_renew(
+                Path::new("."),
                 phone_addr(opt("--phone"))?,
                 flag("--dry-run"),
                 force,
@@ -860,6 +868,7 @@ async fn run() -> Result<(), String> {
             let phone = phone_addr(opt("--phone"))?;
             web::check_options(bind, &pin)?;
             apple::anisette_choice(Path::new("."))?;
+            altserver::set_profile_dir(std::env::current_dir().map_err(dbg)?);
             if flag("--altserver") {
                 let port = altserver::start(altserver_port(opt("--altserver-port"))?, phone)?;
                 start_dnssd(&opt, port)?;
@@ -870,7 +879,8 @@ async fn run() -> Result<(), String> {
                 )
                 .into());
             }
-            web::serve(bind, pin, phone).await
+            let dir = std::env::current_dir().map_err(dbg)?;
+            web::serve(bind, pin, phone, dir).await
         }
         #[cfg(any(windows, target_os = "macos"))]
         "tray" => {
@@ -912,6 +922,7 @@ async fn run() -> Result<(), String> {
             let phone = phone_addr(opt("--phone"))?;
             let start = || -> Result<(), String> {
                 apple::anisette_choice(Path::new("."))?;
+                altserver::set_profile_dir(dir.clone());
                 let port = altserver::start(altserver_port(opt("--altserver-port"))?, phone)?;
                 start_dnssd(&opt, port)
             };
@@ -932,9 +943,10 @@ async fn run() -> Result<(), String> {
             }
             update::cleanup(&exe);
             let rt = tokio::runtime::Handle::current();
+            let web_dir = dir.clone();
             let start_web = move |proxy: tao::event_loop::EventLoopProxy<tray::UserEvent>| {
                 rt.spawn(async move {
-                    if let Err(e) = web::serve(bind, None, phone).await {
+                    if let Err(e) = web::serve(bind, None, phone, web_dir).await {
                         let _ = proxy.send_event(tray::UserEvent::ServerFailed(e));
                     }
                 });
@@ -966,6 +978,7 @@ async fn run() -> Result<(), String> {
             }
             log::init(Path::new("."));
             apple::anisette_choice(Path::new("."))?;
+            altserver::set_profile_dir(std::env::current_dir().map_err(dbg)?);
             let port =
                 altserver::start(altserver_port(opt("--port"))?, phone_addr(opt("--phone"))?)?;
             start_dnssd(&opt, port)?;

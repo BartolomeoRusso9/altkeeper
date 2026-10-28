@@ -336,6 +336,14 @@ on the machine itself and needs no PIN; on any other address it **refuses to sta
 The web page has no HTTPS: keep it inside your home network. The web page's own sign-in and renew
 were not run against Apple yet.
 
+The device selector at the top lets you manage multiple iPhones with separate Apple accounts.
+Choose **Add device**, name the profile, then select it to pair the phone and sign in to its
+account. Each profile keeps its own account, pairing, saved phone addresses, settings, renewal
+schedule, logs and backups. Existing files remain in the original/default profile; new profiles are
+stored under `devices/`. Automatic renewal is scheduled separately for each profile, with only one
+phone operation running at a time. AltServer remains a single network service and uses the currently
+selected profile.
+
 From a PC, you can also upload an `.ipa` in **Install an app from this PC**. AltKeeper signs it with
 the configured Apple ID and installs it on the iPhone over Wi-Fi. This requires the Apple ID
 password to be saved in `account.json`; enter the 2FA code in the page if Apple asks for it. Signing

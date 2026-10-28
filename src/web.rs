@@ -26,8 +26,9 @@ use axum::{
 };
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
+use tower::ServiceExt as _;
 
-use crate::{apple, phone, profile, PAIRING_FILE};
+use crate::{apple, devices, phone, profile, PAIRING_FILE};
 
 const INDEX_HTML: &str = include_str!("web/index.html");
 const APPLE_TOUCH_ICON: &[u8] = include_bytes!("web/apple-touch-icon.png");
@@ -44,13 +45,16 @@ const MAX_JOB_LINES: usize = 300;
 const CHECK_TIMEOUT: Duration = Duration::from_secs(45 + 12 * phone::MAX_SAVED_ADDRESSES as u64);
 const MAX_IPA_BYTES: usize = 1024 * 1024 * 1024;
 const PENDING_IPA_TTL: u64 = 15 * 60;
+static ANY_PROFILE_BUSY: AtomicBool = AtomicBool::new(false);
 
 // ---------------------------------------------------------------------------------------------
 // Stato condiviso
 // ---------------------------------------------------------------------------------------------
 
 struct App {
-    pin: Option<String>,
+    dir: PathBuf,
+    device_id: String,
+    device_name: String,
     phone: Option<SocketAddr>,
     /// C'è già un lavoro in corso (controllo, rinnovo o login).
     busy: AtomicBool,
@@ -59,6 +63,19 @@ struct App {
     auto_renew: Mutex<AutoRenewConfig>,
     pending_ipa: Mutex<Option<PendingIpa>>,
     renewal_wait: crate::renewal_wait::Control,
+}
+
+struct DeviceRuntime {
+    app: Arc<App>,
+    router: Router,
+}
+
+struct DeviceManager {
+    root: PathBuf,
+    pin: Option<String>,
+    profiles: tokio::sync::RwLock<std::collections::HashMap<String, DeviceRuntime>>,
+    devices: tokio::sync::RwLock<Vec<devices::Device>>,
+    active_id: Mutex<String>,
 }
 
 #[derive(Default, Clone)]
@@ -148,16 +165,26 @@ struct BusyGuard {
 impl Drop for BusyGuard {
     fn drop(&mut self) {
         self.app.busy.store(false, Ordering::SeqCst);
+        ANY_PROFILE_BUSY.store(false, Ordering::SeqCst);
     }
 }
 
 fn try_busy(app: &Arc<App>) -> Option<BusyGuard> {
-    app.busy
+    ANY_PROFILE_BUSY
         .compare_exchange(false, true, Ordering::SeqCst, Ordering::SeqCst)
         .ok()
-        .map(|_| BusyGuard {
-            app: app.clone(),
-            _auto_pair_pause: phone::pause_auto_pairing(),
+        .and_then(|_| {
+            app.busy
+                .compare_exchange(false, true, Ordering::SeqCst, Ordering::SeqCst)
+                .ok()
+                .map(|_| BusyGuard {
+                    app: app.clone(),
+                    _auto_pair_pause: phone::pause_auto_pairing(),
+                })
+                .or_else(|| {
+                    ANY_PROFILE_BUSY.store(false, Ordering::SeqCst);
+                    None
+                })
         })
 }
 
@@ -274,8 +301,8 @@ fn next_auto_run(config: &AutoRenewConfig, now_secs: u64) -> Option<u64> {
     Some(scheduled_day * DAY_SECS + target)
 }
 
-fn load_auto_renew() -> AutoRenewConfig {
-    let raw = match std::fs::read_to_string(AUTO_RENEW_CONFIG) {
+fn load_auto_renew(dir: &Path) -> AutoRenewConfig {
+    let raw = match std::fs::read_to_string(dir.join(AUTO_RENEW_CONFIG)) {
         Ok(raw) => raw,
         Err(e) if e.kind() == std::io::ErrorKind::NotFound => return AutoRenewConfig::default(),
         Err(e) => {
@@ -298,14 +325,15 @@ fn load_auto_renew() -> AutoRenewConfig {
     }
 }
 
-fn save_auto_renew(config: &AutoRenewConfig) -> Result<(), String> {
-    std::fs::create_dir_all("state").map_err(crate::phone::dbg)?;
-    crate::fsperm::restrict_dir(Path::new("state")).map_err(crate::phone::dbg)?;
+fn save_auto_renew(dir: &Path, config: &AutoRenewConfig) -> Result<(), String> {
+    let state = dir.join("state");
+    std::fs::create_dir_all(&state).map_err(crate::phone::dbg)?;
+    crate::fsperm::restrict_dir(&state).map_err(crate::phone::dbg)?;
     let data = serde_json::to_vec_pretty(config).map_err(crate::phone::dbg)?;
     // Atomic write: avoid resetting the persistent on/off state after an interrupted write.
-    let tmp = Path::new("state/auto-renew.json.tmp");
-    crate::fsperm::write_private(tmp, &data).map_err(crate::phone::dbg)?;
-    std::fs::rename(tmp, AUTO_RENEW_CONFIG).map_err(crate::phone::dbg)
+    let tmp = state.join("auto-renew.json.tmp");
+    crate::fsperm::write_private(&tmp, &data).map_err(crate::phone::dbg)?;
+    std::fs::rename(tmp, dir.join(AUTO_RENEW_CONFIG)).map_err(crate::phone::dbg)
 }
 
 fn retryable_renew_error(err: &str) -> bool {
@@ -349,23 +377,23 @@ fn validate_discord_webhook(url: &str) -> bool {
             .all(|b| b.is_ascii_alphanumeric() || b == b'-' || b == b'_')
 }
 
-fn discord_configured() -> bool {
-    std::fs::read_to_string(DISCORD_WEBHOOK_FILE)
+fn discord_configured(dir: &Path) -> bool {
+    std::fs::read_to_string(dir.join(DISCORD_WEBHOOK_FILE))
         .ok()
         .is_some_and(|url| validate_discord_webhook(url.trim()))
 }
 
-fn send_discord_failure(error: &str) -> Result<(), String> {
+fn send_discord_failure(dir: &Path, error: &str) -> Result<(), String> {
     let message = format!(
         "AltKeeper: automatic renewal failed after retries.\n{}",
         error.chars().take(240).collect::<String>()
     );
-    send_discord_message(&message)
+    send_discord_message(dir, &message)
 }
 
-fn send_discord_message(message: &str) -> Result<(), String> {
+fn send_discord_message(dir: &Path, message: &str) -> Result<(), String> {
     use std::io::Write;
-    let url = std::fs::read_to_string(DISCORD_WEBHOOK_FILE).map_err(crate::phone::dbg)?;
+    let url = std::fs::read_to_string(dir.join(DISCORD_WEBHOOK_FILE)).map_err(crate::phone::dbg)?;
     let url = url.trim();
     if !validate_discord_webhook(url) {
         return Err("Invalid Discord webhook configuration".into());
@@ -437,7 +465,7 @@ async fn auto_renew_loop(app: Arc<App>) {
                         updated.retry_count = 0;
                     }
                     updated.retry_at = None;
-                    if let Err(err) = save_auto_renew(&updated) {
+                    if let Err(err) = save_auto_renew(&app.dir, &updated) {
                         crate::log::err(&format!("[auto-renew] Could not persist attempt: {err}"));
                     } else {
                         let threshold = updated.min_days as i64;
@@ -483,25 +511,115 @@ pub async fn serve(
     bind: SocketAddr,
     pin: Option<String>,
     phone: Option<SocketAddr>,
+    dir: PathBuf,
 ) -> Result<(), String> {
     check_options(bind, &pin)?;
-    cleanup_orphaned_ipa_uploads();
     phone::start_auto_pair_monitor();
 
+    let registered = devices::load(&dir)?;
+    let active_id = devices::active_id(&dir, &registered)?;
+    let mut runtimes = std::collections::HashMap::new();
+    for device in &registered {
+        let runtime = create_device_runtime(&dir, device.clone(), phone);
+        runtimes.insert(device.id.clone(), runtime);
+    }
+    let manager = Arc::new(DeviceManager {
+        root: dir,
+        pin: pin.clone(),
+        profiles: tokio::sync::RwLock::new(runtimes),
+        devices: tokio::sync::RwLock::new(registered),
+        active_id: Mutex::new(active_id.clone()),
+    });
+    if let Some(runtime) = manager.profiles.read().await.get(&active_id) {
+        crate::altserver::set_profile_dir(runtime.app.dir.clone());
+    }
+    let router = device_manager_router(manager.clone());
+
+    let listener = tokio::net::TcpListener::bind(bind).await.map_err(|e| {
+        crate::tr!(
+            format!("non riesco ad ascoltare su {bind}: {e}"),
+            format!("cannot listen on {bind}: {e}")
+        )
+    })?;
+    crate::log::line(&crate::tr!(
+        format!(
+            "Interfaccia web su http://{bind} ({})",
+            if manager.pin.is_some() {
+                "protetta da PIN: il nome utente può essere qualsiasi"
+            } else {
+                "raggiungibile solo da questo computer"
+            }
+        ),
+        format!(
+            "Web interface at http://{bind} ({})",
+            if manager.pin.is_some() {
+                "PIN-protected: any username is accepted"
+            } else {
+                "only accessible from this computer"
+            }
+        )
+    ));
+    let cleanup_root = manager.root.clone();
+    tokio::spawn(async move {
+        loop {
+            match profile::cleanup_backups_if_due(&cleanup_root, SystemTime::now()) {
+                Ok(Some(removed)) => crate::log::line(&format!(
+                    "[backup-cleanup] Monthly sweep: removed {removed} profiles expired over 30 days ago"
+                )),
+                Ok(None) => {}
+                Err(e) => crate::log::err(&format!("[backup-cleanup] Failed: {e}")),
+            }
+            tokio::time::sleep(Duration::from_secs(24 * 60 * 60)).await;
+        }
+    });
+    axum::serve(listener, router)
+        .await
+        .map_err(|e| format!("{e:?}"))
+}
+
+fn device_manager_router(manager: Arc<DeviceManager>) -> Router {
+    Router::new()
+        .route("/api/devices", get(list_devices).post(add_device))
+        .route("/api/devices/select", post(select_device))
+        .route("/", get(index))
+        .route("/apple-touch-icon.png", get(apple_touch_icon))
+        .route("/favicon-32.png", get(favicon_32))
+        .fallback(dispatch_device_request)
+        .layer(middleware::from_fn_with_state(
+            manager.clone(),
+            manager_guard,
+        ))
+        .with_state(manager)
+}
+
+fn create_device_runtime(
+    root: &Path,
+    device: devices::Device,
+    phone: Option<SocketAddr>,
+) -> DeviceRuntime {
+    let dir = device.directory(root);
+    cleanup_orphaned_ipa_uploads(&dir);
     let app = Arc::new(App {
-        pin,
+        dir: dir.clone(),
+        device_id: device.id.clone(),
+        device_name: device.name.clone(),
         phone,
         busy: AtomicBool::new(false),
         inner: Mutex::new(Inner::default()),
         tfa: Arc::new(apple::TfaChannel::default()),
-        auto_renew: Mutex::new(load_auto_renew()),
+        auto_renew: Mutex::new(load_auto_renew(&dir)),
         pending_ipa: Mutex::new(None),
         renewal_wait: crate::renewal_wait::Control::default(),
     });
-    let router = Router::new()
-        .route("/", get(index))
-        .route("/apple-touch-icon.png", get(apple_touch_icon))
-        .route("/favicon-32.png", get(favicon_32))
+    tokio::spawn(auto_renew_loop(app.clone()));
+    DeviceRuntime {
+        router: profile_router(app.clone()),
+        app,
+    }
+}
+
+fn profile_router(app: Arc<App>) -> Router {
+    Router::new()
         .route("/api/state", get(state))
         .route("/api/logs", get(logs))
         .route("/api/check", post(check))
@@ -529,73 +647,143 @@ pub async fn serve(
         .route("/api/login", post(login))
         .route("/api/login/code", post(login_code))
         .route("/api/login/resend", post(login_resend))
-        .layer(middleware::from_fn_with_state(app.clone(), guard))
-        .with_state(app.clone());
-
-    let listener = tokio::net::TcpListener::bind(bind).await.map_err(|e| {
-        crate::tr!(
-            format!("non riesco ad ascoltare su {bind}: {e}"),
-            format!("cannot listen on {bind}: {e}")
-        )
-    })?;
-    crate::log::line(&crate::tr!(
-        format!(
-            "Interfaccia web su http://{bind} ({})",
-            if app.pin.is_some() {
-                "protetta da PIN: il nome utente può essere qualsiasi"
-            } else {
-                "raggiungibile solo da questo computer"
-            }
-        ),
-        format!(
-            "Web interface at http://{bind} ({})",
-            if app.pin.is_some() {
-                "PIN-protected: any username is accepted"
-            } else {
-                "only accessible from this computer"
-            }
-        )
-    ));
-    // Built-in scheduler; no systemd socket/host privileges or separate cron required.
-    tokio::spawn(auto_renew_loop(app.clone()));
-    // Runs independently of iPhone communications and renewal. Check daily but
-    // perform a sweep only if 30 days have passed since the last successful sweep.
-    tokio::spawn(async {
-        loop {
-            match profile::cleanup_backups_if_due(SystemTime::now()) {
-                Ok(Some(removed)) => crate::log::line(&format!(
-                    "[backup-cleanup] Monthly sweep: removed {removed} profiles expired over 30 days ago"
-                )),
-                Ok(None) => {}
-                Err(e) => crate::log::err(&format!("[backup-cleanup] Failed: {e}")),
-            }
-            tokio::time::sleep(Duration::from_secs(24 * 60 * 60)).await;
-        }
-    });
-    axum::serve(listener, router)
-        .await
-        .map_err(|e| format!("{e:?}"))
+        .with_state(app.clone())
 }
 
-// ---------------------------------------------------------------------------------------------
-// Protezione
-// ---------------------------------------------------------------------------------------------
+async fn list_devices(State(manager): State<Arc<DeviceManager>>) -> Json<Value> {
+    let devices = manager.devices.read().await;
+    let selected = manager
+        .active_id
+        .lock()
+        .unwrap_or_else(|error| error.into_inner())
+        .clone();
+    Json(json!({
+        "devices": devices.iter().map(|device| json!({
+            "id": device.id,
+            "name": device.name,
+        })).collect::<Vec<_>>(),
+        "selected": selected,
+    }))
+}
 
-async fn guard(State(app): State<Arc<App>>, req: Request, next: Next) -> Response {
-    // iOS Safari can fetch favorite icons separately from the authenticated tab,
-    // so only these two fixed, non-sensitive PNGs are served without the PIN.
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct AddDeviceReq {
+    name: String,
+}
+
+async fn add_device(
+    State(manager): State<Arc<DeviceManager>>,
+    Json(req): Json<AddDeviceReq>,
+) -> (StatusCode, Json<Value>) {
+    let mut devices = manager.devices.write().await;
+    let device = match devices::add(&manager.root, &mut devices, &req.name) {
+        Ok(device) => device,
+        Err(error) => return json_err(StatusCode::BAD_REQUEST, &error),
+    };
+    let runtime = create_device_runtime(
+        &manager.root,
+        device.clone(),
+        manager
+            .profiles
+            .read()
+            .await
+            .values()
+            .next()
+            .and_then(|runtime| runtime.app.phone),
+    );
+    manager
+        .profiles
+        .write()
+        .await
+        .insert(device.id.clone(), runtime);
+    (
+        StatusCode::CREATED,
+        Json(json!({ "ok": true, "device": device })),
+    )
+}
+
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct SelectDeviceReq {
+    id: String,
+}
+
+async fn select_device(
+    State(manager): State<Arc<DeviceManager>>,
+    Json(req): Json<SelectDeviceReq>,
+) -> (StatusCode, Json<Value>) {
+    let profiles = manager.profiles.read().await;
+    let Some(runtime) = profiles.get(&req.id) else {
+        return json_err(StatusCode::NOT_FOUND, "Device profile not found.");
+    };
+    if let Err(error) = devices::save_active(&manager.root, &req.id) {
+        return json_err(
+            StatusCode::INTERNAL_SERVER_ERROR,
+            &format!("Cannot save selected device: {error}"),
+        );
+    }
+    let directory = runtime.app.dir.clone();
+    drop(profiles);
+    *manager
+        .active_id
+        .lock()
+        .unwrap_or_else(|error| error.into_inner()) = req.id.clone();
+    crate::altserver::set_profile_dir(directory);
+    (
+        StatusCode::OK,
+        Json(json!({ "ok": true, "selected": req.id })),
+    )
+}
+
+async fn dispatch_device_request(
+    State(manager): State<Arc<DeviceManager>>,
+    request: Request,
+) -> Response {
+    let requested = request
+        .headers()
+        .get("x-altkeeper-device")
+        .and_then(|value| value.to_str().ok())
+        .map(str::to_owned)
+        .unwrap_or_else(|| {
+            manager
+                .active_id
+                .lock()
+                .unwrap_or_else(|error| error.into_inner())
+                .clone()
+        });
+    let profiles = manager.profiles.read().await;
+    let Some(runtime) = profiles.get(&requested) else {
+        return json_err(
+            StatusCode::NOT_FOUND,
+            "Device profile not found. Refresh the device list.",
+        )
+        .into_response();
+    };
+    runtime
+        .router
+        .clone()
+        .oneshot(request)
+        .await
+        .unwrap_or_else(|never| match never {})
+}
+
+async fn manager_guard(
+    State(manager): State<Arc<DeviceManager>>,
+    req: Request,
+    next: Next,
+) -> Response {
     let public_icon = req.method() == Method::GET
         && matches!(
             req.uri().path(),
             "/apple-touch-icon.png" | "/favicon-32.png"
         );
-    if !public_icon && app.pin.is_none() && !host_is_local(req.headers()) {
+    if !public_icon && manager.pin.is_none() && !host_is_local(req.headers()) {
         return (StatusCode::FORBIDDEN, "host non ammesso").into_response();
     }
     if !public_icon {
-        if let Some(pin) = &app.pin {
+        if let Some(pin) = &manager.pin {
             if !basic_password_ok(req.headers(), pin) {
-                // Rallenta chi prova PIN a caso.
                 tokio::time::sleep(Duration::from_secs(1)).await;
                 let mut res = (StatusCode::UNAUTHORIZED, "serve il PIN").into_response();
                 res.headers_mut().insert(
@@ -612,25 +800,12 @@ async fn guard(State(app): State<Arc<App>>, req: Request, next: Next) -> Respons
         return (StatusCode::FORBIDDEN, "richiesta non valida").into_response();
     }
     let mut res = next.run(req).await;
-    let h = res.headers_mut();
-    h.insert(
-        header::CACHE_CONTROL,
-        HeaderValue::from_static(if public_icon {
-            "public, max-age=86400"
-        } else {
-            "no-store"
-        }),
-    );
-    h.insert(
-        header::X_CONTENT_TYPE_OPTIONS,
-        HeaderValue::from_static("nosniff"),
-    );
-    h.insert(header::X_FRAME_OPTIONS, HeaderValue::from_static("DENY"));
-    h.insert(
-        header::REFERRER_POLICY,
-        HeaderValue::from_static("no-referrer"),
-    );
-    h.insert(
+    let headers = res.headers_mut();
+    headers.insert(header::CACHE_CONTROL, HeaderValue::from_static("no-store"));
+    headers.insert(header::X_CONTENT_TYPE_OPTIONS, HeaderValue::from_static("nosniff"));
+    headers.insert(header::X_FRAME_OPTIONS, HeaderValue::from_static("DENY"));
+    headers.insert(header::REFERRER_POLICY, HeaderValue::from_static("no-referrer"));
+    headers.insert(
         header::CONTENT_SECURITY_POLICY,
         HeaderValue::from_static(
             "default-src 'none'; connect-src 'self'; img-src 'self' data:; style-src 'unsafe-inline'; \
@@ -639,6 +814,10 @@ async fn guard(State(app): State<Arc<App>>, req: Request, next: Next) -> Respons
     );
     res
 }
+
+// ---------------------------------------------------------------------------------------------
+// Protezione
+// ---------------------------------------------------------------------------------------------
 
 /// Senza PIN si ascolta solo in locale: accetta solo `localhost` e gli indirizzi di loopback
 /// (evita che un sito esterno, con un nome che punta qui, usi il servizio).
@@ -756,8 +935,8 @@ async fn logs(uri: Uri) -> Json<Value> {
 
 async fn state(State(app): State<Arc<App>>) -> Json<Value> {
     expire_pending_ipa(&app);
-    let account = apple::read_account(Path::new("."));
-    let pairing = Path::new(PAIRING_FILE).exists();
+    let account = apple::read_account(&app.dir);
+    let pairing = app.dir.join(PAIRING_FILE).exists();
 
     // Se i dati sul telefono sono vecchi, si riguarda in background senza far aspettare la pagina.
     let stale = {
@@ -771,7 +950,7 @@ async fn state(State(app): State<Arc<App>>) -> Json<Value> {
         }
     }
 
-    let history = std::fs::read_to_string(RENEW_LOG)
+    let history = std::fs::read_to_string(app.dir.join(RENEW_LOG))
         .map(|t| parse_history(&t, 6))
         .unwrap_or_default();
     // Copy the view and release its mutex before reading the schedule. Never
@@ -786,17 +965,20 @@ async fn state(State(app): State<Arc<App>>) -> Json<Value> {
     let asking = app.tfa.asking.load(Ordering::SeqCst);
     let login_phase = if asking { "needs_code" } else { g.login.phase };
     let code_error = app.tfa.last_error.lock().ok().and_then(|e| e.clone());
-    let phone_addresses = phone::saved_addresses();
-    let is_renewal = g.job.kind.starts_with("renew");
-    let anisette = apple::anisette_choice(Path::new("."));
+    let phone_addresses = phone::saved_addresses_in(&app.dir);
+    let is_renewal = g.job.kind.starts_with("renew") || g.job.kind == "auto_renew";
+    let anisette = apple::anisette_choice(&app.dir);
 
     Json(json!({
         "now": now(),
-        "busy": app.busy.load(Ordering::SeqCst),
+        "busy": app.busy.load(Ordering::SeqCst) || ANY_PROFILE_BUSY.load(Ordering::SeqCst),
         "pairing": pairing,
+        "device": { "id": app.device_id, "name": app.device_name },
         "auto_pair": {
-            "enabled": phone::auto_pair_configured(),
-            "locked": crate::env::is_set("NO_USB") || crate::env::is_set("NO_AUTO_PAIR"),
+            "enabled": app.device_id == "default" && phone::auto_pair_configured_in(&app.dir),
+            "locked": app.device_id != "default"
+                || crate::env::is_set("NO_USB")
+                || crate::env::is_set("NO_AUTO_PAIR"),
         },
         "auto_renew": {
             "enabled": schedule.enabled,
@@ -805,7 +987,7 @@ async fn state(State(app): State<Arc<App>>) -> Json<Value> {
             "retry_count": schedule.retry_count,
             "retry_at": schedule.retry_at,
             "last_error": schedule.last_error,
-            "discord_configured": discord_configured(),
+            "discord_configured": discord_configured(&app.dir),
             "time_zone": "UTC",
             "next_run": next_scheduled,
         },
@@ -870,8 +1052,8 @@ async fn state(State(app): State<Arc<App>>) -> Json<Value> {
         },
         "history": history,
         "backups": account.as_ref().and_then(|a| a.team_id.as_deref())
-            .map(backup_views).unwrap_or_default(),
-        "app_status": std::fs::read_to_string(APP_STATUS_FILE).ok()
+            .map(|team| backup_views(&app.dir, team)).unwrap_or_default(),
+        "app_status": std::fs::read_to_string(app.dir.join(APP_STATUS_FILE)).ok()
             .and_then(|s| serde_json::from_str::<Value>(&s).ok())
             .unwrap_or(json!({})),
     }))
@@ -892,11 +1074,14 @@ struct PhoneAddressesReq {
     addresses: Vec<String>,
 }
 
-async fn update_phone_addresses(Json(req): Json<PhoneAddressesReq>) -> (StatusCode, Json<Value>) {
+async fn update_phone_addresses(
+    State(app): State<Arc<App>>,
+    Json(req): Json<PhoneAddressesReq>,
+) -> (StatusCode, Json<Value>) {
     if let Err(error) = phone::validate_addresses(&req.addresses) {
         return json_err(StatusCode::BAD_REQUEST, &error);
     }
-    match phone::save_addresses(&req.addresses) {
+    match phone::save_addresses_in(&app.dir, &req.addresses) {
         Ok(addresses) => (
             StatusCode::OK,
             Json(json!({
@@ -917,7 +1102,16 @@ struct AutoPairReq {
     enabled: bool,
 }
 
-async fn update_auto_pair(Json(req): Json<AutoPairReq>) -> (StatusCode, Json<Value>) {
+async fn update_auto_pair(
+    State(app): State<Arc<App>>,
+    Json(req): Json<AutoPairReq>,
+) -> (StatusCode, Json<Value>) {
+    if app.device_id != "default" {
+        return json_err(
+            StatusCode::CONFLICT,
+            "Automatic USB pairing is currently managed by the default device profile.",
+        );
+    }
     if req.enabled && (crate::env::is_set("NO_USB") || crate::env::is_set("NO_AUTO_PAIR")) {
         return json_err(
             StatusCode::CONFLICT,
@@ -925,7 +1119,7 @@ async fn update_auto_pair(Json(req): Json<AutoPairReq>) -> (StatusCode, Json<Val
         );
     }
     if req.enabled {
-        match std::fs::remove_file(AUTO_PAIR_OFF_FILE) {
+        match std::fs::remove_file(app.dir.join(AUTO_PAIR_OFF_FILE)) {
             Ok(()) => {}
             Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
             Err(error) => {
@@ -936,9 +1130,10 @@ async fn update_auto_pair(Json(req): Json<AutoPairReq>) -> (StatusCode, Json<Val
             }
         }
     } else {
-        if let Err(error) = std::fs::create_dir_all("state")
-            .and_then(|_| crate::fsperm::restrict_dir(Path::new("state")))
-            .and_then(|_| crate::fsperm::write_private(Path::new(AUTO_PAIR_OFF_FILE), b"1"))
+        let state = app.dir.join("state");
+        if let Err(error) = std::fs::create_dir_all(&state)
+            .and_then(|_| crate::fsperm::restrict_dir(&state))
+            .and_then(|_| crate::fsperm::write_private(&app.dir.join(AUTO_PAIR_OFF_FILE), b"1"))
         {
             return json_err(
                 StatusCode::INTERNAL_SERVER_ERROR,
@@ -962,12 +1157,13 @@ async fn pair_usb(State(app): State<Arc<App>>) -> (StatusCode, Json<Value>) {
         lines: vec!["Pairing iPhone over USB…".into()],
         ok: None,
     };
-    spawn_job(guard, run_pair_usb);
+    let output = app.dir.join(PAIRING_FILE);
+    spawn_job(guard, move |app| run_pair_usb(app, output));
     json_ok()
 }
 
-async fn run_pair_usb(app: Arc<App>) {
-    let result = phone::pair_usb(PAIRING_FILE).await;
+async fn run_pair_usb(app: Arc<App>, output: PathBuf) {
+    let result = phone::pair_usb(&output.to_string_lossy()).await;
     match &result {
         Ok(()) => app.push_line("USB pairing created successfully."),
         Err(error) => app.push_line(&format!("Error: {error}")),
@@ -1015,7 +1211,7 @@ async fn update_anisette(
         );
     }
     let choice = match apple::save_anisette_choice(
-        Path::new("."),
+        &app.dir,
         if req.clear { None } else { req.url.as_deref() },
     ) {
         Ok(choice) => choice,
@@ -1038,7 +1234,7 @@ async fn test_anisette(State(app): State<Arc<App>>) -> (StatusCode, Json<Value>)
     let Some(_guard) = try_busy(&app) else {
         return json_err(StatusCode::CONFLICT, BUSY_MSG);
     };
-    match apple::anisette_for_altstore(Path::new(".")).await {
+    match apple::anisette_for_altstore(&app.dir).await {
         Ok(_) => json_ok(),
         Err(error) => json_err(
             StatusCode::BAD_GATEWAY,
@@ -1069,7 +1265,7 @@ async fn update_auto_renew(
         );
     }
     if req.enabled {
-        match apple::read_account(Path::new(".")) {
+        match apple::read_account(&app.dir) {
             Some(acc) if !acc.password.is_empty() && acc.team_id.is_some() => {}
             _ => {
                 return json_err(
@@ -1096,7 +1292,7 @@ async fn update_auto_renew(
         updated.retry_at = None;
         updated.retry_count = 0;
     }
-    if let Err(err) = save_auto_renew(&updated) {
+    if let Err(err) = save_auto_renew(&app.dir, &updated) {
         return json_err(
             StatusCode::INTERNAL_SERVER_ERROR,
             &format!("Cannot save schedule: {err}"),
@@ -1106,8 +1302,8 @@ async fn update_auto_renew(
     json_ok()
 }
 
-fn backup_views(team: &str) -> Vec<Value> {
-    let Ok(entries) = std::fs::read_dir(crate::SAVED_DIR) else {
+fn backup_views(dir: &Path, team: &str) -> Vec<Value> {
+    let Ok(entries) = std::fs::read_dir(dir.join(crate::SAVED_DIR)) else {
         return Vec::new();
     };
     let mut result = Vec::new();
@@ -1150,9 +1346,12 @@ struct DiscordReq {
     clear: bool,
 }
 
-async fn update_discord(Json(req): Json<DiscordReq>) -> (StatusCode, Json<Value>) {
+async fn update_discord(
+    State(app): State<Arc<App>>,
+    Json(req): Json<DiscordReq>,
+) -> (StatusCode, Json<Value>) {
     if req.clear {
-        match std::fs::remove_file(DISCORD_WEBHOOK_FILE) {
+        match std::fs::remove_file(app.dir.join(DISCORD_WEBHOOK_FILE)) {
             Ok(()) => return json_ok(),
             Err(e) if e.kind() == std::io::ErrorKind::NotFound => return json_ok(),
             Err(_) => {
@@ -1169,9 +1368,10 @@ async fn update_discord(Json(req): Json<DiscordReq>) -> (StatusCode, Json<Value>
             "Expected a valid Discord webhook URL.",
         );
     }
-    if std::fs::create_dir_all("state").is_err()
-        || crate::fsperm::restrict_dir(Path::new("state")).is_err()
-        || crate::fsperm::write_private(Path::new(DISCORD_WEBHOOK_FILE), webhook.as_bytes())
+    let state = app.dir.join("state");
+    if std::fs::create_dir_all(&state).is_err()
+        || crate::fsperm::restrict_dir(&state).is_err()
+        || crate::fsperm::write_private(&app.dir.join(DISCORD_WEBHOOK_FILE), webhook.as_bytes())
             .is_err()
     {
         return json_err(StatusCode::INTERNAL_SERVER_ERROR, "Could not save webhook");
@@ -1180,16 +1380,18 @@ async fn update_discord(Json(req): Json<DiscordReq>) -> (StatusCode, Json<Value>
 }
 
 /// User-initiated delivery check; never creates or renews a profile.
-async fn test_discord() -> (StatusCode, Json<Value>) {
-    if !discord_configured() {
+async fn test_discord(State(app): State<Arc<App>>) -> (StatusCode, Json<Value>) {
+    if !discord_configured(&app.dir) {
         return json_err(
             StatusCode::BAD_REQUEST,
             "Configure a Discord webhook first.",
         );
     }
     // curl is synchronous; leave Tokio free while we wait for Discord.
-    let sent = tokio::task::spawn_blocking(|| {
+    let dir = app.dir.clone();
+    let sent = tokio::task::spawn_blocking(move || {
         send_discord_message(
+            &dir,
             "AltKeeper test notification: Discord webhook is working. No renewal was performed.",
         )
     })
@@ -1212,14 +1414,14 @@ async fn restore_profile(
     State(app): State<Arc<App>>,
     Json(req): Json<RestoreReq>,
 ) -> (StatusCode, Json<Value>) {
-    let team = apple::read_account(Path::new(".")).and_then(|a| a.team_id);
+    let team = apple::read_account(&app.dir).and_then(|a| a.team_id);
     let Some(team) = team else {
         return json_err(
             StatusCode::BAD_REQUEST,
             "Sign in before restoring profiles.",
         );
     };
-    if !backup_views(&team)
+    if !backup_views(&app.dir, &team)
         .iter()
         .any(|p| p["uuid"].as_str() == Some(&req.uuid))
     {
@@ -1250,13 +1452,14 @@ async fn run_restore_profile(app: Arc<App>, uuid: String, team: String) {
         {
             return Err("Invalid profile UUID".into());
         }
-        let path = Path::new(crate::SAVED_DIR).join(format!("{uuid}.mobileprovision"));
+        let path = app.dir.join(crate::SAVED_DIR).join(format!("{uuid}.mobileprovision"));
         let bytes = std::fs::read(path).map_err(crate::phone::dbg)?;
         let p = profile::parse(&bytes).ok_or("Invalid backup data")?;
         if !p.uuid.eq_ignore_ascii_case(&uuid) || p.team_id.as_deref() != Some(&team) {
             return Err("Backup does not belong to the configured Apple team".into());
         }
-        let (_, mut link) = phone::connect_auto(app.phone, PAIRING_FILE, |_: &str| {}).await?;
+        let (_, mut link) =
+            phone::connect_auto_in(&app.dir, app.phone, PAIRING_FILE, |_: &str| {}).await?;
         phone::with_timeout(
             "Profile restore",
             Duration::from_secs(60),
@@ -1310,7 +1513,7 @@ async fn renew(
         }
         _ => return json_err(StatusCode::BAD_REQUEST, "Invalid mode"),
     };
-    match apple::read_account(Path::new(".")) {
+    match apple::read_account(&app.dir) {
         Some(a) if !a.password.is_empty() && a.team_id.is_some() => {}
         _ => {
             return json_err(
@@ -1387,8 +1590,8 @@ async fn remove_profile(
 }
 
 /// Remove abandoned uploads from previous processes (the active process owns none at startup).
-fn cleanup_orphaned_ipa_uploads() {
-    let dir = Path::new("state/uploads");
+fn cleanup_orphaned_ipa_uploads(root: &Path) {
+    let dir = root.join("state/uploads");
     let Ok(entries) = std::fs::read_dir(dir) else {
         return;
     };
@@ -1452,8 +1655,8 @@ impl Drop for UploadInProgress {
     }
 }
 
-fn new_upload_file() -> Result<(PathBuf, std::fs::File), String> {
-    let dir = Path::new("state").join("uploads");
+fn new_upload_file(root: &Path) -> Result<(PathBuf, std::fs::File), String> {
+    let dir = root.join("state").join("uploads");
     std::fs::create_dir_all(&dir).map_err(|e| format!("Cannot create upload directory: {e}"))?;
     crate::fsperm::restrict_dir(&dir)
         .map_err(|e| format!("Cannot protect upload directory: {e}"))?;
@@ -1482,7 +1685,10 @@ fn new_upload_file() -> Result<(PathBuf, std::fs::File), String> {
     Ok((path, file))
 }
 
-async fn receive_ipa(multipart: &mut Multipart) -> Result<UploadedIpa, (StatusCode, String)> {
+async fn receive_ipa(
+    multipart: &mut Multipart,
+    root: &Path,
+) -> Result<UploadedIpa, (StatusCode, String)> {
     use std::io::Write as _;
 
     let mut upload: Option<UploadInProgress> = None;
@@ -1504,7 +1710,8 @@ async fn receive_ipa(multipart: &mut Multipart) -> Result<UploadedIpa, (StatusCo
                 "Choose a file with the .ipa extension.".into(),
             ));
         }
-        let (path, file) = new_upload_file().map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e))?;
+        let (path, file) =
+            new_upload_file(root).map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e))?;
         upload = Some(UploadInProgress {
             path,
             file: Some(file),
@@ -1565,7 +1772,7 @@ async fn install(
     State(app): State<Arc<App>>,
     mut multipart: Multipart,
 ) -> (StatusCode, Json<Value>) {
-    match apple::read_account(Path::new(".")) {
+    match apple::read_account(&app.dir) {
         Some(a) if !a.password.is_empty() && a.team_id.is_some() => {}
         _ => {
             return json_err(
@@ -1577,7 +1784,7 @@ async fn install(
     let Some(guard) = try_busy(&app) else {
         return json_err(StatusCode::CONFLICT, BUSY_MSG);
     };
-    let uploaded = match receive_ipa(&mut multipart).await {
+    let uploaded = match receive_ipa(&mut multipart, &app.dir).await {
         Ok(file) => file,
         Err((status, message)) => return json_err(status, &message),
     };
@@ -1601,7 +1808,7 @@ async fn inspect_install(
     uri: axum::http::Uri,
     mut multipart: Multipart,
 ) -> (StatusCode, Json<Value>) {
-    match apple::read_account(Path::new(".")) {
+    match apple::read_account(&app.dir) {
         Some(a) if !a.password.is_empty() && a.team_id.is_some() => {}
         _ => {
             return json_err(
@@ -1613,7 +1820,7 @@ async fn inspect_install(
     let Some(guard) = try_busy(&app) else {
         return json_err(StatusCode::CONFLICT, BUSY_MSG);
     };
-    let uploaded = match receive_ipa(&mut multipart).await {
+    let uploaded = match receive_ipa(&mut multipart, &app.dir).await {
         Ok(file) => file,
         Err((status, detail)) => return json_err(status, &detail),
     };
@@ -1863,10 +2070,11 @@ async fn login_resend(State(app): State<Arc<App>>) -> (StatusCode, Json<Value>) 
 /// Guarda cosa c'è sul telefono (senza toccare Apple).
 async fn run_check(app: Arc<App>) {
     app.lock().snapshot.checking = true;
-    let team = apple::read_account(Path::new(".")).and_then(|a| a.team_id);
+    let team = apple::read_account(&app.dir).and_then(|a| a.team_id);
 
     let result = tokio::time::timeout(CHECK_TIMEOUT, async {
-        let (addr, mut link) = phone::connect_auto(app.phone, PAIRING_FILE, |_: &str| {}).await?;
+        let (addr, mut link) =
+            phone::connect_auto_in(&app.dir, app.phone, PAIRING_FILE, |_: &str| {}).await?;
         let profiles = crate::phone_profiles(&mut link).await?;
         Ok::<_, String>((addr, profiles))
     })
@@ -1921,6 +2129,7 @@ async fn run_renew(
 ) {
     let mut say = |s: &str| app.push_line(&english_job_line(s));
     let result = crate::cmd_renew(
+        &app.dir,
         app.phone,
         false,
         force,
@@ -1942,7 +2151,7 @@ async fn run_renew(
         g.job.ok = Some(ok);
         g.job.lines.clone()
     };
-    append_log(&lines, ok);
+    append_log(&app.dir, &lines, ok);
     save_app_renew_status(&app, &lines, bundle.as_deref());
 
     if automatic {
@@ -1969,7 +2178,7 @@ async fn run_renew(
                 notify = true;
             }
         }
-        if let Err(e) = save_auto_renew(&updated) {
+        if let Err(e) = save_auto_renew(&app.dir, &updated) {
             crate::log::err(&format!("[auto-renew] Could not persist retry state: {e}"));
             retry_message = None;
         } else {
@@ -1980,9 +2189,9 @@ async fn run_renew(
         if let Some(message) = retry_message {
             app.push_line(&message);
         }
-        if notify && discord_configured() {
+        if notify && discord_configured(&app.dir) {
             let err = error.as_deref().unwrap_or("Unknown renewal error");
-            match send_discord_failure(err) {
+            match send_discord_failure(&app.dir, err) {
                 Ok(()) => app.push_line("Discord failure notification sent."),
                 Err(e) => app.push_line(&format!("Discord notification failed: {e}")),
             }
@@ -2046,25 +2255,26 @@ fn app_renew_updates(
 
 fn save_app_renew_status(app: &App, lines: &[String], selected: Option<&str>) {
     let groups = app.lock().snapshot.apps.clone();
-    let mut existing = std::fs::read_to_string(APP_STATUS_FILE)
+    let mut existing = std::fs::read_to_string(app.dir.join(APP_STATUS_FILE))
         .ok()
         .and_then(|s| serde_json::from_str::<serde_json::Map<String, Value>>(&s).ok())
         .unwrap_or_default();
     existing.extend(app_renew_updates(groups, lines, selected, now()));
-    if std::fs::create_dir_all("state").is_ok() {
+    if std::fs::create_dir_all(app.dir.join("state")).is_ok() {
         if let Ok(bytes) = serde_json::to_vec(&existing) {
-            let _ = crate::fsperm::write_private(Path::new(APP_STATUS_FILE), &bytes);
+            let _ = crate::fsperm::write_private(&app.dir.join(APP_STATUS_FILE), &bytes);
         }
     }
 }
 
 async fn run_remove_profile(app: Arc<App>, uuid: String) {
     let result: Result<(), String> = async {
-        let team = apple::read_account(Path::new("."))
+        let team = apple::read_account(&app.dir)
             .and_then(|a| a.team_id)
             .ok_or("Sign in to select a team before removing profiles.")?;
-        let (_, mut link) = phone::connect_auto(app.phone, PAIRING_FILE, |_: &str| {}).await?;
-        let p = crate::remove_profile_with_backup(&mut link, &uuid, Some(&team)).await?;
+        let (_, mut link) =
+            phone::connect_auto_in(&app.dir, app.phone, PAIRING_FILE, |_: &str| {}).await?;
+        let p = crate::remove_profile_with_backup(&app.dir, &mut link, &uuid, Some(&team)).await?;
         app.push_line(&format!(
             "Removed profile for {} [{}]. Backup saved in {}.",
             p.bundle_id.as_deref().unwrap_or("?"),
@@ -2129,9 +2339,9 @@ async fn install_ipa(
     selected_extensions: Option<&[String]>,
     identity: Option<&NewInstallIdentity>,
 ) -> Result<(), String> {
-    let account = apple::load_account(Path::new("."))?;
+    let account = apple::load_account(&app.dir)?;
     let mut session = apple::open_session_web(
-        Path::new("."),
+        &app.dir,
         &account.apple_id,
         &account.password,
         app.tfa.clone(),
@@ -2153,7 +2363,8 @@ async fn install_ipa(
     let (device_name, udid, _version) = {
         let _work = crate::altserver::phone_lock();
 
-        let (_, mut link) = phone::connect_auto(app.phone, PAIRING_FILE, |_: &str| {}).await?;
+        let (_, mut link) =
+            phone::connect_auto_in(&app.dir, app.phone, PAIRING_FILE, |_: &str| {}).await?;
         if let Some((raw, signed)) = expected_ids.as_ref() {
             let installed = phone::with_timeout(
                 "Installed app lookup",
@@ -2185,7 +2396,8 @@ async fn install_ipa(
     .await?;
 
     let _work = crate::altserver::phone_lock();
-    let (via, mut link) = phone::connect_auto(app.phone, PAIRING_FILE, |_: &str| {}).await?;
+    let (via, mut link) =
+        phone::connect_auto_in(&app.dir, app.phone, PAIRING_FILE, |_: &str| {}).await?;
     // Check once more immediately before installation to avoid replacing an app
     // that appeared while the IPA was signing.
     if let Some((raw, signed)) = expected_ids.as_ref() {
@@ -2237,7 +2449,7 @@ fn progress_step(percent: u64, last: i64) -> Option<i64> {
 }
 
 async fn run_login(app: Arc<App>, apple_id: String, password: String, save: bool) {
-    let dir = Path::new(".");
+    let dir = &app.dir;
     let outcome: Result<String, String> = async {
         let mut sess = apple::open_session_web(dir, &apple_id, &password, app.tfa.clone()).await?;
         let team = apple::pick_team(&mut sess, None, false).await?;
@@ -2601,11 +2813,11 @@ fn local_time() -> String {
         .unwrap_or_else(|| format!("epoch {}", now()))
 }
 
-fn append_log(lines: &[String], ok: bool) {
+fn append_log(dir: &Path, lines: &[String], ok: bool) {
     let Ok(mut f) = std::fs::OpenOptions::new()
         .create(true)
         .append(true)
-        .open(RENEW_LOG)
+        .open(dir.join(RENEW_LOG))
     else {
         return;
     };
@@ -2622,6 +2834,65 @@ fn append_log(lines: &[String], ok: bool) {
 
 #[cfg(test)]
 mod tests {
+    #[tokio::test]
+    async fn api_routes_each_device_to_its_own_account_and_state() {
+        let root = tempfile::tempdir().unwrap();
+        let mut registered = devices::load(root.path()).unwrap();
+        let other = devices::add(root.path(), &mut registered, "Work phone").unwrap();
+        let default_dir = registered[0].directory(root.path());
+        std::fs::write(
+            default_dir.join("account.json"),
+            br#"{"apple_id":"personal@example.test","password":"one","team_id":"A"}"#,
+        )
+        .unwrap();
+        std::fs::write(
+            other.directory(root.path()).join("account.json"),
+            br#"{"apple_id":"work@example.test","password":"two","team_id":"B"}"#,
+        )
+        .unwrap();
+        let runtimes = registered
+            .iter()
+            .map(|device| {
+                (
+                    device.id.clone(),
+                    create_device_runtime(root.path(), device.clone(), None),
+                )
+            })
+            .collect();
+        let manager = Arc::new(DeviceManager {
+            root: root.path().to_path_buf(),
+            pin: None,
+            profiles: tokio::sync::RwLock::new(runtimes),
+            devices: tokio::sync::RwLock::new(registered.clone()),
+            active_id: Mutex::new("default".into()),
+        });
+        let router = device_manager_router(manager);
+
+        for (id, expected) in [
+            ("default", "personal@example.test"),
+            (other.id.as_str(), "work@example.test"),
+        ] {
+            let response = router
+                .clone()
+                .oneshot(
+                    Request::builder()
+                        .uri("/api/state")
+                        .header(header::HOST, "localhost")
+                        .header("x-altkeeper-device", id)
+                        .body(axum::body::Body::empty())
+                        .unwrap(),
+                )
+                .await
+                .unwrap();
+            assert_eq!(response.status(), StatusCode::OK);
+            let bytes = axum::body::to_bytes(response.into_body(), usize::MAX)
+                .await
+                .unwrap();
+            let value: Value = serde_json::from_slice(&bytes).unwrap();
+            assert_eq!(value["account"]["apple_id"], expected);
+        }
+    }
+
     #[tokio::test]
     async fn api_logs_returns_new_lines() {
         let mine = |v: &Value| -> Vec<String> {
@@ -2647,9 +2918,11 @@ mod tests {
     }
 
     #[tokio::test(start_paused = true)]
-    async fn waiting_renewal_is_visible_and_cancelable_from_state_api() {
+    async fn waiting_auto_renewal_is_visible_and_cancelable_from_state_api() {
         let app = Arc::new(App {
-            pin: None,
+            dir: PathBuf::from("."),
+            device_id: "default".into(),
+            device_name: "Default iPhone".into(),
             phone: None,
             busy: AtomicBool::new(true),
             inner: Mutex::new(Inner::default()),
@@ -2660,7 +2933,7 @@ mod tests {
         });
         {
             let mut g = app.lock();
-            g.job.kind = "renew_one".into();
+            g.job.kind = "auto_renew".into();
             g.job.running = true;
         }
         let waiting = crate::renewal_wait::await_install(
@@ -2707,7 +2980,9 @@ mod tests {
     #[test]
     fn state_does_not_hold_ui_lock_while_waiting_for_schedule() {
         let app = Arc::new(App {
-            pin: None,
+            dir: PathBuf::from("."),
+            device_id: "default".into(),
+            device_name: "Default iPhone".into(),
             phone: None,
             busy: AtomicBool::new(true),
             inner: Mutex::new(Inner::default()),

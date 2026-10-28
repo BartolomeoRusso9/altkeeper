@@ -181,8 +181,8 @@ pub fn cleanup_expired_backups(dir: &Path, now: SystemTime) -> io::Result<usize>
 
 /// Once per 30 days, clean backups that expired 30+ days ago.
 /// Store the last successful sweep in the persistent /data/state directory.
-pub fn cleanup_backups_if_due(now: SystemTime) -> io::Result<Option<usize>> {
-    let stamp = Path::new(CLEANUP_STAMP);
+pub fn cleanup_backups_if_due(root: &Path, now: SystemTime) -> io::Result<Option<usize>> {
+    let stamp = root.join(CLEANUP_STAMP);
     if let Ok(raw) = fs::read_to_string(stamp) {
         if let Ok(last_seconds) = raw.trim().parse::<u64>() {
             if let Some(last) = UNIX_EPOCH.checked_add(Duration::from_secs(last_seconds)) {
@@ -192,10 +192,24 @@ pub fn cleanup_backups_if_due(now: SystemTime) -> io::Result<Option<usize>> {
             }
         }
     }
-    let removed = cleanup_expired_backups(Path::new(crate::SAVED_DIR), now)?;
-    fs::create_dir_all("state")?;
+    let mut removed = cleanup_expired_backups(&root.join(crate::SAVED_DIR), now)?;
+    let device_dirs = root.join("devices");
+    match fs::read_dir(device_dirs) {
+        Ok(entries) => {
+            for entry in entries {
+                let entry = entry?;
+                if entry.file_type()?.is_dir() {
+                    removed +=
+                        cleanup_expired_backups(&entry.path().join(crate::SAVED_DIR), now)?;
+                }
+            }
+        }
+        Err(error) if error.kind() == io::ErrorKind::NotFound => {}
+        Err(error) => return Err(error),
+    }
+    fs::create_dir_all(root.join("state"))?;
     let timestamp = now.duration_since(UNIX_EPOCH).unwrap_or_default().as_secs();
-    crate::fsperm::write_private(stamp, timestamp.to_string().as_bytes())?;
+    crate::fsperm::write_private(&root.join(CLEANUP_STAMP), timestamp.to_string().as_bytes())?;
     Ok(Some(removed))
 }
 
@@ -278,6 +292,40 @@ mod tests {
             assert!(file.exists(), "unexpected deletion: {}", file.display());
         }
         fs::remove_dir_all(dir).unwrap();
+    }
+
+    #[test]
+    fn scheduled_cleanup_covers_the_default_and_device_profiles() {
+        let root = tempfile::tempdir().unwrap();
+        let now = SystemTime::now();
+        for directory in [
+            root.path().join(crate::SAVED_DIR),
+            root.path().join("devices/device-test").join(crate::SAVED_DIR),
+        ] {
+            fs::create_dir_all(&directory).unwrap();
+            fs::write(
+                directory.join("expired.mobileprovision"),
+                backup_xml(
+                    "expired",
+                    Some(now - Duration::from_secs(31 * 86400)),
+                ),
+            )
+            .unwrap();
+        }
+
+        assert_eq!(cleanup_backups_if_due(root.path(), now).unwrap(), Some(2));
+        assert_eq!(cleanup_backups_if_due(root.path(), now).unwrap(), None);
+        assert!(!root
+            .path()
+            .join(crate::SAVED_DIR)
+            .join("expired.mobileprovision")
+            .exists());
+        assert!(!root
+            .path()
+            .join("devices/device-test")
+            .join(crate::SAVED_DIR)
+            .join("expired.mobileprovision")
+            .exists());
     }
 
     #[test]

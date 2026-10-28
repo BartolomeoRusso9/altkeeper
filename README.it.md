@@ -270,6 +270,14 @@ loopback, ascolta solo sulla macchina stessa e non chiede il PIN; su qualsiasi a
 si vede con `ps`. La pagina web è in inglese e non c'è HTTPS: tienila dentro la rete di casa. L'accesso
 e il rinnovo dalla pagina web non sono ancora stati provati con Apple.
 
+Il selettore in alto permette di gestire più iPhone con account Apple separati. Scegli **Add device**,
+assegna un nome al profilo e selezionalo per associare il telefono e accedere al suo account. Ogni
+profilo conserva account, pairing, indirizzi salvati, impostazioni, pianificazione dei rinnovi, log e
+backup separati. I file già esistenti restano nel profilo predefinito; i nuovi profili vengono salvati
+in `devices/`. Il rinnovo automatico è configurato separatamente per ogni profilo e le operazioni sui
+telefoni vengono eseguite una alla volta. AltServer resta un unico servizio in rete e usa il profilo
+selezionato in quel momento.
+
 Da un PC puoi anche caricare un file `.ipa` nella sezione **Install an app from this PC**: AltKeeper
 lo firma con l'Apple ID configurato e lo installa sull'iPhone via Wi-Fi. Per farlo, l'account deve
 avere la password salvata in `account.json`; il codice 2FA, se richiesto, si inserisce nella pagina.

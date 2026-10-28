@@ -3,56 +3,69 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<meta name="color-scheme" content="light dark">
+<meta name="color-scheme" content="light">
 <title>AltKeeper</title>
-<meta name="theme-color" content="#0a6cff">
+<meta name="theme-color" content="#f5f6f8">
 <link rel="apple-touch-icon" sizes="180x180" href="/apple-touch-icon.png">
 <link rel="icon" type="image/png" sizes="32x32" href="/favicon-32.png">
 <style>
   :root {
-    --bg: #f4f5f7; --card: #ffffff; --text: #1b1f24; --muted: #5b6673; --line: #dfe3e8;
-    --accent: #0a6cff; --accent-text: #ffffff;
-    --ok: #12805c; --ok-bg: #e2f5ec; --soon: #9a6700; --soon-bg: #fff3d1;
-    --urgent: #b42318; --urgent-bg: #fde7e4; --track: #e6e9ee;
-  }
-  @media (prefers-color-scheme: dark) {
-    :root {
-      --bg: #101418; --card: #191f26; --text: #e8ecf1; --muted: #9aa6b3; --line: #2b3440;
-      --accent: #4c9aff; --accent-text: #0b1220;
-      --ok: #4cc79b; --ok-bg: #12352a; --soon: #f0b429; --soon-bg: #3a2e0f;
-      --urgent: #ff8a7a; --urgent-bg: #3d1a17; --track: #26303b;
-    }
+    color-scheme: light;
+    --bg: #f4f6f8; --card: #fff; --text: #202a36; --muted: #697787; --line: #dce2e8;
+    --accent: #315f91; --accent-hover: #254c76; --accent-text: #fff;
+    --ok: #187558; --ok-bg: #e6f3ed; --soon: #8b671d; --soon-bg: #faf2dd;
+    --urgent: #a84740; --urgent-bg: #f8e9e7; --track: #e9edf1;
+    --surface: #f9fafb; --shadow: 0 12px 32px rgb(34 49 66 / 5%);
   }
   * { box-sizing: border-box; }
   body {
     margin: 0; background: var(--bg); color: var(--text);
-    font: 16px/1.45 system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
+    font: 15px/1.55 ui-sans-serif, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+    -webkit-font-smoothing: antialiased;
   }
-  main { max-width: 640px; margin: 0 auto; padding: 16px 16px 40px; }
-  h1 { font-size: 1.4rem; margin: 8px 0 2px; }
-  .sub { color: var(--muted); margin: 0 0 16px; }
+  main { max-width: 1120px; margin: 0 auto; padding: 26px 28px 56px; }
+  .topbar {
+    display: flex; justify-content: space-between; align-items: center; gap: 24px;
+    padding: 0 0 22px; margin: 0 0 18px; border-bottom: 1px solid var(--line);
+  }
+  .brand { display: flex; align-items: center; gap: 13px; min-width: 0; }
+  .brand-mark {
+    display: grid; place-items: center; width: 42px; height: 42px; border-radius: 12px;
+    background: var(--accent); color: white; font-size: .88rem; font-weight: 750; letter-spacing: -.04em;
+  }
+  h1 { font-size: 1.55rem; line-height: 1.15; letter-spacing: -.045em; margin: 0; font-weight: 720; }
+  .sub { color: var(--muted); margin: 4px 0 0; font-size: .9rem; }
+  .device-actions { display: flex; align-items: end; gap: 9px; }
+  .device-actions label { margin: 0 0 5px; font-size: .72rem; color: var(--muted); letter-spacing: .04em; }
+  #device-select { min-width: 190px; }
+  .device-add {
+    background: transparent; color: var(--accent); border-color: #bdcbd9; white-space: nowrap;
+  }
+  .device-create {
+    display: flex; align-items: end; gap: 12px; padding: 16px 18px; margin: 0 0 16px;
+    border: 1px solid var(--line); border-radius: 14px; background: var(--card); box-shadow: var(--shadow);
+  }
+  .device-create .grow { min-width: 180px; }
+  .device-create label { margin-top: 0; }
+  .device-create input { max-width: 360px; }
+  #pairing { margin: 0 0 14px; }
   .card {
-    background: var(--card); border: 1px solid var(--line); border-radius: 14px;
-    padding: 16px; margin: 0 0 14px;
+    background: var(--card); border: 1px solid var(--line); border-radius: 16px;
+    padding: 22px 24px; margin: 0 0 14px; box-shadow: var(--shadow);
   }
-  .card h2 { font-size: 1.05rem; margin: 0 0 10px; }
-  .row { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; }
-  .item-head { display: flex; align-items: center; gap: 10px; flex-wrap: nowrap; }
+  .card h2 { font-size: 1.08rem; letter-spacing: -.018em; margin: 0 0 12px; font-weight: 680; }
+  .row { display: flex; align-items: center; gap: 12px; flex-wrap: wrap; }
+  .item-head { display: flex; align-items: center; gap: 12px; flex-wrap: nowrap; }
   .item-head .item-info { align-self: center; }
-  /* Responsive action groups: keep labels centered, groups left-aligned. */
-  .action-row { justify-content: flex-start; align-items: stretch; flex-wrap: nowrap; }
+  .action-row { justify-content: flex-start; align-items: stretch; flex-wrap: wrap; }
   .action-row > button {
-    flex: 1 1 0; min-width: 0; max-width: 184px; min-height: 54px;
-    padding: 6px 8px; text-align: center; white-space: normal;
+    flex: 0 1 auto; min-width: 120px; max-width: 210px; min-height: 42px;
+    padding: 8px 12px; text-align: center; white-space: normal;
     word-break: keep-all; overflow-wrap: anywhere;
   }
-  #btn-check, #btn-change, #btn-install, #btn-login, #btn-code, #btn-resend {
-    width: 184px; min-height: 54px; padding: 6px 10px;
-  }
-  #code-form .row { justify-content: flex-start; flex-wrap: nowrap; gap: 8px; }
-  #code-form .row > button { flex: 1 1 0; width: auto; min-width: 0; max-width: 184px; }
-
-  .item-head button { width: 106px; flex: 0 0 106px; }
+  #btn-check, #btn-change, #btn-install, #btn-login, #btn-code, #btn-resend { min-width: 150px; }
+  #code-form .row { justify-content: flex-start; flex-wrap: wrap; gap: 9px; }
+  .item-head button { width: 108px; flex: 0 0 108px; }
   .ext-option { display: flex; align-items: center; gap: 10px; padding: 10px 3px;
     border-bottom: 1px solid var(--line); font-weight: 400; }
   .ext-option input { width: 18px; height: 18px; }
@@ -63,62 +76,56 @@
   .app-name { overflow-wrap: anywhere; }
   .item-info { flex: 1 1 0; min-width: 0; overflow-wrap: anywhere; }
   .item-head button { white-space: nowrap; }
-  .nested { padding: 9px 12px; border-radius: 10px; background: var(--bg); margin-top: 9px; }
+  .nested { padding: 12px 14px; border-radius: 10px; background: var(--surface); margin-top: 10px; }
   .nested > div + div { border-top: 1px solid var(--line); padding-top: 8px; margin-top: 8px; }
   .mini { font-size: .82rem; padding: 7px 10px; }
-  select, input[type=time] { font: inherit; padding: 9px; border: 1px solid var(--line);
-    border-radius: 10px; background: var(--bg); color: var(--text); }
-  @media(max-width:420px) {
-    .item-head { gap: 6px; }
-    .item-head button { width: 90px; flex-basis: 90px; padding: 8px 3px; font-size: .77rem; white-space: normal; }
-    /* Three equal-width buttons still fit iPhone 13 mini's 375px viewport. */
-    .action-row { gap: 6px; }
-    .action-row > button {
-      flex: 1 1 0; width: auto; min-width: 0; max-width: 184px;
-      padding: 8px 4px; font-size: .8rem; line-height: 1.25;
-    }
-    #code-form .row > button { padding: 8px 5px; font-size: .85rem; }
-    #btn-check, #btn-change, #btn-install, #btn-login { max-width: 100%; }
-  }
+  select, input[type=time] { font: inherit; min-height: 42px; padding: 9px 12px; border: 1px solid var(--line);
+    border-radius: 9px; background: var(--surface); color: var(--text); }
   .grow { flex: 1 1 auto; }
   .pill {
-    display: inline-block; padding: 3px 11px; border-radius: 999px; font-weight: 600;
-    font-size: .9rem; background: var(--track); color: var(--muted);
+    display: inline-block; padding: 4px 10px; border-radius: 7px; font-weight: 650;
+    font-size: .82rem; background: var(--track); color: var(--muted);
   }
   .pill.ok { background: var(--ok-bg); color: var(--ok); }
   .pill.bad { background: var(--urgent-bg); color: var(--urgent); }
-  .muted { color: var(--muted); font-size: .92rem; }
+  .muted { color: var(--muted); font-size: .88rem; }
   .banner {
-    border-radius: 10px; padding: 10px 12px; margin: 10px 0 0; background: var(--soon-bg);
-    color: var(--soon); font-size: .95rem;
+    border-radius: 10px; padding: 11px 14px; margin: 10px 0 0; background: var(--soon-bg);
+    color: var(--soon); font-size: .9rem;
   }
   .banner.bad { background: var(--urgent-bg); color: var(--urgent); }
   .banner.good { background: var(--ok-bg); color: var(--ok); }
   ul.plain { list-style: none; margin: 0; padding: 0; }
-  ul.plain li { padding: 10px 0; border-top: 1px solid var(--line); }
+  ul.plain li { padding: 14px 0; border-top: 1px solid var(--line); }
   ul.plain li:first-child { border-top: 0; padding-top: 0; }
   .app-name { font-weight: 600; word-break: break-all; }
-  .bar { height: 8px; border-radius: 6px; background: var(--track); overflow: hidden; margin-top: 6px; }
+  .bar { height: 5px; border-radius: 6px; background: var(--track); overflow: hidden; margin-top: 8px; }
   .bar > span { display: block; height: 100%; border-radius: 6px; background: var(--ok); }
   li.soon .bar > span { background: var(--soon); }
   li.urgent .bar > span { background: var(--urgent); }
   li.soon .when { color: var(--soon); } li.urgent .when { color: var(--urgent); }
   button {
     display: inline-flex; align-items: center; justify-content: center; text-align: center;
-    min-height: 42px; line-height: 1.25; font: inherit; font-weight: 600; border-radius: 10px; padding: 10px 12px; cursor: pointer;
+    min-height: 42px; line-height: 1.25; font: inherit; font-size: .9rem; font-weight: 620;
+    border-radius: 9px; padding: 9px 13px; cursor: pointer;
     border: 1px solid var(--line); background: var(--card); color: var(--text);
+    transition: background-color .18s ease, border-color .18s ease, color .18s ease, transform .18s ease;
   }
+  button:hover:not(:disabled) { background: var(--surface); border-color: #bac6d1; }
+  button:active:not(:disabled) { transform: translateY(1px); }
   button.primary { background: var(--accent); color: var(--accent-text); border-color: var(--accent); }
+  button.primary:hover:not(:disabled) { background: var(--accent-hover); border-color: var(--accent-hover); }
   button:disabled { opacity: .5; cursor: not-allowed; }
-  label { display: block; font-weight: 600; margin: 10px 0 4px; }
+  :focus-visible { outline: 3px solid rgb(49 95 145 / 28%); outline-offset: 2px; }
+  label { display: block; font-weight: 620; margin: 12px 0 5px; font-size: .88rem; }
   label.check { font-weight: 400; display: flex; gap: 8px; align-items: flex-start; margin: 8px 0; }
   input[type=text], input[type=password], input[type=email], input[type=tel] {
-    width: 100%; font: inherit; padding: 10px 12px; border-radius: 10px;
-    border: 1px solid var(--line); background: var(--bg); color: var(--text);
+    width: 100%; font: inherit; padding: 10px 12px; border-radius: 9px; min-height: 42px;
+    border: 1px solid var(--line); background: var(--surface); color: var(--text);
   }
   input.code { font-size: 1.4rem; letter-spacing: .3em; text-align: center; max-width: 12ch; }
   pre.log {
-    background: var(--bg); border: 1px solid var(--line); border-radius: 10px; padding: 10px;
+    background: var(--surface); border: 1px solid var(--line); border-radius: 10px; padding: 12px;
     font: 13px/1.4 ui-monospace, SFMono-Regular, Menlo, monospace; overflow-x: auto;
     max-height: 240px; overflow-y: auto; margin: 10px 0 0; white-space: pre-wrap; word-break: break-word;
   }
@@ -126,20 +133,56 @@
   pre.logs { max-height: 60vh; white-space: pre-wrap; overflow-wrap: anywhere; }
   .quotas-row { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; }
   .quota-badge {
-    display: inline-flex; align-items: center; padding: 3px 10px;
-    border-radius: 999px; font-size: .83rem; font-weight: 600;
+    display: inline-flex; align-items: center; padding: 4px 9px;
+    border-radius: 7px; font-size: .8rem; font-weight: 620;
     background: var(--track); color: var(--muted); border: 1px solid var(--line);
   }
   .quota-badge.near-limit { background: var(--soon-bg); color: var(--soon); border-color: var(--soon); }
   .quota-badge.at-limit { background: var(--urgent-bg); color: var(--urgent); border-color: var(--urgent); }
   [hidden] { display: none !important; }
-  footer { color: var(--muted); font-size: .85rem; text-align: center; margin-top: 20px; }
+  .divider { height: 1px; background: var(--line); margin: 20px 0; }
+  footer { color: var(--muted); font-size: .82rem; text-align: left; margin-top: 22px; }
+  @media(max-width:680px) {
+    main { padding: 18px 14px 36px; }
+    .topbar { align-items: flex-start; flex-direction: column; gap: 16px; }
+    .device-actions { width: 100%; align-items: end; }
+    #device-select { flex: 1; min-width: 0; }
+    .device-create { align-items: stretch; flex-direction: column; }
+    .device-create .grow { min-width: 0; }
+    .card { padding: 18px 16px; }
+    .action-row > button { flex: 1 1 145px; max-width: none; }
+    .item-head { gap: 8px; }
+    .item-head button { width: 92px; flex-basis: 92px; white-space: normal; }
+  }
 </style>
 </head>
 <body>
 <main>
-  <h1>AltKeeper</h1>
-  <p class="sub" data-i18n="Keeps your iPhone apps alive by renewing their profiles.">Keeps your iPhone apps alive by renewing their profiles.</p>
+  <header class="topbar">
+    <div class="brand">
+      <span class="brand-mark" aria-hidden="true">AK</span>
+      <div>
+        <h1>AltKeeper</h1>
+        <p class="sub" data-i18n="Keeps your iPhone apps alive by renewing their profiles.">Keeps your iPhone apps alive by renewing their profiles.</p>
+      </div>
+    </div>
+    <div class="device-actions">
+      <div>
+        <label for="device-select">MANAGED DEVICE</label>
+        <select id="device-select" aria-label="Managed device"></select>
+      </div>
+      <button class="device-add" id="device-add-toggle" type="button">Add device</button>
+    </div>
+  </header>
+  <form class="device-create" id="device-create" hidden>
+    <div class="grow">
+      <label for="device-name">Device name</label>
+      <input id="device-name" type="text" maxlength="40" placeholder="e.g. Personal iPhone" required>
+    </div>
+    <button class="primary" type="submit">Create profile</button>
+    <button id="device-add-cancel" type="button">Cancel</button>
+    <div class="banner bad" id="device-error" hidden></div>
+  </form>
 
   <div id="pairing">
   <div class="banner bad" id="no-pairing" hidden>
@@ -385,19 +428,45 @@ let phoneAddressDraftDirty = false;
 let logsPollTimer = null;
 let anisetteTestRunning = false;
 let anisetteDraftDirty = false, anisetteSavePending = false, anisettePendingUrl = null;
+let selectedDeviceId = localStorage.getItem("altkeeper-device") || "default";
+let deviceDrafts = [];
+
+function deviceHeaders() {
+  return { "X-AltKeeper-Device": selectedDeviceId };
+}
 
 async function api(path, body, signal) {
   const opt = body === undefined ? {} : {
     method: "POST",
-    headers: { "Content-Type": "application/json", "X-Requested-With": "altkeeper" },
+    headers: { "Content-Type": "application/json", "X-Requested-With": "altkeeper", ...deviceHeaders() },
     body: JSON.stringify(body),
   };
+  if (body === undefined) opt.headers = deviceHeaders();
   if (signal) opt.signal = signal;
   const r = await fetch(path, opt);
   let j = {};
   try { j = await r.json(); } catch (_) {}
   if (!r.ok) throw new Error(j.error || ("Error " + r.status));
   return j;
+}
+
+async function loadDevices() {
+  const result = await api("/api/devices");
+  deviceDrafts = result.devices || [];
+  const stored = deviceDrafts.some(device => device.id === selectedDeviceId);
+  if (!stored) selectedDeviceId = result.selected || "default";
+  const select = $("device-select");
+  select.replaceChildren(...deviceDrafts.map(device => {
+    const option = document.createElement("option");
+    option.value = device.id;
+    option.textContent = device.name;
+    return option;
+  }));
+  select.value = selectedDeviceId;
+  localStorage.setItem("altkeeper-device", selectedDeviceId);
+  if (result.selected !== selectedDeviceId) {
+    await api("/api/devices/select", {id:selectedDeviceId});
+  }
 }
 
 function days(n) {
@@ -767,10 +836,11 @@ async function refresh() {
   let fast = false;
   const controller = new AbortController();
   const timeout = setTimeout(() => controller.abort(), 10000);
+  const requestedDevice = selectedDeviceId;
   try {
     const latest = await api("/api/state", undefined, controller.signal);
     // A user action requested a newer snapshot while this one was in flight.
-    if (!refreshQueued) {
+    if (!refreshQueued && requestedDevice === selectedDeviceId) {
       render(latest);
       fast = latest.busy || latest.phone.checking || latest.login.phase === "working" ||
              latest.login.phase === "needs_code" || latest.job.running ||
@@ -1006,7 +1076,7 @@ $("install-form").onsubmit = async (ev) => {
     const customize = !!($("install-display-name").value.trim() || $("install-bundle-id").value.trim());
     const r = await fetch("/api/install/inspect?customize=" + String(customize), {
       method: "POST",
-      headers: { "X-Requested-With": "altkeeper" },
+      headers: { "X-Requested-With": "altkeeper", ...deviceHeaders() },
       body: form,
     });
     let j = {};
@@ -1058,8 +1128,10 @@ async function pollLogs() {
   if (logsPollTimer) clearTimeout(logsPollTimer);
   const controller = new AbortController();
   const timeout = setTimeout(() => controller.abort(), 10000);
+  const requestedDevice = selectedDeviceId;
   try {
     let r = await api("/api/logs?since=" + logSeq, undefined, controller.signal);
+    if (requestedDevice !== selectedDeviceId) return;
     if (r.seq < logSeq) r = await api("/api/logs?since=0", undefined, controller.signal);
     banner("logs-message", "");
     if (r.lines.length) {
@@ -1098,8 +1170,85 @@ $("btn-logs-copy").onclick = async () => {
 };
 $("btn-logs-clear").onclick = () => { $("logs-view").textContent = ""; };
 
-refresh();
-pollLogs();
+$("device-add-toggle").onclick = () => {
+  $("device-create").hidden = !$("device-create").hidden;
+  if (!$("device-create").hidden) $("device-name").focus();
+};
+$("device-add-cancel").onclick = () => {
+  $("device-create").hidden = true;
+  $("device-name").value = "";
+  banner("device-error", "");
+};
+$("device-select").onchange = async () => {
+  const id = $("device-select").value;
+  const hasDraft = phoneAddressDraftDirty || anisetteDraftDirty || autoDraftDirty;
+  if (hasDraft && !confirm("Discard unsaved settings before switching devices?")) {
+    $("device-select").value = selectedDeviceId;
+    return;
+  }
+  $("device-select").disabled = true;
+  try {
+    await api("/api/devices/select", {id});
+    selectedDeviceId = id;
+    localStorage.setItem("altkeeper-device", id);
+    phoneAddressDraftDirty = false;
+    anisetteDraftDirty = false;
+    anisetteSavePending = false;
+    anisettePendingUrl = null;
+    autoDraftDirty = false;
+    autoSavePending = false;
+    showForm = false;
+    logSeq = 0;
+    $("logs-view").textContent = "";
+    refresh();
+    pollLogs();
+  } catch (error) {
+    banner("device-error", error.message, "bad");
+    $("device-select").value = selectedDeviceId;
+  } finally {
+    $("device-select").disabled = false;
+  }
+};
+$("device-create").onsubmit = async (event) => {
+  event.preventDefault();
+  banner("device-error", "");
+  const name = $("device-name").value.trim();
+  if (!name) return banner("device-error", "Enter a name for this device.", "bad");
+  const button = $("device-create").querySelector('[type="submit"]');
+  button.disabled = true;
+  try {
+    const result = await api("/api/devices", {name});
+    deviceDrafts.push(result.device);
+    const option = document.createElement("option");
+    option.value = result.device.id;
+    option.textContent = result.device.name;
+    $("device-select").append(option);
+    $("device-select").value = result.device.id;
+    selectedDeviceId = result.device.id;
+    localStorage.setItem("altkeeper-device", selectedDeviceId);
+    await api("/api/devices/select", {id:selectedDeviceId});
+    $("device-create").hidden = true;
+    $("device-name").value = "";
+    logSeq = 0;
+    $("logs-view").textContent = "";
+    refresh();
+    pollLogs();
+  } catch (error) {
+    banner("device-error", error.message, "bad");
+  } finally {
+    button.disabled = false;
+  }
+};
+
+(async () => {
+  try {
+    await loadDevices();
+    refresh();
+    pollLogs();
+  } catch (error) {
+    banner("phone-error", t("Cannot load device profiles: ") + error.message, "bad");
+  }
+})();
 document.addEventListener("visibilitychange", () => {
   if (document.hidden) {
     clearTimeout(logsPollTimer);

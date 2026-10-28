@@ -33,6 +33,24 @@ use tokio::net::TcpStream;
 
 use crate::{apple, phone, profile, PAIRING_FILE};
 
+static PROFILE_DIR: std::sync::OnceLock<std::sync::RwLock<std::path::PathBuf>> =
+    std::sync::OnceLock::new();
+
+pub fn set_profile_dir(dir: std::path::PathBuf) {
+    *PROFILE_DIR
+        .get_or_init(|| std::sync::RwLock::new(std::path::PathBuf::from(".")))
+        .write()
+        .unwrap_or_else(|error| error.into_inner()) = dir;
+}
+
+fn profile_dir() -> std::path::PathBuf {
+    PROFILE_DIR
+        .get_or_init(|| std::sync::RwLock::new(std::path::PathBuf::from(".")))
+        .read()
+        .unwrap_or_else(|error| error.into_inner())
+        .clone()
+}
+
 const SERVICE_TYPE: &str = "_altserver._tcp.local.";
 const MAX_JSON: usize = 4 * 1024 * 1024;
 /// L'IPA si tiene in memoria: oltre questa soglia si rifiuta.
@@ -367,7 +385,15 @@ async fn send(wr: &Rc<tokio::sync::Mutex<OwnedWriteHalf>>, v: &Value) -> Result<
 }
 
 async fn phone_link(ctx: &Ctx) -> Result<phone::PhoneLink, i32> {
-    match Box::pin(phone::connect_auto(ctx.phone, PAIRING_FILE, |_: &str| {})).await {
+    let dir = profile_dir();
+    match Box::pin(phone::connect_auto_in(
+        &dir,
+        ctx.phone,
+        PAIRING_FILE,
+        |_: &str| {},
+    ))
+    .await
+    {
         Ok((addr, link)) => {
             log(&crate::tr!(
                 format!("telefono a {addr}"),
@@ -396,7 +422,8 @@ pub async fn clear_anisette_cache() {
 }
 
 async fn anisette() -> Value {
-    let choice = match apple::anisette_choice(Path::new(".")) {
+    let dir = profile_dir();
+    let choice = match apple::anisette_choice(&dir) {
         Ok(choice) => choice,
         Err(e) => {
             log(&crate::tr!(
@@ -407,13 +434,14 @@ async fn anisette() -> Value {
         }
     };
     let mut cache = ANISETTE_CACHE.lock().await;
+    let cache_key = format!("{}:{}", dir.display(), choice.url);
     if let Some((at, url, v)) = cache.as_ref() {
-        if url == &choice.url && at.elapsed() < ANISETTE_TTL {
+        if url == &cache_key && at.elapsed() < ANISETTE_TTL {
             return json!({ "version": 1, "identifier": "AnisetteDataResponse", "anisetteData": v });
         }
     }
     let started = std::time::Instant::now();
-    match apple::anisette_for_altstore(Path::new(".")).await {
+    match apple::anisette_for_altstore(&dir).await {
         Ok(v) => {
             log(&crate::tr!(
                 format!(
@@ -425,7 +453,7 @@ async fn anisette() -> Value {
                     started.elapsed().as_secs_f32()
                 )
             ));
-            *cache = Some((std::time::Instant::now(), choice.url, v.clone()));
+            *cache = Some((std::time::Instant::now(), cache_key, v.clone()));
             json!({ "version": 1, "identifier": "AnisetteDataResponse", "anisetteData": v })
         }
         Err(e) => {

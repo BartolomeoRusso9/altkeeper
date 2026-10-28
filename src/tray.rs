@@ -672,14 +672,15 @@ pub fn run(bind: SocketAddr, dir: &Path, start: impl FnOnce(EventLoopProxy<UserE
                     }
                 } else if e.id == ani_default.id() || e.id == ani_isideload.id() {
                     let selected = if e.id == ani_default.id() {
-                        crate::apple::DEFAULT_ANISETTE_URL
+                        None
                     } else {
-                        crate::apple::ISIDELOAD_ANISETTE_URL
+                        Some(crate::apple::ISIDELOAD_ANISETTE_URL)
                     };
-                    match crate::apple::save_anisette_choice(&dir, Some(selected)) {
+                    let selected_url = selected.unwrap_or(crate::apple::DEFAULT_ANISETTE_URL);
+                    match crate::apple::save_anisette_choice(&dir, selected) {
                         Ok(_) => {
-                            let _ = ani_default.set_checked(selected == crate::apple::DEFAULT_ANISETTE_URL);
-                            let _ = ani_isideload.set_checked(selected == crate::apple::ISIDELOAD_ANISETTE_URL);
+                            let _ = ani_default.set_checked(selected_url == crate::apple::DEFAULT_ANISETTE_URL);
+                            let _ = ani_isideload.set_checked(selected_url == crate::apple::ISIDELOAD_ANISETTE_URL);
                             if let Ok(handle) = tokio::runtime::Handle::try_current() {
                                 handle.spawn(crate::altserver::clear_anisette_cache());
                             }

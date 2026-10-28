@@ -477,9 +477,13 @@ pub fn pause_auto_pairing() -> AutoPairPauseGuard {
 }
 
 pub fn auto_pair_configured() -> bool {
+    auto_pair_configured_in(Path::new("."))
+}
+
+pub fn auto_pair_configured_in(dir: &Path) -> bool {
     !crate::env::is_set("NO_USB")
         && !crate::env::is_set("NO_AUTO_PAIR")
-        && !Path::new(AUTO_PAIR_OFF_FILE).exists()
+        && !dir.join(AUTO_PAIR_OFF_FILE).exists()
 }
 
 pub fn auto_pair_enabled() -> bool {
@@ -996,21 +1000,22 @@ fn read_saved_addresses(path: &Path) -> Result<Vec<SocketAddr>, String> {
     Ok(saved.addresses)
 }
 
-pub fn saved_addresses() -> Result<Vec<SocketAddr>, String> {
-    read_saved_addresses(Path::new(SAVED_ADDRS_FILE))
+pub fn saved_addresses_in(dir: &Path) -> Result<Vec<SocketAddr>, String> {
+    read_saved_addresses(&dir.join(SAVED_ADDRS_FILE))
 }
 
-pub fn save_addresses(values: &[String]) -> Result<Vec<SocketAddr>, String> {
+pub fn save_addresses_in(dir: &Path, values: &[String]) -> Result<Vec<SocketAddr>, String> {
     let addresses = validate_addresses(values)?;
-    std::fs::create_dir_all("state").map_err(dbg)?;
-    crate::fsperm::restrict_dir(Path::new("state")).map_err(dbg)?;
-    let temporary = Path::new("state").join(format!("phone-addresses-{}.tmp", std::process::id()));
+    let state = dir.join("state");
+    std::fs::create_dir_all(&state).map_err(dbg)?;
+    crate::fsperm::restrict_dir(&state).map_err(dbg)?;
+    let temporary = state.join(format!("phone-addresses-{}.tmp", std::process::id()));
     let bytes = serde_json::to_vec(&SavedAddresses {
         addresses: addresses.clone(),
     })
     .map_err(dbg)?;
     crate::fsperm::write_private(&temporary, &bytes).map_err(dbg)?;
-    if let Err(error) = std::fs::rename(&temporary, Path::new(SAVED_ADDRS_FILE)) {
+    if let Err(error) = std::fs::rename(&temporary, state.join("phone-addresses.json")) {
         let _ = std::fs::remove_file(&temporary);
         return Err(format!("Cannot save iPhone addresses: {error}"));
     }
@@ -1034,11 +1039,14 @@ fn write_last_addr(path: &Path, addr: SocketAddr) {
 /// Si collega al telefono: prima all'indirizzo indicato (se c'è), poi all'ultimo che ha
 /// funzionato, poi a quelli trovati via Bonjour (fino a 3 ricerche). Con più iPhone in rete
 /// vale quello che riconosce il nostro pairing.
-pub async fn connect_auto(
+pub async fn connect_auto_in(
+    dir: &Path,
     preferred: Option<SocketAddr>,
     pairing_path: &str,
     mut say: impl FnMut(&str),
 ) -> Result<(Via, PhoneLink), String> {
+    let pairing = dir.join(pairing_path);
+    let pairing_path = pairing.to_string_lossy();
     // Un indirizzo indicato a mano vale più del cavo; altrimenti si prova prima l'USB.
     if preferred.is_none() {
         match connect_usb(&mut say).await {
@@ -1050,22 +1058,35 @@ pub async fn connect_auto(
             )),
         }
     }
-    if !Path::new(pairing_path).exists() {
+    if !pairing.exists() {
         return Err(with_wifi_hint(crate::tr!(
             format!("manca il pairing remoto {pairing_path}: crealo con `altkeeper pair-usb`"),
             format!("remote pairing file {pairing_path} is missing; create it with `altkeeper pair-usb`")
         )));
     }
     const PER_TRY: Duration = Duration::from_secs(12);
-    let cache = Path::new(LAST_ADDR_FILE);
+    let cache = dir.join(LAST_ADDR_FILE);
     let mut tried: Vec<SocketAddr> = Vec::new();
     let mut last_err = String::new();
 
     let mut known: Vec<SocketAddr> = Vec::new();
+    let saved = match read_saved_addresses(&dir.join(SAVED_ADDRS_FILE)) {
+        Ok(addresses) => addresses,
+        Err(error) => {
+            crate::log::err(&format!(
+                "[phone] {error}; continuing without saved iPhone addresses"
+            ));
+            say(&crate::tr!(
+                format!("{error}; continuo senza gli indirizzi iPhone salvati."),
+                format!("{error}; continuing without saved iPhone addresses.")
+            ));
+            Vec::new()
+        }
+    };
     for addr in preferred
         .into_iter()
-        .chain(read_saved_addresses(Path::new(SAVED_ADDRS_FILE))?)
-        .chain(read_last_addr(cache))
+        .chain(saved)
+        .chain(read_last_addr(&cache))
     {
         if !known.contains(&addr) {
             known.push(addr);
@@ -1073,9 +1094,9 @@ pub async fn connect_auto(
     }
     for addr in known {
         tried.push(addr);
-        match tokio::time::timeout(PER_TRY, connect(addr, pairing_path)).await {
+        match tokio::time::timeout(PER_TRY, connect(addr, pairing_path.as_ref())).await {
             Ok(Ok(link)) => {
-                write_last_addr(cache, addr);
+                write_last_addr(&cache, addr);
                 return Ok((Via::Wifi(addr), link));
             }
             Ok(Err(e)) => last_err = e,
@@ -1099,7 +1120,7 @@ pub async fn connect_auto(
     }
 
     // Bonjour, poi la scansione della rete (non dipende da Bonjour), poi Bonjour ancora una volta.
-    let port = read_last_addr(cache).map(|a| a.port()).unwrap_or(49152);
+    let port = read_last_addr(&cache).map(|a| a.port()).unwrap_or(49152);
     let mut step = 0;
     while step < 3 {
         let mut found = match step {
@@ -1120,9 +1141,9 @@ pub async fn connect_auto(
                 format!("Trovato un telefono a {addr}, provo..."),
                 format!("Found an iPhone at {addr}; connecting...")
             ));
-            match tokio::time::timeout(PER_TRY, connect(addr, pairing_path)).await {
+            match tokio::time::timeout(PER_TRY, connect(addr, pairing_path.as_ref())).await {
                 Ok(Ok(link)) => {
-                    write_last_addr(cache, addr);
+                    write_last_addr(&cache, addr);
                     return Ok((Via::Wifi(addr), link));
                 }
                 Ok(Err(e)) => last_err = e,
@@ -1153,37 +1174,42 @@ pub async fn pair_usb(out: &str) -> Result<(), String> {
 }
 
 async fn pair_usb_for(out: &str, expected_udid: &str) -> Result<(), String> {
-    let addr = usbmuxd_addr()?;
-    let mut mux = tokio::time::timeout(Duration::from_secs(3), addr.connect(1))
-        .await
-        .map_err(|_| "Timed out connecting to usbmuxd.".to_string())?
-        .map_err(dbg)?;
-    let devs = tokio::time::timeout(Duration::from_secs(5), mux.get_devices())
-        .await
-        .map_err(|_| "Timed out looking for USB devices.".to_string())?
-        .map_err(dbg)?;
-    let dev = devs
-        .iter()
-        .find(|d| {
-            d.connection_type == Connection::Usb
-                && (expected_udid.is_empty() || d.udid == expected_udid)
-        })
-        .ok_or(crate::tr!(
-            "nessun iPhone collegato via USB",
-            "no iPhone connected via USB"
-        ))?;
-    let provider = dev.to_provider(addr, "altkeeper");
+    let pf = tokio::time::timeout(Duration::from_secs(30), async {
+        let addr = usbmuxd_addr()?;
+        let mut mux = tokio::time::timeout(Duration::from_secs(3), addr.connect(1))
+            .await
+            .map_err(|_| "Timed out connecting to usbmuxd.".to_string())?
+            .map_err(dbg)?;
+        let devs = tokio::time::timeout(Duration::from_secs(5), mux.get_devices())
+            .await
+            .map_err(|_| "Timed out looking for USB devices.".to_string())?
+            .map_err(dbg)?;
+        let dev = devs
+            .iter()
+            .find(|d| {
+                d.connection_type == Connection::Usb
+                    && (expected_udid.is_empty() || d.udid == expected_udid)
+            })
+            .ok_or(crate::tr!(
+                "nessun iPhone collegato via USB",
+                "no iPhone connected via USB"
+            ))?;
+        let provider = dev.to_provider(addr, "altkeeper");
 
-    let service = RemotePairingLockdownService::connect(&provider)
-        .await
-        .map_err(|e| format!("Cannot start remote pairing. Unlock the iPhone, trust this computer, and try again: {e:?}"))?;
-    let mut client = service.into_client(HOST_NAME).map_err(dbg)?;
-    let mut pf = RpPairingFile::generate(HOST_NAME);
-    // Su un canale USB già fidato non compare nessuna richiesta: il PIN non serve.
-    client
-        .connect(&mut pf, || async { "000000".to_string() })
-        .await
-        .map_err(|e| format!("USB pairing failed. Unlock the iPhone and confirm that it trusts this computer: {e:?}"))?;
+        let service = RemotePairingLockdownService::connect(&provider)
+            .await
+            .map_err(|e| format!("Cannot start remote pairing. Unlock the iPhone, trust this computer, and try again: {e:?}"))?;
+        let mut client = service.into_client(HOST_NAME).map_err(dbg)?;
+        let mut pf = RpPairingFile::generate(HOST_NAME);
+        // Su un canale USB già fidato non compare nessuna richiesta: il PIN non serve.
+        client
+            .connect(&mut pf, || async { "000000".to_string() })
+            .await
+            .map_err(|e| format!("USB pairing failed. Unlock the iPhone and confirm that it trusts this computer: {e:?}"))?;
+        Ok::<_, String>(pf)
+    })
+    .await
+    .map_err(|_| "Timed out waiting for the iPhone to complete USB pairing.".to_string())??;
     let output = Path::new(out);
     let parent = output
         .parent()
