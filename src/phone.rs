@@ -10,6 +10,12 @@ use std::time::{Duration, Instant};
 use futures_util::StreamExt;
 use idevice::{
     core_device_proxy::CoreDeviceProxy,
+    debug_proxy::DebugProxyClient,
+    dvt::{
+        device_info::{DeviceInfoClient, RunningProcess},
+        process_control::ProcessControlClient,
+        remote_server::RemoteServerClient,
+    },
     installation_proxy::InstallationProxyClient,
     misagent::MisagentClient,
     provider::{IdeviceProvider, UsbmuxdProvider},
@@ -130,7 +136,149 @@ async fn identity_via_rsd(
     Ok((name, udid, version))
 }
 
+fn jit_requires_rsd() -> String {
+    "JIT requires iOS 17 or later and Developer Mode. A compatible Developer Disk Image must already be mounted; AltKeeper does not mount it automatically.".into()
+}
+
+fn jit_service_error(error: impl std::fmt::Debug) -> String {
+    format!(
+        "Could not access iOS developer services. Enable Developer Mode and mount a compatible Developer Disk Image, then try again: {error:?}"
+    )
+}
+
+fn gdb_packet(payload: &str) -> Vec<u8> {
+    let checksum = payload
+        .bytes()
+        .fold(0u8, |sum, byte| sum.wrapping_add(byte));
+    format!("${payload}#{checksum:02x}").into_bytes()
+}
+
+pub fn resolve_running_app_name(processes: &[RunningProcess], name: &str) -> Option<u32> {
+    let matches = processes
+        .iter()
+        .filter(|process| {
+            process.is_application
+                && process.pid > 0
+                && (process.name == name || process.real_app_name == name)
+        })
+        .map(|process| process.pid)
+        .collect::<HashSet<_>>();
+    (matches.len() == 1).then(|| *matches.iter().next().unwrap())
+}
+
 impl PhoneLink {
+    pub async fn running_apps(&mut self) -> Result<Vec<RunningProcess>, String> {
+        match self {
+            Self::Rsd { adapter, hs, .. } => {
+                let mut remote =
+                    RemoteServerClient::<Box<dyn idevice::ReadWrite>>::connect_rsd(adapter, hs)
+                        .await
+                        .map_err(jit_service_error)?;
+                let mut info = DeviceInfoClient::new(&mut remote)
+                    .await
+                    .map_err(jit_service_error)?;
+                info.running_processes()
+                    .await
+                    .map(|processes| {
+                        processes
+                            .into_iter()
+                            .filter(|process| process.is_application && process.pid > 0)
+                            .collect()
+                    })
+                    .map_err(jit_service_error)
+            }
+            Self::Legacy { .. } => Err(jit_requires_rsd()),
+        }
+    }
+
+    pub async fn launch_app(&mut self, bundle_id: &str) -> Result<u32, String> {
+        match self {
+            Self::Rsd { adapter, hs, .. } => {
+                let mut remote =
+                    RemoteServerClient::<Box<dyn idevice::ReadWrite>>::connect_rsd(adapter, hs)
+                        .await
+                        .map_err(jit_service_error)?;
+                let mut process_control = ProcessControlClient::new(&mut remote)
+                    .await
+                    .map_err(jit_service_error)?;
+                let pid = process_control
+                    .launch_app(bundle_id, None, None, false, false)
+                    .await
+                    .map_err(jit_service_error)?;
+                u32::try_from(pid).map_err(|_| "iOS returned an invalid app process ID.".into())
+            }
+            Self::Legacy { .. } => Err(jit_requires_rsd()),
+        }
+    }
+
+    pub async fn enable_jit(&mut self, pid: u32) -> Result<(), String> {
+        match self {
+            Self::Rsd { adapter, hs, .. } => {
+                let processes = {
+                    let mut remote =
+                        RemoteServerClient::<Box<dyn idevice::ReadWrite>>::connect_rsd(adapter, hs)
+                            .await
+                            .map_err(jit_service_error)?;
+                    let mut info = DeviceInfoClient::new(&mut remote)
+                        .await
+                        .map_err(jit_service_error)?;
+                    info.running_processes().await.map_err(jit_service_error)?
+                };
+                if !processes
+                    .iter()
+                    .any(|process| process.pid == pid && process.is_application)
+                {
+                    return Err("The selected app is no longer running on the iPhone.".into());
+                }
+
+                let mut debug =
+                    DebugProxyClient::<Box<dyn idevice::ReadWrite>>::connect_rsd(adapter, hs)
+                        .await
+                        .map_err(jit_service_error)?;
+                debug
+                    .send_raw(&gdb_packet("QStartNoAckMode"))
+                    .await
+                    .map_err(jit_service_error)?;
+                let response = debug
+                    .read_response()
+                    .await
+                    .map_err(jit_service_error)?
+                    .ok_or_else(|| {
+                        "The iPhone did not acknowledge the JIT debug session.".to_string()
+                    })?;
+                if response != "OK" {
+                    return Err(format!(
+                        "The iPhone rejected the JIT debug session: {response}"
+                    ));
+                }
+                debug.set_ack_mode(false);
+
+                debug
+                    .send_raw(&gdb_packet(&format!("vAttach;{pid:x}")))
+                    .await
+                    .map_err(jit_service_error)?;
+                let response = debug
+                    .read_response()
+                    .await
+                    .map_err(jit_service_error)?
+                    .ok_or_else(|| {
+                        "The iPhone did not confirm the app debug attachment.".to_string()
+                    })?;
+                if !response.starts_with('T') && !response.starts_with('S') {
+                    return Err(format!(
+                        "The iPhone could not attach to the app: {response}"
+                    ));
+                }
+                debug
+                    .send_raw(&gdb_packet("c"))
+                    .await
+                    .map_err(jit_service_error)?;
+                Ok(())
+            }
+            Self::Legacy { .. } => Err(jit_requires_rsd()),
+        }
+    }
+
     pub async fn profiles(&mut self) -> Result<Vec<Vec<u8>>, String> {
         let misagent = match self {
             Self::Rsd { misagent, .. } | Self::Legacy { misagent, .. } => misagent,
@@ -1269,6 +1417,57 @@ mod tests {
     fn senza_versione_si_prova_rsd_salvo_legacy_forzato() {
         assert_eq!(fallback_transport(false), TransportKind::Rsd);
         assert_eq!(fallback_transport(true), TransportKind::Legacy);
+    }
+
+    #[test]
+    fn crea_packet_gdb_con_checksum() {
+        assert_eq!(gdb_packet("c"), b"$c#63");
+    }
+
+    #[test]
+    fn risolve_solo_un_app_in_esecuzione_non_ambiguo() {
+        let processes = vec![
+            RunningProcess {
+                pid: 12,
+                name: "Example".into(),
+                real_app_name: "com.example.app".into(),
+                is_application: true,
+                start_page_count: 0,
+            },
+            RunningProcess {
+                pid: 13,
+                name: "ExampleExtension".into(),
+                real_app_name: "com.example.app.extension".into(),
+                is_application: true,
+                start_page_count: 0,
+            },
+            RunningProcess {
+                pid: 14,
+                name: "Example".into(),
+                real_app_name: "com.example.app".into(),
+                is_application: false,
+                start_page_count: 0,
+            },
+        ];
+        assert_eq!(
+            resolve_running_app_name(&processes, "com.example.app"),
+            Some(12)
+        );
+        assert_eq!(resolve_running_app_name(&processes, "Example"), Some(12));
+        assert_eq!(resolve_running_app_name(&processes, "missing"), None);
+        assert_eq!(
+            resolve_running_app_name(
+                &[
+                    processes[0].clone(),
+                    RunningProcess {
+                        pid: 15,
+                        ..processes[0].clone()
+                    },
+                ],
+                "Example"
+            ),
+            None
+        );
     }
 
     #[test]

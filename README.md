@@ -83,7 +83,10 @@ and server logs, **not** the HTML web page, protocol or JSON. The same 2FA menu 
 - Old profiles stay on the phone after a renewal (iOS does not remove them), so you will see
   several profiles per app. That is expected. In AltServer mode it never removes profiles, even
   when AltStore asks (`activeProfiles`).
-- Not supported: enabling JIT (`EnableUnsignedCodeExecution`); it answers with an error.
+- JIT can be enabled from the web page for a running app, requested while installing an IPA from
+  the page, or requested by AltStore (`EnableUnsignedCodeExecution`). It requires Developer Mode
+  and a compatible Developer Disk Image already mounted on the iPhone; AltKeeper does not mount
+  the image automatically. JIT activation has not yet been verified on a physical device.
 - After an unattended `renew`, AltStore may keep showing the old expiry date: it only updates its
   own record when it does the refresh itself. The apps are fine.
 
@@ -345,7 +348,10 @@ phone operation running at a time. AltServer remains a single network service an
 selected profile.
 
 From a PC, you can also upload an `.ipa` in **Install an app from this PC**. AltKeeper signs it with
-the configured Apple ID and installs it on the iPhone over Wi-Fi. This requires the Apple ID
+the configured Apple ID and installs it on the iPhone over USB or Wi-Fi. The optional JIT setting
+launches the newly installed app and attempts to enable JIT; if that step fails, the app remains
+installed and the job log reports the failure. JIT requires Developer Mode and a compatible
+Developer Disk Image already mounted on the iPhone. This requires the Apple ID
 password to be saved in `account.json`; enter the 2FA code in the page if Apple asks for it. Signing
 may register the iPhone and create development app IDs and certificates on the Apple team. Uploads
 are limited to 1 GiB. Protect the page with a PIN when exposing it on your network, and never

@@ -15,6 +15,11 @@ for (const snippet of [
   '<html lang="en">',
   'function profilesText(n)',
   'data-i18n="Your apps"',
+  'class="brand-mark" src="/apple-touch-icon.png" alt="" aria-hidden="true"',
+  'data-i18n="Just-in-time (JIT)"',
+  'data-i18n="Load running apps"',
+  'data-i18n="Enable JIT"',
+  'data-i18n="Enable JIT after installation (requires a mounted Developer Disk Image)"',
   'data-i18n="Send test notification"',
   'data-i18n="Sign and install"',
   'data-i18n="Discord failure notifications"',
@@ -28,6 +33,8 @@ for (const snippet of [
   '"/api/phone-addresses"',
   '"/api/auto-pair"',
   '"/api/pair-usb"',
+  '"/api/jit/apps"',
+  '"/api/jit/enable"',
   '"/api/renew/cancel-wait"',
   '"/api/anisette"',
   '"/api/anisette/test"',
@@ -64,7 +71,8 @@ for (const id of [
   "discord-save", "discord-clear", "discord-test",
   "phone-addresses-save", "btn-pair-usb", "anisette-save",
   "anisette-clear", "anisette-test", "auto-pair-enabled",
-  "btn-install", "btn-login", "btn-code",
+  "btn-install", "btn-login", "btn-code", "jit-refresh", "jit-enable", "jit-job-slot",
+  "install-enable-jit",
 ]) {
   assert(html.includes('id="' + id + '"'), "Missing control: " + id);
 }
@@ -78,6 +86,7 @@ assert(html.includes('<div class="row" style="margin-top:10px">'));
 // Safari icon and already-approved Discord test stay intact through localization.
 assert(html.includes('rel="apple-touch-icon"'));
 assert(html.includes('rel="icon"'));
+assert(!html.includes('class="brand-mark" aria-hidden="true">AK</span>'));
 assert(html.includes('"/api/discord/test"'));
 console.log("Localized dashboard JavaScript syntax, actions, labels and layout OK");
 
@@ -85,8 +94,11 @@ console.log("Localized dashboard JavaScript syntax, actions, labels and layout O
 // failure/success. A later renewal moves the same panel back without copying
 // log nodes or losing the reader's scroll position.
 {
-  const nodes = { "app-job-slot": {}, "install-job-slot": {}, "job": { scrollTop: 42 } };
-  for (const id of ["app-job-slot", "install-job-slot"]) {
+  const nodes = {
+    "app-job-slot": {}, "install-job-slot": {}, "jit-job-slot": {},
+    "job": { scrollTop: 42 },
+  };
+  for (const id of ["app-job-slot", "install-job-slot", "jit-job-slot"]) {
     nodes[id].append = panel => { panel.parentElement = nodes[id]; };
   }
   nodes.job.parentElement = nodes["app-job-slot"];
@@ -103,6 +115,8 @@ console.log("Localized dashboard JavaScript syntax, actions, labels and layout O
   assert.equal(nodes.job.scrollTop, 42);
   vm.runInContext('placeJob({kind:"renew",running:true})', context);
   assert.equal(nodes.job.parentElement, nodes["app-job-slot"]);
+  vm.runInContext('placeJob({kind:"jit_enable",running:true})', context);
+  assert.equal(nodes.job.parentElement, nodes["jit-job-slot"]);
   const hint = vm.runInContext('installHint({busy:true,job:{kind:"install",running:true}})', context);
   assert(hint.includes("Signing and installing"));
   assert.equal(vm.runInContext('installHint({busy:true,job:{kind:"install",running:false}})', context), "Checking…");

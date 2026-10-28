@@ -85,7 +85,11 @@ i JSON o la pagina web. I comandi del menu 2FA restano `d`, `r` (se disponibile)
 - Dopo un rinnovo i profili vecchi restano sul telefono (iOS non li toglie), quindi per ogni app
   vedrai più profili. È normale. In modalità AltServer non toglie mai profili, nemmeno quando
   AltStore lo chiede (`activeProfiles`).
-- Non supportato: l'abilitazione del JIT (`EnableUnsignedCodeExecution`); risponde con un errore.
+- Il JIT si può attivare dalla pagina web per un'app già in esecuzione, durante l'installazione di
+  un IPA caricato dalla pagina o su richiesta di AltStore (`EnableUnsignedCodeExecution`). Richiede
+  la modalità sviluppatore e un'immagine Developer Disk Image compatibile già montata sull'iPhone;
+  AltKeeper non la monta automaticamente. L'attivazione JIT non è ancora stata verificata su un
+  dispositivo reale.
 - Dopo un `renew` senza controllo, AltStore può continuare a mostrare la vecchia scadenza: aggiorna
   il suo registro solo quando il rinnovo lo fa lui. Le app funzionano.
 
@@ -279,8 +283,11 @@ telefoni vengono eseguite una alla volta. AltServer resta un unico servizio in r
 selezionato in quel momento.
 
 Da un PC puoi anche caricare un file `.ipa` nella sezione **Install an app from this PC**: AltKeeper
-lo firma con l'Apple ID configurato e lo installa sull'iPhone via Wi-Fi. Per farlo, l'account deve
-avere la password salvata in `account.json`; il codice 2FA, se richiesto, si inserisce nella pagina.
+lo firma con l'Apple ID configurato e lo installa sull'iPhone via USB o Wi-Fi. L'opzione JIT avvia
+l'app appena installata e prova ad abilitarlo; se il tentativo fallisce, l'app resta installata e il
+log segnala l'errore. Il JIT richiede la modalità sviluppatore e un'immagine Developer Disk Image
+compatibile già montata sull'iPhone. Per installare, l'account deve avere la password salvata in
+`account.json`; il codice 2FA, se richiesto, si inserisce nella pagina.
 La firma può registrare l'iPhone e creare identificativi e certificati di sviluppo sul team Apple.
 L'upload è limitato a 1 GiB. Proteggi la pagina con PIN quando la esponi in rete e non inoltrare la
 porta su Internet.
