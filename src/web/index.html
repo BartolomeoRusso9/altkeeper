@@ -57,14 +57,15 @@
   .row { display: flex; align-items: center; gap: 12px; flex-wrap: wrap; }
   .item-head { display: flex; align-items: center; gap: 12px; flex-wrap: nowrap; }
   .item-head .item-info { align-self: center; }
-  .action-row { justify-content: flex-start; align-items: stretch; flex-wrap: wrap; }
+  .action-row { justify-content: flex-start; align-items: stretch; flex-wrap: nowrap; }
+  .action-row { gap: 6px; }
   .action-row > button {
-    flex: 0 1 auto; min-width: 120px; max-width: 210px; min-height: 42px;
+    flex: 1 1 0; min-width: 0; max-width: 184px; min-height: 42px;
     padding: 8px 12px; text-align: center; white-space: normal;
     word-break: keep-all; overflow-wrap: anywhere;
   }
   #btn-check, #btn-change, #btn-install, #btn-login, #btn-code, #btn-resend { min-width: 150px; }
-  #code-form .row { justify-content: flex-start; flex-wrap: wrap; gap: 9px; }
+  #code-form .row { justify-content: flex-start; flex-wrap: nowrap; gap: 8px; }
   .item-head button { width: 108px; flex: 0 0 108px; }
   .ext-option { display: flex; align-items: center; gap: 10px; padding: 10px 3px;
     border-bottom: 1px solid var(--line); font-weight: 400; }
@@ -150,7 +151,6 @@
     .device-create { align-items: stretch; flex-direction: column; }
     .device-create .grow { min-width: 0; }
     .card { padding: 18px 16px; }
-    .action-row > button { flex: 1 1 145px; max-width: none; }
     .item-head { gap: 8px; }
     .item-head button { width: 92px; flex-basis: 92px; white-space: normal; }
   }

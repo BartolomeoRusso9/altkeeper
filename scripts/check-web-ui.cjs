@@ -154,7 +154,9 @@ async function checkDashboardState() {
   const api = source.match(/async function api\(path, body, signal\) \{[\s\S]*?\r?\n\}/);
   const refresh = source.match(/async function refresh\(\) \{[\s\S]*?\r?\n\}/);
   assert(api && refresh);
-  vm.runInContext('let timer = null, refreshInFlight = false, refreshQueued = false;\n' + api[0] + '\n' + refresh[0], context);
+  vm.runInContext('let timer = null, refreshInFlight = false, refreshQueued = false, selectedDeviceId = "default";\n' +
+    'function deviceHeaders() { return { "X-AltKeeper-Device": selectedDeviceId }; }\n' +
+    api[0] + '\n' + refresh[0], context);
   const snapshot = version => ({ version, busy:false, phone:{checking:false}, login:{phase:""}, job:{running:false} });
   const reply = (request, version) => request.resolve({ ok:true, json:async () => snapshot(version) });
   const first = vm.runInContext('refresh()', context);
@@ -206,7 +208,7 @@ async function checkLogPolling() {
   });
   const poll = embedded[1].match(/async function pollLogs\(\) \{[\s\S]*?\r?\n\}/);
   assert(poll);
-  vm.runInContext('let logSeq = 100, logsPollTimer = null;\n' + poll[0], context);
+  vm.runInContext('let logSeq = 100, logsPollTimer = null, selectedDeviceId = "default";\n' + poll[0], context);
   responses.push({ seq: 2, lines: [] }, { seq: 3, lines: ["startup", "ready", "listening"] });
   await vm.runInContext('pollLogs()', context);
   assert.deepEqual(requests.splice(0), ["/api/logs?since=100", "/api/logs?since=0"]);
