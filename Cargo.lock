@@ -75,10 +75,11 @@ dependencies = [
 
 [[package]]
 name = "altkeeper"
-version = "0.3.1"
+version = "0.4.0"
 dependencies = [
  "axum",
  "chrono",
+ "futures-util",
  "idevice",
  "isideload",
  "mdns-sd",
@@ -93,8 +94,10 @@ dependencies = [
  "tauri-winrt-notification",
  "tempfile",
  "tokio",
+ "tower",
  "tracing-subscriber",
  "tray-icon",
+ "url",
  "windows-sys 0.61.2",
  "winreg",
  "winresource",

@@ -21,7 +21,7 @@ There is also a small **web page** to see the state of your apps and renew them:
 > version at the time of writing), running on a Mac and on a Debian 13
 > mini PC (x86-64, Docker). It relies on private Apple APIs and on AltStore's own protocol, which can
 > change without notice. For personal use with your own Apple ID; not affiliated with Apple or
-> AltStore. The CLI supports English and Italian (default); the web UI and third-party
+> AltStore. The CLI supports English (default) and Italian; the web UI and third-party
 > diagnostic messages have separate language behavior.
 >
 > Confirmed with AltServer running from the Docker image on the Debian mini PC: *Refresh* from
@@ -34,10 +34,10 @@ There is also a small **web page** to see the state of your apps and renew them:
 
 ## CLI language (English / Italian)
 
-AltKeeper's command-line prompts, errors, and service logs default to Italian for backwards
-compatibility. Set `ALTKEEPER_LANG=en` to use English, or `ALTKEEPER_LANG=it` for Italian.
+AltKeeper's command-line prompts, errors, and service logs default to English. Set
+`ALTKEEPER_LANG=it` to use Italian, or `ALTKEEPER_LANG=en` for English.
 Language is read for each invocation (no rebuild necessary). Values such as `en-US`,
-`en_GB`, and `it-IT` are accepted case-insensitively; unknown languages fall back to Italian.
+`en_GB`, and `it-IT` are accepted case-insensitively; unknown languages fall back to English.
 The legacy `ALTREFRESH_LANG` variable is also accepted when `ALTKEEPER_LANG` is unset.
 This changes human-readable CLI output, **not** protocol messages, machine-readable data,
 or the web application's language.
@@ -48,7 +48,7 @@ PowerShell (applies to the current session and child processes):
 $env:ALTKEEPER_LANG = "en"
 .\target\release\altkeeper.exe --help
 .\target\release\altkeeper.exe login "your-apple-id@example.com"
-# Restore default: Remove-Item Env:ALTKEEPER_LANG
+# Use the default: Remove-Item Env:ALTKEEPER_LANG
 ```
 
 Command Prompt (cmd.exe):
@@ -65,7 +65,7 @@ ALTKEEPER_LANG=en ./altkeeper phone
 ```
 
 The provided `examples/docker-compose.yml` uses list-style `environment:`. Add
-`- ALTKEEPER_LANG=en` there. The environment variable controls human-readable CLI
+`- ALTKEEPER_LANG=it` there to select Italian. The environment variable controls human-readable CLI
 and server logs, **not** the HTML web page, protocol or JSON. The same 2FA menu commands
 (`d`, `r` when offered, `p<id>`) are available in both languages.
 
@@ -159,22 +159,24 @@ dns-sd -G v4 <host>.local                           # shows the IP address
 
 ### 3. Pair (once, over USB)
 
-`pair-usb` needs the computer's `usbmuxd` reachable over TCP. On a Mac, use the small bridge in
-`examples/`:
+`pair-usb` uses the local `usbmuxd` (on Windows, iTunes / Apple Devices on
+`127.0.0.1:27015`). The iPhone must be connected, unlocked, and trusted by the computer. On a Mac,
+the built-in USB mux is used directly:
 
 ```sh
-# Terminal 1 (leave it open): exposes the Mac's usbmuxd on 127.0.0.1:27015
-python3 examples/usbmux-bridge.py
-
-# Terminal 2, with the iPhone plugged in, unlocked, and "Trust" accepted:
-export USBMUXD_SOCKET_ADDRESS=127.0.0.1:27015
+# with the iPhone connected, unlocked, and "Trust" accepted:
 ./target/release/altkeeper pair-usb
 ```
 
-This writes `rp-pairing.plist`. Copy it next to the binary on the server and keep it private
-(`chmod 600`). Copying a pairing made on a Mac to a Debian server worked in our tests. On Linux, the
-same bridge idea with `socat` (`socat TCP-LISTEN:27015,bind=127.0.0.1,fork UNIX-CONNECT:/var/run/usbmuxd`)
-should work, but we have not tried it.
+This writes `rp-pairing.plist` privately and atomically. For a remote server, create it on the
+computer with the USB cable and copy it to the server. `USBMUXD_SOCKET_ADDRESS=host:port` is still
+supported for a forwarded usbmuxd. The web page and tray also have a **Pair iPhone over USB**
+action. The optional automatic-pairing switch handles a newly connected phone; in Docker it works
+only when the host's usbmuxd socket is mounted into the container.
+Set `ALTKEEPER_NO_AUTO_PAIR=1` to disable the monitor (USB connections remain available). If a
+renewal receives no install response after 60 seconds, AltKeeper verifies the profile separately
+and keeps waiting up to 12 hours while the iPhone remains reachable; the dashboard offers
+**Cancel waiting**.
 
 Then check the connection, from the server folder:
 
@@ -334,6 +336,14 @@ on the machine itself and needs no PIN; on any other address it **refuses to sta
 The web page has no HTTPS: keep it inside your home network. The web page's own sign-in and renew
 were not run against Apple yet.
 
+The device selector at the top lets you manage multiple iPhones with separate Apple accounts.
+Choose **Add device**, name the profile, then select it to pair the phone and sign in to its
+account. Each profile keeps its own account, pairing, saved phone addresses, settings, renewal
+schedule, logs and backups. Existing files remain in the original/default profile; new profiles are
+stored under `devices/`. Automatic renewal is scheduled separately for each profile, with only one
+phone operation running at a time. AltServer remains a single network service and uses the currently
+selected profile.
+
 From a PC, you can also upload an `.ipa` in **Install an app from this PC**. AltKeeper signs it with
 the configured Apple ID and installs it on the iPhone over Wi-Fi. This requires the Apple ID
 password to be saved in `account.json`; enter the 2FA code in the page if Apple asks for it. Signing
@@ -399,7 +409,6 @@ prove Windows 11, other shell hosts, AltServer installation or unattended renewa
    Mac). With the iPhone plugged in, unlocked and trusted:
 
    ```powershell
-   $env:USBMUXD_SOCKET_ADDRESS = "127.0.0.1:27015"
    .\altkeeper.exe pair-usb
    ```
 
@@ -730,15 +739,20 @@ and `ALTKEEPER_NO_USB=1` turns USB off. In Docker, mount `/var/run/usbmuxd` into
 `altkeeper --help` (also `altkeeper login --help`) prints usage in the selected CLI language.
 `ALTKEEPER_DEBUG=1` prints what Apple answers to each sign-in request (status, headers, error
 bodies; never request bodies or successful responses).
-`ALTKEEPER_ANISETTE_URL=https://...` uses your own anisette server (for example `anisette-v3-server`)
-instead of the default one; it must start with `http://` or `https://`. If the default one stops working, see "If something goes wrong".
+Anisette uses `https://ani3.stikstore.app` by default. Choose another server in the web page or tray:
+the isideload public server (`https://ani.jkcoxson.com`) or a custom HTTP(S) URL. The web choice is
+saved privately in `state/anisette-url`; `ALTKEEPER_ANISETTE_URL` takes precedence and locks the
+choice. Clearing the saved choice restores the default. AltKeeper retires the saved anisette
+identity when the effective server changes. Fixed IP:port addresses (up to two, e.g. home and VPN)
+can also be saved from the iPhone panel.
 
 The project used to be called altrefresh: the old `ALTREFRESH_*` variable names still work (the
 `ALTKEEPER_*` one wins if both are set). `altkeeper --version` prints the version.
 
 ## If something goes wrong
 
-- **"remote pairing is missing"**: there is no `rp-pairing.plist` in the folder. Pair again (step 3).
+- **"remote pairing is missing"**: there is no `rp-pairing.plist` in the folder. Use **Pair iPhone
+  over USB** in the web page or tray, or run `altkeeper pair-usb` (step 3).
 - **"phone pairing failed" / `early eof`**: the iPhone no longer recognises that pairing. Pair
   again, or copy a working `rp-pairing.plist` from another computer.
 - **"cannot find the iPhone on the network", "No route to host", timeouts**: the iPhone is not on
@@ -748,16 +762,11 @@ The project used to be called altrefresh: the old `ALTREFRESH_*` variable names 
   version), then give the iPhone a fixed IP in your router.
 - **AltStore says "AltServer could not be found"**: see step 4. Check that the server is running, on
   the same network, that AltStore has the Local Network permission, and read the server's output.
-- **AltStore shows an error and the log says `not provisioned for this server (-45061)` or
-  `reprovision required`**: the default public anisette server does not accept the identity saved
-  in `state/anisette_state` (the server changed or is having trouble). Move the file aside
-  (`mv state/anisette_state state/anisette_state.old`) and start with another server, for example
-  `ALTKEEPER_ANISETTE_URL=https://ani3.stikstore.app altkeeper altserver`. People also report
-  `https://mac-ani.jkcoxson.com` working. Keep the variable set for good (shell profile, the `.env`
-  of the compose file, or `Environment=` in a systemd unit), otherwise the next start goes back to
-  the default server. Apple may ask for a verification code again after the new identity is
-  created. Public servers come and go: if it fails again, try another, or run your own
-  (`anisette-v3-server`).
+- **AltStore reports an anisette error (`-45061` or `reprovision required`)**: use the **Anisette
+  server** panel to test or select another server. AltKeeper moves the old identity aside when the
+  effective URL changes. Apple may ask for a verification code again after a new identity is
+  created. Public servers come and go; you can also configure `ALTKEEPER_ANISETTE_URL` or run your
+  own `anisette-v3-server`.
 - **A refresh from AltStore seems stuck right after `PrepareAppRequest`**: AltStore first sends the
   app to the server, and it can be well over 100 MB. On a weak Wi‑Fi that takes minutes; the server
   prints `app in arrivo: X di Y byte` every few seconds while it arrives, and gives up after 10

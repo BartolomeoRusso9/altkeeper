@@ -11,12 +11,12 @@ use isideload::{
     auth::apple_account::{AppleAccount, TwoFactorCallbackParams, TwoFactorCallbackResponse},
     dev::{
         app_ids::{AppId, AppIdsApi, Profile},
-        devices::DevicesApi,
         developer_session::DeveloperSession,
         device_type::DeveloperDeviceType,
+        devices::DevicesApi,
         teams::{DeveloperTeam, TeamsApi},
     },
-    sideload::{SideloaderBuilder, builder::MaxCertsBehavior},
+    sideload::{builder::MaxCertsBehavior, SideloaderBuilder},
     util::{callbacks::MaxCertsCallbackBox, fs_storage::FsStorage},
 };
 use serde::{Deserialize, Serialize};
@@ -62,11 +62,20 @@ pub struct Account {
 }
 
 pub fn load_account(dir: &Path) -> Result<Account, String> {
-    let raw = std::fs::read_to_string(dir.join(ACCOUNT_FILE))
-        .map_err(|_| crate::tr!("manca account.json: esegui prima `altkeeper login <apple-id>`", "account.json is missing: run `altkeeper login <apple-id>` first").to_string())?;
+    let raw = std::fs::read_to_string(dir.join(ACCOUNT_FILE)).map_err(|_| {
+        crate::tr!(
+            "manca account.json: esegui prima `altkeeper login <apple-id>`",
+            "account.json is missing: run `altkeeper login <apple-id>` first"
+        )
+        .to_string()
+    })?;
     let acc: Account = serde_json::from_str(&raw).map_err(dbg)?;
     if acc.password.is_empty() {
-        return Err(crate::tr!("password non salvata: rifai `altkeeper login` e scegli di salvarla", "password was not saved: rerun `altkeeper login` and choose to save it").into());
+        return Err(crate::tr!(
+            "password non salvata: rifai `altkeeper login` e scegli di salvarla",
+            "password was not saved: rerun `altkeeper login` and choose to save it"
+        )
+        .into());
     }
     Ok(acc)
 }
@@ -107,17 +116,118 @@ impl TfaChannel {
     }
 }
 
-/// Il server anisette da usare: `None` = quello pubblico di isideload. Con
-/// `ALTKEEPER_ANISETTE_URL` se ne può usare uno proprio (per esempio `anisette-v3-server`),
-/// invece di pesare su un servizio di terzi.
+pub const DEFAULT_ANISETTE_URL: &str = "https://ani3.stikstore.app";
+pub const ISIDELOAD_ANISETTE_URL: &str = "https://ani.jkcoxson.com";
+const ANISETTE_URL_FILE: &str = "anisette-url";
+const ANISETTE_EFFECTIVE_URL_FILE: &str = "anisette-effective-url";
+
+#[derive(Clone, Debug)]
+pub struct AnisetteChoice {
+    pub url: String,
+    pub source: &'static str,
+    pub locked: bool,
+}
+
 pub fn anisette_url(value: Option<&str>) -> Result<Option<String>, String> {
     match value.map(str::trim).filter(|v| !v.is_empty()) {
         None => Ok(None),
-        Some(u) if u.starts_with("https://") || u.starts_with("http://") => {
-            Ok(Some(u.trim_end_matches('/').to_string()))
+        Some(u) => {
+            let parsed = url::Url::parse(u).map_err(|_| {
+                crate::tr!(
+                    "URL anisette non valido: usa un URL http:// o https:// completo",
+                    "Invalid anisette URL: use a complete http:// or https:// URL"
+                )
+            })?;
+            if !matches!(parsed.scheme(), "http" | "https")
+                || parsed.host_str().is_none()
+                || !parsed.username().is_empty()
+                || parsed.password().is_some()
+            {
+                return Err(crate::tr!(
+                    "URL anisette non valido: usa un URL http:// o https:// completo",
+                    "Invalid anisette URL: use a complete http:// or https:// URL"
+                )
+                .into());
+            }
+            Ok(Some(parsed.to_string().trim_end_matches('/').to_string()))
         }
-        Some(_) => Err(crate::tr!("ALTKEEPER_ANISETTE_URL deve iniziare con http:// o https://", "ALTKEEPER_ANISETTE_URL must start with http:// or https://").into()),
     }
+}
+
+pub fn anisette_choice(dir: &Path) -> Result<AnisetteChoice, String> {
+    if let Some(value) = crate::env::var("ANISETTE_URL") {
+        let url = anisette_url(Some(&value))?.ok_or("ALTKEEPER_ANISETTE_URL cannot be empty.")?;
+        return Ok(AnisetteChoice {
+            url,
+            source: "env",
+            locked: true,
+        });
+    }
+    let path = dir.join(STATE_DIR).join(ANISETTE_URL_FILE);
+    match std::fs::read_to_string(path) {
+        Ok(value) => {
+            let url = anisette_url(Some(&value))?.ok_or("Saved anisette URL is empty.")?;
+            Ok(AnisetteChoice {
+                url,
+                source: "file",
+                locked: false,
+            })
+        }
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(AnisetteChoice {
+            url: DEFAULT_ANISETTE_URL.into(),
+            source: "default",
+            locked: false,
+        }),
+        Err(e) => Err(format!("Cannot read saved anisette URL: {e}")),
+    }
+}
+
+pub fn save_anisette_choice(dir: &Path, value: Option<&str>) -> Result<AnisetteChoice, String> {
+    if crate::env::var("ANISETTE_URL").is_some() {
+        return Err("The anisette URL is locked by ALTKEEPER_ANISETTE_URL.".into());
+    }
+    let url = match value {
+        Some(value) => Some(anisette_url(Some(value))?.ok_or("Anisette URL cannot be empty.")?),
+        None => None,
+    };
+    let state = dir.join(STATE_DIR);
+    std::fs::create_dir_all(&state).map_err(dbg)?;
+    crate::fsperm::restrict_dir(&state).map_err(dbg)?;
+    let path = state.join(ANISETTE_URL_FILE);
+    match &url {
+        Some(url) => {
+            let temp = state.join(format!(".anisette-url-{}.tmp", std::process::id()));
+            crate::fsperm::write_private(&temp, url.as_bytes()).map_err(dbg)?;
+            if let Err(error) = std::fs::rename(&temp, &path) {
+                let _ = std::fs::remove_file(temp);
+                return Err(format!("Cannot save anisette URL: {error}"));
+            }
+        }
+        None => match std::fs::remove_file(&path) {
+            Ok(()) => {}
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => {}
+            Err(e) => return Err(format!("Cannot restore default anisette URL: {e}")),
+        },
+    }
+    let choice = anisette_choice(dir)?;
+    let marker = state.join(ANISETTE_EFFECTIVE_URL_FILE);
+    let previous = match std::fs::read_to_string(&marker) {
+        Ok(value) => Some(value),
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => None,
+        Err(e) => return Err(format!("Cannot read anisette server state: {e}")),
+    };
+    if (previous
+        .as_deref()
+        .is_some_and(|old| old.trim() != choice.url)
+        || (previous.is_none() && state.join("anisette_state").exists()))
+        && retire_anisette_state(dir)?
+    {
+        crate::log::line(
+            "[anisette] changed server; moved the saved identity aside for reprovisioning",
+        );
+    }
+    crate::fsperm::write_private(&marker, choice.url.as_bytes()).map_err(dbg)?;
+    Ok(choice)
 }
 
 /// L'identità anisette del "dispositivo" resta su disco (`state/`): dopo il primo codice 2FA
@@ -126,10 +236,25 @@ fn anisette_provider(dir: &Path) -> Result<RemoteV3AnisetteProvider, String> {
     let state = dir.join(STATE_DIR);
     std::fs::create_dir_all(&state).map_err(dbg)?;
     crate::fsperm::restrict_dir(&state).map_err(dbg)?;
-    let mut provider = RemoteV3AnisetteProvider::default().map_err(|e| e.to_string())?;
-    if let Some(url) = anisette_url(crate::env::var("ANISETTE_URL").as_deref())? {
-        provider = provider.set_url(&url);
+    let choice = anisette_choice(dir)?;
+    let marker = state.join(ANISETTE_EFFECTIVE_URL_FILE);
+    let previous = match std::fs::read_to_string(&marker) {
+        Ok(value) => Some(value),
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => None,
+        Err(e) => return Err(format!("Cannot read anisette server state: {e}")),
+    };
+    if previous
+        .as_deref()
+        .is_some_and(|old| old.trim() != choice.url)
+        || (previous.is_none() && state.join("anisette_state").exists())
+    {
+        if retire_anisette_state(dir)? {
+            crate::log::line("[anisette] changed default or selected server; moved the saved identity aside for reprovisioning");
+        }
     }
+    crate::fsperm::write_private(&marker, choice.url.as_bytes()).map_err(dbg)?;
+    let mut provider = RemoteV3AnisetteProvider::default().map_err(|e| e.to_string())?;
+    provider = provider.set_url(&choice.url);
     Ok(provider
         .set_storage(Box::new(FsStorage::new(state)))
         .set_serial_number("2".to_string()))
@@ -213,15 +338,20 @@ async fn anisette_for_altstore_once(dir: &Path) -> Result<serde_json::Value, Str
     use isideload::{anisette::AnisetteDataGenerator, auth::grandslam::GrandSlam};
 
     let provider = anisette_provider(dir)?;
-    let mut generator =
-        AnisetteDataGenerator::new(Arc::new(tokio::sync::RwLock::new(provider)));
-    let info = generator.get_client_info().await.map_err(|e| e.to_string())?;
+    let mut generator = AnisetteDataGenerator::new(Arc::new(tokio::sync::RwLock::new(provider)));
+    let info = generator
+        .get_client_info()
+        .await
+        .map_err(|e| e.to_string())?;
     let gs = Arc::new(
         GrandSlam::new(info.clone(), false, None)
             .await
             .map_err(|e| e.to_string())?,
     );
-    let data = generator.get_anisette_data(gs).await.map_err(|e| e.to_string())?;
+    let data = generator
+        .get_anisette_data(gs)
+        .await
+        .map_err(|e| e.to_string())?;
     let now = std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)
         .map(|d| d.as_secs())
@@ -242,10 +372,13 @@ async fn anisette_for_altstore_once(dir: &Path) -> Result<serde_json::Value, Str
 
 #[cfg(test)]
 mod tests {
-    use super::{anisette_url, is_max_certs_error, iso8601_utc, max_certs_behavior, needs_reprovision, parse_2fa_input};
+    use super::{
+        anisette_choice, anisette_url, is_max_certs_error, iso8601_utc, max_certs_behavior,
+        needs_reprovision, parse_2fa_input, save_anisette_choice, DEFAULT_ANISETTE_URL,
+        ISIDELOAD_ANISETTE_URL, STATE_DIR,
+    };
     use isideload::{
-        auth::apple_account::TwoFactorCallbackResponse,
-        sideload::builder::MaxCertsBehavior,
+        auth::apple_account::TwoFactorCallbackResponse, sideload::builder::MaxCertsBehavior,
     };
 
     #[test]
@@ -262,20 +395,33 @@ mod tests {
 
     #[test]
     fn riconosce_opzioni_2fa() {
-        assert!(matches!(parse_2fa_input("d", false), Some(TwoFactorCallbackResponse::SendToDevices)));
-        assert!(matches!(parse_2fa_input("r", false), Some(TwoFactorCallbackResponse::ResendCode)));
-        assert!(matches!(parse_2fa_input("p1", false), Some(TwoFactorCallbackResponse::SendSms(1))));
-        assert!(matches!(parse_2fa_input("p42", true), Some(TwoFactorCallbackResponse::SendSms(42))));
+        assert!(matches!(
+            parse_2fa_input("d", false),
+            Some(TwoFactorCallbackResponse::SendToDevices)
+        ));
+        assert!(matches!(
+            parse_2fa_input("r", false),
+            Some(TwoFactorCallbackResponse::ResendCode)
+        ));
+        assert!(matches!(
+            parse_2fa_input("p1", false),
+            Some(TwoFactorCallbackResponse::SendSms(1))
+        ));
+        assert!(matches!(
+            parse_2fa_input("p42", true),
+            Some(TwoFactorCallbackResponse::SendSms(42))
+        ));
     }
 
     #[test]
     fn scarta_input_2fa_non_valido_senza_contattare_apple() {
-        for invalid in ["", " ", "12345", "1234567", "12 456", "abcdef", "p", "pabc", "R"] {
+        for invalid in [
+            "", " ", "12345", "1234567", "12 456", "abcdef", "p", "pabc", "R",
+        ] {
             assert!(parse_2fa_input(invalid, false).is_none(), "{invalid:?}");
         }
         assert!(parse_2fa_input("r", true).is_none());
     }
-
 
     #[test]
     fn riconosce_la_richiesta_di_riprovisioning() {
@@ -301,6 +447,54 @@ mod tests {
         );
         assert!(anisette_url(Some("ani.example.org")).is_err());
         assert!(anisette_url(Some("ftp://x")).is_err());
+        assert!(anisette_url(Some("https://")).is_err());
+        assert!(anisette_url(Some("https://user:password@ani.example.org")).is_err());
+    }
+
+    #[test]
+    fn anisette_default_saved_choice_and_reset_are_consistent() {
+        if crate::env::var("ANISETTE_URL").is_some() {
+            return;
+        }
+        let dir = tempfile::tempdir().unwrap();
+        let initial = anisette_choice(dir.path()).unwrap();
+        assert_eq!(initial.url, DEFAULT_ANISETTE_URL);
+        assert_eq!(initial.source, "default");
+
+        let custom = "https://ani.example.org";
+        let selected = save_anisette_choice(dir.path(), Some(custom)).unwrap();
+        assert_eq!(selected.url, custom);
+        assert_eq!(selected.source, "file");
+        assert!(!selected.locked);
+        assert_eq!(anisette_choice(dir.path()).unwrap().url, custom);
+
+        let reset = save_anisette_choice(dir.path(), None).unwrap();
+        assert_eq!(reset.url, DEFAULT_ANISETTE_URL);
+        assert_eq!(reset.source, "default");
+    }
+
+    #[test]
+    fn anisette_identity_is_retired_when_a_legacy_state_changes_server() {
+        if crate::env::var("ANISETTE_URL").is_some() {
+            return;
+        }
+        let dir = tempfile::tempdir().unwrap();
+        std::fs::create_dir_all(dir.path().join(STATE_DIR)).unwrap();
+        std::fs::write(dir.path().join(STATE_DIR).join("anisette_state"), b"legacy").unwrap();
+        save_anisette_choice(dir.path(), Some("https://ani.example.org")).unwrap();
+        assert!(!dir.path().join(STATE_DIR).join("anisette_state").exists());
+        assert_eq!(
+            std::fs::read(dir.path().join(STATE_DIR).join("anisette_state.stale")).unwrap(),
+            b"legacy"
+        );
+    }
+
+    #[test]
+    fn tray_server_list_matches_the_vendored_isideload_default() {
+        assert_eq!(
+            ISIDELOAD_ANISETTE_URL,
+            isideload::anisette::remote_v3::DEFAULT_ANISETTE_V3_URL
+        );
     }
 
     #[test]
@@ -314,8 +508,14 @@ mod tests {
     #[test]
     fn revoca_certificati_solo_se_richiesta() {
         assert!(matches!(max_certs_behavior(None), MaxCertsBehavior::Error));
-        assert!(matches!(max_certs_behavior(Some("0")), MaxCertsBehavior::Error));
-        assert!(matches!(max_certs_behavior(Some("1")), MaxCertsBehavior::Revoke));
+        assert!(matches!(
+            max_certs_behavior(Some("0")),
+            MaxCertsBehavior::Error
+        ));
+        assert!(matches!(
+            max_certs_behavior(Some("1")),
+            MaxCertsBehavior::Revoke
+        ));
         assert!(is_max_certs_error("error code 7460: You already have"));
     }
 }
@@ -352,11 +552,21 @@ pub async fn open_session_web(
         .anisette_provider(provider)
         .login(password, get_2fa_code)
         .await
-        .map_err(|e| crate::tr!(format!("login Apple ID non riuscito: {e}"), format!("Apple ID sign-in failed: {e}")))?;
+        .map_err(|e| {
+            crate::tr!(
+                format!("login Apple ID non riuscito: {e}"),
+                format!("Apple ID sign-in failed: {e}")
+            )
+        })?;
 
     DeveloperSession::from_account(&mut account)
         .await
-        .map_err(|e| crate::tr!(format!("sessione sviluppatore non riuscita: {e}"), format!("Developer session failed: {e}")))
+        .map_err(|e| {
+            crate::tr!(
+                format!("sessione sviluppatore non riuscita: {e}"),
+                format!("Developer session failed: {e}")
+            )
+        })
 }
 
 /// Login e sessione verso i servizi sviluppatori di Apple.
@@ -373,10 +583,13 @@ pub async fn open_session(
             return Ok(TwoFactorCallbackResponse::Abort);
         }
         if params.unknown {
-            println!("{}", crate::tr!(
-                "L'ultimo metodo 2FA non ha funzionato, prova un altro.",
-                "The previous 2FA method did not work; try another one."
-            ));
+            println!(
+                "{}",
+                crate::tr!(
+                    "L'ultimo metodo 2FA non ha funzionato, prova un altro.",
+                    "The previous 2FA method did not work; try another one."
+                )
+            );
         } else {
             let destination = if params.sms {
                 params
@@ -388,21 +601,30 @@ pub async fn open_session(
             } else {
                 crate::tr!("i tuoi dispositivi", "your devices").to_string()
             };
-            println!("{}", crate::tr!(
-                format!("Inserisci il codice a 6 cifre inviato a {destination}:"),
-                format!("Enter the six-digit code sent to {destination}:")
-            ));
+            println!(
+                "{}",
+                crate::tr!(
+                    format!("Inserisci il codice a 6 cifre inviato a {destination}:"),
+                    format!("Enter the six-digit code sent to {destination}:")
+                )
+            );
         }
         if params.unknown {
-            println!("{}", crate::tr!(
-                "(d = invia ai dispositivi, p<id> = SMS al numero <id>)",
-                "(d = send to devices, p<id> = SMS to number <id>)"
-            ));
+            println!(
+                "{}",
+                crate::tr!(
+                    "(d = invia ai dispositivi, p<id> = SMS al numero <id>)",
+                    "(d = send to devices, p<id> = SMS to number <id>)"
+                )
+            );
         } else {
-            println!("{}", crate::tr!(
-                "(d = invia ai dispositivi, r = reinvia, p<id> = SMS al numero <id>)",
-                "(d = send to devices, r = resend, p<id> = SMS to number <id>)"
-            ));
+            println!(
+                "{}",
+                crate::tr!(
+                    "(d = invia ai dispositivi, r = reinvia, p<id> = SMS al numero <id>)",
+                    "(d = send to devices, r = resend, p<id> = SMS to number <id>)"
+                )
+            );
         }
         for n in params
             .numbers
@@ -415,10 +637,19 @@ pub async fn open_session(
         loop {
             // Non usare stdin().read_line(): in PowerShell lo stdin del processo
             // può essere una pipe a EOF nonostante la console funzioni.
-            let code = match crate::terminal::prompt_line(crate::tr!("Codice 2FA o comando: ", "2FA code or command: ")) {
+            let code = match crate::terminal::prompt_line(crate::tr!(
+                "Codice 2FA o comando: ",
+                "2FA code or command: "
+            )) {
                 Ok(code) => code,
                 Err(e) => {
-                    eprintln!("{}", crate::tr!(format!("Impossibile leggere il codice 2FA dal terminale: {e}"), format!("Cannot read 2FA code from the terminal: {e}")));
+                    eprintln!(
+                        "{}",
+                        crate::tr!(
+                            format!("Impossibile leggere il codice 2FA dal terminale: {e}"),
+                            format!("Cannot read 2FA code from the terminal: {e}")
+                        )
+                    );
                     return Ok(TwoFactorCallbackResponse::Abort);
                 }
             };
@@ -426,17 +657,20 @@ pub async fn open_session(
             if let Some(response) = parse_2fa_input(&code, params.unknown) {
                 return Ok(response);
             }
-            println!("{}", if params.unknown {
-                crate::tr!(
-                    "Inserisci un codice di 6 cifre valido oppure d o p<id>.",
-                    "Enter a valid six-digit code, d or p<id>."
-                )
-            } else {
-                crate::tr!(
-                    "Inserisci un codice di 6 cifre valido oppure d, r o p<id>.",
-                    "Enter a valid six-digit code, d, r or p<id>."
-                )
-            });
+            println!(
+                "{}",
+                if params.unknown {
+                    crate::tr!(
+                        "Inserisci un codice di 6 cifre valido oppure d o p<id>.",
+                        "Enter a valid six-digit code, d or p<id>."
+                    )
+                } else {
+                    crate::tr!(
+                        "Inserisci un codice di 6 cifre valido oppure d, r o p<id>.",
+                        "Enter a valid six-digit code, d, r or p<id>."
+                    )
+                }
+            );
         }
     };
 
@@ -444,11 +678,21 @@ pub async fn open_session(
         .anisette_provider(provider)
         .login(password, get_2fa_code)
         .await
-        .map_err(|e| crate::tr!(format!("login Apple ID non riuscito: {e}"), format!("Apple ID sign-in failed: {e}")))?;
+        .map_err(|e| {
+            crate::tr!(
+                format!("login Apple ID non riuscito: {e}"),
+                format!("Apple ID sign-in failed: {e}")
+            )
+        })?;
 
     DeveloperSession::from_account(&mut account)
         .await
-        .map_err(|e| crate::tr!(format!("sessione sviluppatore non riuscita: {e}"), format!("Developer session failed: {e}")))
+        .map_err(|e| {
+            crate::tr!(
+                format!("sessione sviluppatore non riuscita: {e}"),
+                format!("Developer session failed: {e}")
+            )
+        })
 }
 
 /// Sceglie il team: quello indicato, l'unico disponibile, o (in interattivo) chiede.
@@ -459,13 +703,19 @@ pub async fn pick_team(
 ) -> Result<DeveloperTeam, String> {
     let teams = sess.list_teams().await.map_err(|e| e.to_string())?;
     if teams.is_empty() {
-        return Err(crate::tr!("nessun team sviluppatore su questo Apple ID", "there are no developer teams for this Apple ID").into());
+        return Err(crate::tr!(
+            "nessun team sviluppatore su questo Apple ID",
+            "there are no developer teams for this Apple ID"
+        )
+        .into());
     }
     if let Some(id) = wanted {
-        return teams
-            .into_iter()
-            .find(|t| t.team_id == id)
-            .ok_or_else(|| crate::tr!(format!("il team {id} non esiste su questo Apple ID"), format!("Team {id} does not exist for this Apple ID")));
+        return teams.into_iter().find(|t| t.team_id == id).ok_or_else(|| {
+            crate::tr!(
+                format!("il team {id} non esiste su questo Apple ID"),
+                format!("Team {id} does not exist for this Apple ID")
+            )
+        });
     }
     if teams.len() == 1 || !interactive {
         return Ok(teams.into_iter().next().unwrap());
@@ -475,12 +725,18 @@ pub async fn pick_team(
         println!(
             "  {}: {} ({})",
             i + 1,
-            t.name.as_deref().unwrap_or(crate::tr!("<senza nome>", "<unnamed>")),
+            t.name
+                .as_deref()
+                .unwrap_or(crate::tr!("<senza nome>", "<unnamed>")),
             t.team_id
         );
     }
-    let s = crate::terminal::prompt_line(crate::tr!("Scegli il numero: ", "Choose a number: ")).map_err(dbg)?;
-    let n: usize = s.trim().parse().map_err(|_| crate::tr!("scelta non valida", "invalid selection").to_string())?;
+    let s = crate::terminal::prompt_line(crate::tr!("Scegli il numero: ", "Choose a number: "))
+        .map_err(dbg)?;
+    let n: usize = s
+        .trim()
+        .parse()
+        .map_err(|_| crate::tr!("scelta non valida", "invalid selection").to_string())?;
     teams
         .into_iter()
         .nth(n.wrapping_sub(1))
@@ -546,7 +802,10 @@ pub async fn sign_ipa(
 ) -> Result<SignedApp, String> {
     let filename = ipa
         .file_name()
-        .ok_or(crate::tr!("nome del file IPA mancante", "IPA filename is missing"))?
+        .ok_or(crate::tr!(
+            "nome del file IPA mancante",
+            "IPA filename is missing"
+        ))?
         .to_string_lossy();
     let cleanup_dir = std::env::temp_dir().join(format!("{filename}_extracted"));
     let storage_path = Path::new(STATE_DIR).join("sideload");
@@ -555,7 +814,12 @@ pub async fn sign_ipa(
 
     sess.ensure_device_registered(&team, device_name, udid, DeveloperDeviceType::Ios)
         .await
-        .map_err(|e| crate::tr!(format!("registrazione iPhone non riuscita: {e}"), format!("iPhone registration failed: {e}")))?;
+        .map_err(|e| {
+            crate::tr!(
+                format!("registrazione iPhone non riuscita: {e}"),
+                format!("iPhone registration failed: {e}")
+            )
+        })?;
 
     let mut sideloader = SideloaderBuilder::new(sess, account.apple_id.clone())
         .storage(Box::new(FsStorage::new(storage_path)))
@@ -596,4 +860,3 @@ pub async fn sign_ipa(
         cleanup_dir,
     })
 }
-

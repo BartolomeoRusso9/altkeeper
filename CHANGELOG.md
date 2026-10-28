@@ -1,5 +1,28 @@
 # Changelog
 
+## 0.4.0
+
+### Added
+- **Anisette server selection.** `https://ani3.stikstore.app` is now the default, with the
+  isideload public endpoint and custom HTTP(S) URLs selectable from the web page or tray.
+  `ALTKEEPER_ANISETTE_URL` takes precedence; changing the effective server retires the saved
+  anisette identity so it can be provisioned again. The page can test the selected server.
+- **USB pairing from the dashboard and tray**, plus automatic pairing of newly connected iPhones.
+  The monitor uses usbmuxd's device events with a polling fallback, never overwrites a valid
+  pairing automatically, and can be disabled with `ALTKEEPER_NO_AUTO_PAIR=1` or the page switch.
+- **Saved iPhone addresses.** Store up to two home/VPN IP:port addresses in the web interface;
+  they are tried before Bonjour and LAN discovery.
+- **Renewal wait and cancel.** If the phone does not acknowledge a downloaded profile, AltKeeper
+  checks independently whether it arrived, then waits for the phone to respond (up to 12 hours).
+  The dashboard can cancel the wait.
+- The log viewer pauses polling in hidden tabs, times out requests, reports copy results, and
+  supports clipboard fallback over plain HTTP.
+
+### Changed
+- USB pairing now uses the same local/forwarded usbmuxd selection as USB connections and writes
+  its pairing file through a private temporary file before replacing the destination.
+- The web check timeout allows for both saved addresses.
+
 ## 0.3.1
 
 ### Added

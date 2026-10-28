@@ -18,6 +18,22 @@ for (const snippet of [
   'data-i18n="Send test notification"',
   'data-i18n="Sign and install"',
   'data-i18n="Discord failure notifications"',
+  'data-i18n="Pair iPhone over USB"',
+  'data-i18n="Connection addresses"',
+  'data-i18n="Save addresses"',
+  'data-i18n="Anisette server"',
+  'data-i18n="Test server"',
+  'id="auto-pair-enabled"',
+  'id="btn-cancel-wait"',
+  '"/api/phone-addresses"',
+  '"/api/auto-pair"',
+  '"/api/pair-usb"',
+  '"/api/renew/cancel-wait"',
+  '"/api/anisette"',
+  '"/api/anisette/test"',
+  'document.hidden',
+  'document.execCommand("copy")',
+  'white-space: pre-wrap; overflow-wrap: anywhere;',
   '.action-row { justify-content: flex-start; align-items: stretch; flex-wrap: nowrap; }',
   'flex: 1 1 0; min-width: 0; max-width: 184px;',
   '.action-row { gap: 6px; }',
@@ -46,6 +62,8 @@ for (const id of [
   "btn-due", "btn-all", "btn-preview",
   "auto-enable", "auto-disable",
   "discord-save", "discord-clear", "discord-test",
+  "phone-addresses-save", "btn-pair-usb", "anisette-save",
+  "anisette-clear", "anisette-test", "auto-pair-enabled",
   "btn-install", "btn-login", "btn-code",
 ]) {
   assert(html.includes('id="' + id + '"'), "Missing control: " + id);
@@ -136,7 +154,9 @@ async function checkDashboardState() {
   const api = source.match(/async function api\(path, body, signal\) \{[\s\S]*?\r?\n\}/);
   const refresh = source.match(/async function refresh\(\) \{[\s\S]*?\r?\n\}/);
   assert(api && refresh);
-  vm.runInContext('let timer = null, refreshInFlight = false, refreshQueued = false;\n' + api[0] + '\n' + refresh[0], context);
+  vm.runInContext('let timer = null, refreshInFlight = false, refreshQueued = false, selectedDeviceId = "default";\n' +
+    'function deviceHeaders() { return { "X-AltKeeper-Device": selectedDeviceId }; }\n' +
+    api[0] + '\n' + refresh[0], context);
   const snapshot = version => ({ version, busy:false, phone:{checking:false}, login:{phase:""}, job:{running:false} });
   const reply = (request, version) => request.resolve({ ok:true, json:async () => snapshot(version) });
   const first = vm.runInContext('refresh()', context);
@@ -172,6 +192,11 @@ async function checkLogPolling() {
   const requests = [], responses = [], timers = [];
   const context = vm.createContext({
     $: id => { assert.equal(id, "logs-view"); return view; },
+    t: text => text,
+    document: { hidden: false },
+    AbortController,
+    banner: (...args) => { context.lastBanner = args; },
+    clearTimeout: () => {},
     api: async path => {
       requests.push(path);
       const response = responses.shift();
@@ -179,11 +204,11 @@ async function checkLogPolling() {
       assert(response, "unexpected log request");
       return response;
     },
-    setTimeout: (_fn, delay) => timers.push(delay),
+    setTimeout: (_fn, delay) => { timers.push(delay); return timers.length; },
   });
   const poll = embedded[1].match(/async function pollLogs\(\) \{[\s\S]*?\r?\n\}/);
   assert(poll);
-  vm.runInContext('let logSeq = 100;\n' + poll[0], context);
+  vm.runInContext('let logSeq = 100, logsPollTimer = null, selectedDeviceId = "default";\n' + poll[0], context);
   responses.push({ seq: 2, lines: [] }, { seq: 3, lines: ["startup", "ready", "listening"] });
   await vm.runInContext('pollLogs()', context);
   assert.deepEqual(requests.splice(0), ["/api/logs?since=100", "/api/logs?since=0"]);
@@ -200,11 +225,12 @@ async function checkLogPolling() {
   await vm.runInContext('pollLogs()', context);
   assert.equal(vm.runInContext('logSeq', context), 4);
   assert.deepEqual(requests.splice(0), ["/api/logs?since=4", "/api/logs?since=0"]);
+  assert.deepEqual(context.lastBanner, ["logs-message", "Could not load logs: temporarily offline", "bad"]);
 
   responses.push({ seq: 0, lines: [] }, { seq: 0, lines: [] });
   await vm.runInContext('pollLogs()', context);
   assert.equal(vm.runInContext('logSeq', context), 0);
   assert(view.textContent.endsWith("\nnext"));
-  assert.deepEqual(timers, [2000, 2000, 2000, 2000]);
+  assert.deepEqual(timers, [10000, 2000, 10000, 2000, 10000, 2000, 10000, 2000]);
 }
 checkLogPolling().catch(error => { console.error(error); process.exitCode = 1; });
