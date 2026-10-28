@@ -36,8 +36,16 @@ impl<'lt> AnisetteHeadersProvider for AOSKitAnisetteProvider<'lt> {
             msg_send![self.aos_utilities, retrieveOTPHeadersForDSID: NSString::from_str("-2")]
         };
 
+        if headers.is_null() {
+            return Err(crate::AnisetteError::AnisetteNotProvisioned);
+        }
+
         let otp: *const NSString =
             unsafe { msg_send![headers, valueForKey: NSString::from_str("X-Apple-MD")] };
+        if otp.is_null() {
+            return Err(crate::AnisetteError::AnisetteNotProvisioned);
+        }
+
         headers_map.insert(
             "X-Apple-I-MD".to_string(),
             unsafe { (*otp).as_str() }.to_string(),
@@ -45,6 +53,10 @@ impl<'lt> AnisetteHeadersProvider for AOSKitAnisetteProvider<'lt> {
 
         let mid: *const NSString =
             unsafe { msg_send![headers, valueForKey: NSString::from_str("X-Apple-MD-M")] };
+        if mid.is_null() {
+            return Err(crate::AnisetteError::AnisetteNotProvisioned);
+        }
+
         headers_map.insert(
             "X-Apple-I-MD-M".to_string(),
             unsafe { (*mid).as_str() }.to_string(),
@@ -52,6 +64,10 @@ impl<'lt> AnisetteHeadersProvider for AOSKitAnisetteProvider<'lt> {
 
         let machine_serial_number: *const NSString =
             unsafe { msg_send![self.aos_utilities, machineSerialNumber] };
+        if machine_serial_number.is_null() {
+            return Err(crate::AnisetteError::AnisetteNotProvisioned);
+        }
+
         headers_map.insert(
             "X-Apple-SRL-NO".to_string(),
             unsafe { (*machine_serial_number).as_str() }.to_string(),
@@ -59,14 +75,30 @@ impl<'lt> AnisetteHeadersProvider for AOSKitAnisetteProvider<'lt> {
 
         let current_device: *const NSObject = unsafe { msg_send![self.ak_device, currentDevice] };
 
+        if current_device.is_null() {
+            return Err(crate::AnisetteError::AnisetteNotProvisioned);
+        }
+
         let local_user_uuid: *const NSString = unsafe { msg_send![current_device, localUserUUID] };
+        if local_user_uuid.is_null() {
+            return Err(crate::AnisetteError::AnisetteNotProvisioned);
+        }
+
         headers_map.insert(
             "X-Apple-I-MD-LU".to_string(),
             unsafe { (*local_user_uuid).as_str() }.to_string(),
         );
 
         let locale: *const NSObject = unsafe { msg_send![current_device, locale] };
+        if locale.is_null() {
+            return Err(crate::AnisetteError::AnisetteNotProvisioned);
+        }
+
         let locale: *const NSString = unsafe { msg_send![locale, localeIdentifier] };
+        if locale.is_null() {
+            return Err(crate::AnisetteError::AnisetteNotProvisioned);
+        }
+
         headers_map.insert(
             "X-Apple-Locale".to_string(),
             unsafe { (*locale).as_str() }.to_string(),
@@ -74,6 +106,10 @@ impl<'lt> AnisetteHeadersProvider for AOSKitAnisetteProvider<'lt> {
 
         let server_friendly_description: *const NSString =
             unsafe { msg_send![current_device, serverFriendlyDescription] };
+        if server_friendly_description.is_null() {
+            return Err(crate::AnisetteError::AnisetteNotProvisioned);
+        }
+
         headers_map.insert(
             "X-Mme-Client-Info".to_string(),
             unsafe { (*server_friendly_description).as_str() }.to_string(),
@@ -81,6 +117,10 @@ impl<'lt> AnisetteHeadersProvider for AOSKitAnisetteProvider<'lt> {
 
         let unique_device_identifier: *const NSString =
             unsafe { msg_send![current_device, uniqueDeviceIdentifier] };
+        if unique_device_identifier.is_null() {
+            return Err(crate::AnisetteError::AnisetteNotProvisioned);
+        }
+
         headers_map.insert(
             "X-Mme-Device-Id".to_string(),
             unsafe { (*unique_device_identifier).as_str() }.to_string(),

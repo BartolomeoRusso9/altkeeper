@@ -14,7 +14,12 @@ This guide gets one iPhone paired and reachable. Choose a long-running setup in
 ## Get AltKeeper
 
 Download a binary from [GitHub Releases](https://github.com/BartolomeoRusso9/altkeeper/releases),
-or build it with Rust:
+or build it with Rust. On Windows, the `AltKeeper-v<version>-Windows-x64.zip` archive
+contains `AltKeeper.exe`. If you choose the standalone `AltKeeper-v<version>-Windows-x64.exe`,
+run that versioned filename in place of `AltKeeper.exe` in the commands below, or rename it to
+`AltKeeper.exe` first.
+
+To build from source:
 
 ```sh
 git clone https://github.com/BartolomeoRusso9/altkeeper
@@ -50,7 +55,14 @@ ALTKEEPER_WEB_PIN='choose-a-private-pin' ./AltKeeper serve \
   --bind 0.0.0.0:8787 --altserver
 ```
 
-On Windows, run `.\AltKeeper.exe serve --altserver`. Then:
+On Windows, use PowerShell:
+
+```powershell
+$env:ALTKEEPER_WEB_PIN = 'choose-a-private-pin'
+.\AltKeeper.exe serve --bind 0.0.0.0:8787 --altserver
+```
+
+Then:
 
 1. Open `http://<server-address>:8787` to use the dashboard.
 2. In AltStore Classic, allow Local Network access and try **Refresh All** with one app first.

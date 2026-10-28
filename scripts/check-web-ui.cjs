@@ -248,3 +248,56 @@ async function checkLogPolling() {
   assert.deepEqual(timers, [10000, 2000, 10000, 2000, 10000, 2000, 10000, 2000]);
 }
 checkLogPolling().catch(error => { console.error(error); process.exitCode = 1; });
+
+// Polling must leave the running-app options intact while a user chooses a PID.
+// A removed PID must fall back to a visible empty option and disable activation.
+{
+  let replacements = 0;
+  const select = {
+    value: "", children: [], disabled: true,
+    replaceChildren(...options) { this.children = options; replacements++; },
+  };
+  const controls = { "jit-app-select": select, "jit-refresh": {}, "jit-enable": {}, "jit-hint": {} };
+  const context = vm.createContext({
+    $: id => controls[id], t: text => text,
+    document: { createElement: () => ({ value: "", textContent: "" }) },
+  });
+  const jitRender = embedded[1].match(/  const jitSelect = \$\("jit-app-select"\);[\s\S]*?(?=\n\n  \/\/ Free-account limits)/);
+  assert(jitRender, "JIT rendering missing");
+  vm.runInContext('let renderedJitApps = null; function renderJit(s) {\n' + jitRender[0] + '\n}', context);
+  const render = state => { context.snapshot = state; vm.runInContext('renderJit(snapshot)', context); };
+  render({ jit_apps: [] });
+  assert.equal(select.children[0].value, "");
+  assert.equal(select.children[0].textContent, "Load running apps first");
+  assert.equal(select.disabled, true);
+  render({ jit_apps: [{ pid: 12, name: "First" }, { pid: 34, name: "Second" }] });
+  assert.equal(select.children[0].value, "");
+  assert.equal(select.children[0].textContent, "Select a running app");
+  assert.equal(select.disabled, false);
+  assert.equal(controls["jit-enable"].disabled, true);
+  select.value = "34";
+  const options = select.children;
+  const beforePolling = replacements;
+  render({ jit_apps: [{ pid: 12, name: "First" }, { pid: 34, name: "Second" }] });
+  assert.equal(select.children, options, "unchanged responses must preserve the option nodes");
+  assert.equal(replacements, beforePolling);
+  assert.equal(select.value, "34");
+  assert.equal(controls["jit-enable"].disabled, false);
+  render({ busy: true, jit_apps: [{ pid: 12, name: "First" }, { pid: 34, name: "Second" }] });
+  assert.equal(replacements, beforePolling, "busy-state updates must not rebuild options");
+  assert.equal(select.value, "34");
+  assert.equal(select.disabled, true);
+  assert.equal(controls["jit-refresh"].disabled, true);
+  assert.equal(controls["jit-enable"].disabled, true);
+  render({ jit_apps: [{ pid: 34, name: "Renamed" }] });
+  assert.equal(select.value, "34", "retain a PID that is still present after a list change");
+  assert.equal(select.children[1].textContent, "Renamed · PID 34");
+  render({ jit_apps: [{ pid: 12, name: "First" }] });
+  assert.equal(select.value, "", "a removed selection must show the placeholder");
+  assert(select.children.some(option => option.value === select.value));
+  assert.equal(controls["jit-enable"].disabled, true);
+  render({});
+  assert.equal(select.disabled, true);
+  assert.equal(select.children[0].textContent, "Load running apps first");
+  console.log("JIT options, selection and busy-state polling OK");
+}

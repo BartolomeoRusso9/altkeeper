@@ -452,6 +452,7 @@ let anisetteTestRunning = false;
 let anisetteDraftDirty = false, anisetteSavePending = false, anisettePendingUrl = null;
 let selectedDeviceId = localStorage.getItem("altkeeper-device") || "default";
 let deviceDrafts = [];
+let renderedJitApps = null;
 
 function deviceHeaders() {
   return { "X-AltKeeper-Device": selectedDeviceId };
@@ -607,22 +608,23 @@ function render(s) {
   banner("phone-error", err, "bad");
   $("phone-error").title = p.detail || "";
   const jitSelect = $("jit-app-select");
-  const selectedJitPid = jitSelect.value;
   const jitApps = s.jit_apps || [];
-  const jitOptions = jitApps.map(app => {
-    const option = document.createElement("option");
-    option.value = String(app.pid);
-    option.textContent = (app.real_app_name || app.name) + " · PID " + app.pid;
-    return option;
-  });
-  if (!jitOptions.length) {
-    const option = document.createElement("option");
-    option.value = "";
-    option.textContent = t("Load running apps first");
-    jitOptions.push(option);
+  const jitAppsKey = JSON.stringify(jitApps);
+  if (jitAppsKey !== renderedJitApps) {
+    const selectedJitPid = jitSelect.value;
+    const placeholder = document.createElement("option");
+    placeholder.value = "";
+    placeholder.textContent = jitApps.length ? t("Select a running app") : t("Load running apps first");
+    const jitOptions = jitApps.map(app => {
+      const option = document.createElement("option");
+      option.value = String(app.pid);
+      option.textContent = (app.real_app_name || app.name) + " · PID " + app.pid;
+      return option;
+    });
+    jitSelect.replaceChildren(placeholder, ...jitOptions);
+    jitSelect.value = jitApps.some(app => String(app.pid) === selectedJitPid) ? selectedJitPid : "";
+    renderedJitApps = jitAppsKey;
   }
-  jitSelect.replaceChildren(...jitOptions);
-  jitSelect.value = jitApps.some(app => String(app.pid) === selectedJitPid) ? selectedJitPid : "";
   jitSelect.disabled = !!s.busy || !jitApps.length;
   $("jit-refresh").disabled = !!s.busy;
   $("jit-enable").disabled = !!s.busy || !jitSelect.value;

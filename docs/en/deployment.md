@@ -15,7 +15,12 @@ advertisement. This is intended for Linux Docker hosts:
    permissions.
 3. Put `rp-pairing.plist` in `/srv/altkeeper`. If you use independent renewals, sign in once so
    `account.json` and `state/` are created in the mounted data directory.
-4. From that directory, run `docker compose up -d`.
+4. Provide the `altkeeper:latest` image declared by the Compose file. From a repository checkout,
+   build it with `docker build -t altkeeper:latest .`. Alternatively, pull an image from an
+   available registry and tag it locally, for example `docker pull <registry>/<owner>/altkeeper:latest`
+   followed by `docker tag <registry>/<owner>/altkeeper:latest altkeeper:latest`. Authenticate to
+   the registry first if required.
+5. From `/srv/altkeeper`, run `docker compose up -d`.
 
 The sample mounts `/srv/altkeeper` at `/data`; pairing, account, state, logs, and profile backups
 persist there. The image does not include these files. For optional USB access from the container,

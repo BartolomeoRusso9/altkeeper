@@ -1,6 +1,6 @@
 pub use libc::{chmod, close, free, ftruncate, gettimeofday, malloc, mkdir, read, strncpy, umask, write};
 
-use libc::{lstat as lstat_macos, fstat as fstat_macos, stat as stat_macos, open as open_macos, O_CREAT, O_WRONLY, O_RDWR, O_RDONLY};
+use libc::{lstat as lstat_macos, fstat as fstat_macos, stat as stat_macos, open as open_macos, O_APPEND, O_CREAT, O_EXCL, O_TRUNC, O_WRONLY, O_RDWR, O_RDONLY};
 
 use android_loader::sysv64;
 
@@ -29,7 +29,10 @@ pub struct StatLinux {
 #[sysv64]
 pub unsafe fn lstat(path: *const libc::c_char, buf: *mut StatLinux) -> libc::c_int {
     let mut st: stat_macos = std::mem::zeroed();
-    lstat_macos(path, &mut st);
+    let result = lstat_macos(path, &mut st);
+    if result != 0 {
+        return result;
+    }
     *buf = StatLinux {
         st_dev: st.st_dev as _,
         st_ino: st.st_ino as _,
@@ -50,13 +53,16 @@ pub unsafe fn lstat(path: *const libc::c_char, buf: *mut StatLinux) -> libc::c_i
         st_ctime_nsec: st.st_ctime_nsec as _,
         __unused: [0, 0, 0],
     };
-    0
+    result
 }
 
 #[sysv64]
 pub unsafe fn fstat(fildes: libc::c_int, buf: *mut StatLinux) -> libc::c_int {
     let mut st: stat_macos = std::mem::zeroed();
-    fstat_macos(fildes, &mut st);
+    let result = fstat_macos(fildes, &mut st);
+    if result != 0 {
+        return result;
+    }
     *buf = StatLinux {
         st_dev: st.st_dev as _,
         st_ino: st.st_ino as _,
@@ -77,26 +83,38 @@ pub unsafe fn fstat(fildes: libc::c_int, buf: *mut StatLinux) -> libc::c_int {
         st_ctime_nsec: st.st_ctime_nsec as _,
         __unused: [0, 0, 0],
     };
-    0
+    result
 }
 
 #[sysv64]
-pub unsafe fn open(path: *const libc::c_char, oflag: libc::c_int) -> libc::c_int {
-    let mut win_flag = 0; // binary mode
+pub unsafe fn open(path: *const libc::c_char, oflag: libc::c_int, mode: libc::c_uint) -> libc::c_int {
+    let mut macos_flag = 0;
 
     if oflag & 0o100 != 0 {
-        win_flag |= O_CREAT;
+        macos_flag |= O_CREAT;
     }
 
     if oflag & 0o1 == 1 {
-        win_flag |= O_WRONLY;
+        macos_flag |= O_WRONLY;
     } else if oflag & 0o2 != 0 {
-        win_flag |= O_RDWR;
+        macos_flag |= O_RDWR;
     } else {
-        win_flag |= O_RDONLY;
+        macos_flag |= O_RDONLY;
     }
 
-    let val = open_macos(path, win_flag);
+    if oflag & 0o200 != 0 {
+        macos_flag |= O_EXCL;
+    }
+    if oflag & 0o1000 != 0 {
+        macos_flag |= O_TRUNC;
+    }
+    if oflag & 0o2000 != 0 {
+        macos_flag |= O_APPEND;
+    }
 
-    val
+    if oflag & 0o100 != 0 {
+        open_macos(path, macos_flag, mode)
+    } else {
+        open_macos(path, macos_flag)
+    }
 }

@@ -110,7 +110,10 @@ impl StoreServicesCoreADIProxy<'_> {
                     .ok_or(AnisetteError::Misc)?,
             )
             .unwrap();
-            assert_eq!((adi_load_library_with_path)(path.as_ptr() as *const u8), 0);
+            let result = (adi_load_library_with_path)(path.as_ptr() as *const u8);
+            if result != 0 {
+                return Err(AnisetteError::ADIError(ADIError::resolve(result)));
+            }
 
             let adi_set_android_id = store_services_core
                 .get_symbol("Sph98paBcz")

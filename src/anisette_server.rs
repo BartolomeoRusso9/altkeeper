@@ -15,6 +15,7 @@ use axum::{
     Json, Router,
 };
 use base64::{engine::general_purpose::STANDARD as BASE64, Engine as _};
+use futures_util::{Stream, StreamExt};
 use omnisette::{
     adi_proxy::{
         ADIProxy, ADIProxyAnisetteProvider, Identifier, AKD_USER_AGENT, CLIENT_INFO_HEADER, DS_ID,
@@ -26,11 +27,12 @@ use omnisette::{
 use serde::Deserialize;
 use serde_json::{json, Value};
 use sha2::{Digest, Sha256};
-use tokio::time::timeout;
+use tokio::time::{timeout_at, Instant};
 use uuid::Uuid;
 
 const MAX_PAYLOAD_BYTES: usize = 16 * 1024;
 const SESSION_IDLE_TIMEOUT: Duration = Duration::from_secs(120);
+const SESSION_MAX_DURATION: Duration = Duration::from_secs(300);
 
 type Provider = ADIProxyAnisetteProvider<StoreServicesCoreADIProxy<'static>>;
 
@@ -309,7 +311,23 @@ enum SessionStep {
     End,
 }
 
+async fn receive_provisioning_message<S: Stream + Unpin>(
+    socket: &mut S,
+    session_deadline: Instant,
+) -> Result<Option<S::Item>, ()> {
+    let now = Instant::now();
+    // A ready message must not bypass an already-expired session deadline.
+    if now >= session_deadline {
+        return Err(());
+    }
+    let receive_deadline = session_deadline.min(now + SESSION_IDLE_TIMEOUT);
+    timeout_at(receive_deadline, socket.next())
+        .await
+        .map_err(|_| ())
+}
+
 async fn handle_provisioning(mut socket: WebSocket, engine: Arc<Engine>) {
+    let session_deadline = Instant::now() + SESSION_MAX_DURATION;
     let _serial = match engine.serial.try_lock() {
         Ok(guard) => guard,
         Err(_) => {
@@ -336,7 +354,7 @@ async fn handle_provisioning(mut socket: WebSocket, engine: Arc<Engine>) {
     }
 
     loop {
-        let message = match timeout(SESSION_IDLE_TIMEOUT, socket.recv()).await {
+        let message = match receive_provisioning_message(&mut socket, session_deadline).await {
             Ok(Some(Ok(message))) => message,
             Ok(Some(Err(error))) => {
                 crate::log::line(&format!(
@@ -606,6 +624,45 @@ async fn send_ws_error(socket: &mut WebSocket, result: &str, message: String) {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[tokio::test(start_paused = true)]
+    async fn provisioning_preserves_idle_timeout() {
+        let start = Instant::now();
+        let mut socket = futures_util::stream::pending::<Message>();
+        assert!(
+            receive_provisioning_message(&mut socket, start + SESSION_MAX_DURATION)
+                .await
+                .is_err()
+        );
+        assert_eq!(Instant::now() - start, SESSION_IDLE_TIMEOUT);
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn provisioning_activity_cannot_extend_session_deadline() {
+        let start = Instant::now();
+        let deadline = start + SESSION_MAX_DURATION;
+        let mut socket = futures_util::stream::iter([
+            Message::Ping(Bytes::new()),
+            Message::Text("{}".into()),
+            Message::Ping(Bytes::new()),
+        ]);
+        for _ in 0..2 {
+            tokio::time::advance(SESSION_IDLE_TIMEOUT - Duration::from_secs(1)).await;
+            assert!(receive_provisioning_message(&mut socket, deadline)
+                .await
+                .unwrap()
+                .is_some());
+        }
+        let mut idle_socket = futures_util::stream::pending::<Message>();
+        assert!(receive_provisioning_message(&mut idle_socket, deadline)
+            .await
+            .is_err());
+        assert_eq!(Instant::now(), deadline);
+        // Even a queued Ping is rejected once the total duration has elapsed.
+        assert!(receive_provisioning_message(&mut socket, deadline)
+            .await
+            .is_err());
+    }
 
     #[test]
     fn client_info_matches_v3_shape() {

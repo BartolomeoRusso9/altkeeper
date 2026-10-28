@@ -46,8 +46,10 @@ logs a warning and falls back to all known profiles for the configured team. A s
 that returns no apps skips renewals.
 
 Use `--bundle <bundle-id>` to target an app. `--force` bypasses the normal expiry threshold.
-`--installed-only` can be combined with a forced CLI renewal to require a successful installed-app
-check. Read `altkeeper renew --help` for the complete option list.
+`--installed-only` requests installed-app filtering, including with `--force`. If the lookup
+fails, AltKeeper logs a warning and falls back to all known profiles for the configured team,
+regardless of expiry, even with `--force --installed-only`. It does not guarantee renewal of only
+installed profiles. Read `altkeeper renew --help` for the complete option list.
 
 ## Schedule renewals
 

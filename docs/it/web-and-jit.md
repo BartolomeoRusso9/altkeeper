@@ -54,8 +54,14 @@ export ALTKEEPER_WEB_PIN='il-tuo-pin'
 curl -fsS -u "altkeeper:$ALTKEEPER_WEB_PIN" \
   -H 'X-Requested-With: altkeeper' -H 'Content-Type: application/json' \
   -d '{}' "$ALTKEEPER_URL/api/jit/apps"
-curl -fsS -u "altkeeper:$ALTKEEPER_WEB_PIN" \
-  "$ALTKEEPER_URL/api/state" | jq '{job, jit_apps}'
+while :; do
+  state=$(curl -fsS -u "altkeeper:$ALTKEEPER_WEB_PIN" \
+    "$ALTKEEPER_URL/api/state") || exit 1
+  printf '%s\n' "$state" | jq '{job, jit_apps}' || exit 1
+  running=$(printf '%s\n' "$state" | jq -er '.job.running | tostring') || exit 1
+  [ "$running" = false ] && break
+  sleep 1
+done
 ```
 
 Quando il lavoro è terminato, usa un PID presente nell'elenco `jit_apps` restituito:
