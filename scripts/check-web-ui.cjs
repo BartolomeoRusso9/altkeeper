@@ -262,7 +262,7 @@ checkLogPolling().catch(error => { console.error(error); process.exitCode = 1; }
     $: id => controls[id], t: text => text,
     document: { createElement: () => ({ value: "", textContent: "" }) },
   });
-  const jitRender = embedded[1].match(/  const jitSelect = \$\("jit-app-select"\);[\s\S]*?(?=\n\n  \/\/ Free-account limits)/);
+  const jitRender = embedded[1].match(/  const jitSelect = \$\("jit-app-select"\);[\s\S]*?(?=\r?\n\r?\n  \/\/ Free-account limits)/);
   assert(jitRender, "JIT rendering missing");
   vm.runInContext('let renderedJitApps = null; function renderJit(s) {\n' + jitRender[0] + '\n}', context);
   const render = state => { context.snapshot = state; vm.runInContext('renderJit(snapshot)', context); };
