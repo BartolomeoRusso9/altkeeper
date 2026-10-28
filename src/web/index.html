@@ -384,6 +384,7 @@ let refreshInFlight = false, refreshQueued = false;
 let phoneAddressDraftDirty = false;
 let logsPollTimer = null;
 let anisetteTestRunning = false;
+let anisetteDraftDirty = false, anisetteSavePending = false, anisettePendingUrl = null;
 
 async function api(path, body, signal) {
   const opt = body === undefined ? {} : {
@@ -486,14 +487,22 @@ function render(s) {
   const anisette = s.anisette || {};
   const select = $("anisette-server");
   const knownAnisette = ["https://ani3.stikstore.app", "https://ani.jkcoxson.com"];
-  select.value = knownAnisette.includes(anisette.url) ? anisette.url : "custom";
-  $("anisette-custom").value = select.value === "custom" ? (anisette.url || "") : "";
+  if (anisetteDraftDirty && anisetteSavePending && anisette.url === anisettePendingUrl) {
+    anisetteDraftDirty = false;
+    anisetteSavePending = false;
+    anisettePendingUrl = null;
+  }
+  if (!anisetteDraftDirty) {
+    select.value = knownAnisette.includes(anisette.url) ? anisette.url : "custom";
+    $("anisette-custom").value = select.value === "custom" ? (anisette.url || "") : "";
+  }
   $("anisette-source").textContent = anisette.error
     ? anisette.error
     : "Using " + (anisette.url || "unknown") + " (" + (anisette.source || "unknown") + ").";
   for (const id of ["anisette-server", "anisette-custom", "anisette-save", "anisette-clear", "anisette-test"]) {
     $(id).disabled = !!s.busy || !!anisette.locked || (id === "anisette-test" && anisetteTestRunning);
   }
+  $("anisette-custom").disabled = !!s.busy || !!anisette.locked || select.value !== "custom";
 
   // iPhone
   const pill = $("phone-pill"), p = s.phone;
@@ -856,18 +865,40 @@ $("auto-pair-enabled").onchange = () => {
 };
 
 $("anisette-server").onchange = () => {
+  anisetteDraftDirty = true;
+  anisetteSavePending = false;
+  anisettePendingUrl = null;
   $("anisette-custom").disabled = $("anisette-server").value !== "custom" || !!state?.anisette?.locked;
+};
+$("anisette-custom").oninput = () => {
+  anisetteDraftDirty = true;
+  anisetteSavePending = false;
+  anisettePendingUrl = null;
 };
 $("anisette-save").onclick = () => {
   banner("anisette-error", "");
   const selected = $("anisette-server").value;
   const url = selected === "custom" ? $("anisette-custom").value.trim() : selected;
   if (!url) return banner("anisette-error", t("Enter a complete HTTP or HTTPS anisette URL."), "bad");
-  act(() => api("/api/anisette", {url}), "anisette-error");
+  anisetteDraftDirty = true;
+  anisetteSavePending = false;
+  anisettePendingUrl = null;
+  act(async () => {
+    const saved = await api("/api/anisette", {url});
+    anisetteSavePending = true;
+    anisettePendingUrl = saved.url;
+  }, "anisette-error");
 };
 $("anisette-clear").onclick = () => {
   if (confirm(t("Restore the default anisette server?"))) {
-    act(() => api("/api/anisette", {clear:true}), "anisette-error");
+    anisetteDraftDirty = true;
+    anisetteSavePending = false;
+    anisettePendingUrl = null;
+    act(async () => {
+      const saved = await api("/api/anisette", {clear:true});
+      anisetteSavePending = true;
+      anisettePendingUrl = saved.url;
+    }, "anisette-error");
   }
 };
 $("anisette-test").onclick = async () => {
