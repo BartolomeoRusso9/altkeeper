@@ -10,6 +10,7 @@
 //!   altkeeper profile-restore <file> [--phone ip:porta]  rimette un profilo salvato
 //!   altkeeper serve [--bind ip:porta] [--pin PIN] [--dir cartella] [--phone ip:porta]
 //!                    [--altserver] [--altserver-port N] [--dns-domain D --dns-address IP]
+//!                    [--anisette-bind ip:porta] [--anisette-libs cartella]
 //!                                                  interfaccia web (stato, rinnovo, accesso Apple ID)
 //!   altkeeper altserver [--port N] [--dir cartella] [--phone ip:porta]
 //!                    [--dns-domain D --dns-address IP [--dns-port N]]
@@ -24,6 +25,8 @@
 //! da fuori casa attraverso una VPN (iOS non manda Bonjour multicast nei tunnel, le query DNS sì).
 
 mod altserver;
+#[cfg(any(target_os = "linux", target_os = "macos", windows))]
+mod anisette_server;
 mod apple;
 mod devices;
 mod dnssd;
@@ -58,9 +61,9 @@ fn save_password_confirmed(answer: &str) -> bool {
 }
 
 const USAGE: &str = "uso: altkeeper <phone|pair-usb|login|apps|renew|profile-remove|\
-                     profile-restore|serve|altserver|version> [opzioni]";
+                     profile-restore|serve [--anisette-bind ip:porta]|altserver|version> [opzioni]";
 const USAGE_EN: &str = "usage: altkeeper <phone|pair-usb|login|apps|renew|profile-remove|\
-                     profile-restore|serve|altserver|version> [options]";
+                     profile-restore|serve [--anisette-bind ip:port]|altserver|version> [options]";
 
 /// Dove `profile-remove` tiene la copia dei profili tolti dal telefono.
 const SAVED_DIR: &str = "profili-salvati";
@@ -855,6 +858,33 @@ async fn run() -> Result<(), String> {
                         format!("invalid --bind (expected ip:port): {e}")
                     )
                 })?;
+            let anisette_bind = opt("--anisette-bind")
+                .map(|value| {
+                    value.parse::<SocketAddr>().map_err(|error| {
+                        crate::tr!(
+                            format!("--anisette-bind non valido (serve ip:porta): {error}"),
+                            format!("invalid --anisette-bind (expected ip:port): {error}")
+                        )
+                    })
+                })
+                .transpose()?;
+            let anisette_libraries = opt("--anisette-libs");
+            #[cfg(not(any(target_os = "linux", target_os = "macos", windows)))]
+            if anisette_bind.is_some() || anisette_libraries.is_some() {
+                return Err(crate::tr!(
+                    "il server anisette locale non è disponibile su questo sistema",
+                    "the local Anisette server is not available on this operating system"
+                )
+                .into());
+            }
+            #[cfg(any(target_os = "linux", target_os = "macos", windows))]
+            if anisette_libraries.is_some() && anisette_bind.is_none() {
+                return Err(crate::tr!(
+                    "--anisette-libs richiede --anisette-bind",
+                    "--anisette-libs requires --anisette-bind"
+                )
+                .into());
+            }
             // Meglio la variabile d'ambiente: un PIN sulla riga di comando si vede con `ps`.
             let pin = opt("--pin")
                 .or_else(|| env::var("WEB_PIN"))
@@ -880,6 +910,17 @@ async fn run() -> Result<(), String> {
                 .into());
             }
             let dir = std::env::current_dir().map_err(dbg)?;
+            #[cfg(any(target_os = "linux", target_os = "macos", windows))]
+            if let Some(anisette_bind) = anisette_bind {
+                let libraries = anisette_libraries
+                    .map(std::path::PathBuf::from)
+                    .unwrap_or_else(|| dir.join("anisette-libraries"));
+                return tokio::try_join!(
+                    web::serve(bind, pin, phone, dir.clone()),
+                    anisette_server::serve(anisette_bind, libraries, dir),
+                )
+                .map(|_| ());
+            }
             web::serve(bind, pin, phone, dir).await
         }
         #[cfg(any(windows, target_os = "macos"))]

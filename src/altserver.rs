@@ -15,7 +15,7 @@
 //! - `PrepareAppRequest` + byte dell'IPA + `BeginInstallationRequest`: installa l'app già firmata
 //!   da AltStore, con risposte di avanzamento fino a 1.0.
 //! - `RemoveAppRequest`: disinstalla un'app.
-//! - `EnableUnsignedCodeExecutionRequest` (JIT): non supportata, risponde con un errore.
+//! - `EnableUnsignedCodeExecutionRequest`: abilita JIT collegando brevemente il debugger al processo.
 //!
 //! Ogni connessione gira in un thread con un runtime suo (il collegamento al telefono non è
 //! `Send`) e una richiesta alla volta.
@@ -346,11 +346,7 @@ async fn handle_connection(stream: TcpStream, ctx: Ctx, peer: &str) {
             "RemoveProvisioningProfilesRequest" => Box::pin(remove_profiles(&ctx, &req)).await,
             "RemoveAppRequest" => Box::pin(remove_app(&ctx, &req)).await,
             "EnableUnsignedCodeExecutionRequest" => {
-                log(crate::tr!(
-                    "JIT (EnableUnsignedCodeExecution) non supportato",
-                    "JIT (EnableUnsignedCodeExecution) is not supported"
-                ));
-                error(ERR_UNSUPPORTED_IOS)
+                Box::pin(enable_unsigned_code_execution(&ctx, &req)).await
             }
             "PrepareAppRequest" => {
                 match Box::pin(receive_and_install(&mut rd, &wr, &ctx, &req)).await {
@@ -377,6 +373,115 @@ async fn handle_connection(stream: TcpStream, ctx: Ctx, peer: &str) {
         format!("{peer}: chiuso"),
         format!("{peer}: disconnected")
     ));
+}
+
+fn requested_jit_pid(req: &Value) -> Result<Option<u32>, String> {
+    if let Some(pid) = req.get("processID") {
+        let pid = pid
+            .as_u64()
+            .and_then(|pid| u32::try_from(pid).ok())
+            .filter(|pid| *pid > 0)
+            .ok_or_else(|| "JIT request contains an invalid process ID.".to_string())?;
+        return Ok(Some(pid));
+    }
+    if req
+        .get("processName")
+        .and_then(Value::as_str)
+        .is_some_and(|name| !name.trim().is_empty())
+    {
+        return Ok(None);
+    }
+    Err("JIT request must contain a process ID or process name.".into())
+}
+
+async fn enable_unsigned_code_execution(ctx: &Ctx, req: &Value) -> Value {
+    let Some(udid) = req
+        .get("udid")
+        .and_then(Value::as_str)
+        .filter(|s| !s.is_empty())
+    else {
+        return error(ERR_INVALID_REQUEST);
+    };
+    let process_id = match requested_jit_pid(req) {
+        Ok(pid) => pid,
+        Err(message) => {
+            log(&message);
+            return error(ERR_INVALID_REQUEST);
+        }
+    };
+    let process_name = req.get("processName").and_then(Value::as_str);
+
+    let _work = phone_lock();
+    let mut link = match phone_link(ctx).await {
+        Ok(link) => link,
+        Err(code) => return error(code),
+    };
+    let identity = match phone::with_timeout(
+        "Reading the iPhone identity for JIT",
+        Duration::from_secs(15),
+        link.device_identity(),
+    )
+    .await
+    {
+        Ok(identity) => identity,
+        Err(message) => {
+            log(&format!("JIT failed: {message}"));
+            return error(ERR_DEVICE_NOT_FOUND);
+        }
+    };
+    if identity.1 != udid {
+        log(&format!(
+            "JIT request was for device {udid}, but connected device is {}",
+            identity.1
+        ));
+        return error(ERR_DEVICE_NOT_FOUND);
+    }
+
+    let pid = match process_id {
+        Some(pid) => pid,
+        None => {
+            let processes = match phone::with_timeout(
+                "Listing running apps for JIT",
+                Duration::from_secs(30),
+                link.running_apps(),
+            )
+            .await
+            {
+                Ok(processes) => processes,
+                Err(message) => {
+                    log(&format!("JIT failed: {message}"));
+                    return error(ERR_UNSUPPORTED_IOS);
+                }
+            };
+            match phone::resolve_running_app_name(&processes, process_name.unwrap_or_default()) {
+                Some(pid) => pid,
+                None => {
+                    log(&format!(
+                        "JIT failed: process {:?} is not running or is ambiguous",
+                        process_name.unwrap_or_default()
+                    ));
+                    return error(ERR_INVALID_APP);
+                }
+            }
+        }
+    };
+
+    match phone::with_timeout(
+        "Enabling JIT",
+        Duration::from_secs(30),
+        link.enable_jit(pid),
+    )
+    .await
+    {
+        Ok(()) => {
+            log(&format!("enabled JIT for process {pid}"));
+            simple("EnableUnsignedCodeExecutionResponse")
+        }
+        Err(message) => {
+            log(&format!("JIT failed for process {pid}: {message}"));
+            error(ERR_UNSUPPORTED_IOS)
+        }
+    }
 }
 
 async fn send(wr: &Rc<tokio::sync::Mutex<OwnedWriteHalf>>, v: &Value) -> Result<(), String> {
@@ -719,6 +824,20 @@ mod tests {
     use super::*;
     use tokio::io::duplex;
 
+    #[test]
+    fn valida_target_jit() {
+        assert_eq!(
+            requested_jit_pid(&json!({"processID": 42})).unwrap(),
+            Some(42)
+        );
+        assert_eq!(
+            requested_jit_pid(&json!({"processName": "Example"})).unwrap(),
+            None
+        );
+        assert!(requested_jit_pid(&json!({"processID": 0})).is_err());
+        assert!(requested_jit_pid(&json!({})).is_err());
+    }
+
     #[tokio::test]
     async fn messaggi_con_la_lunghezza_davanti_in_little_endian() {
         let (mut a, mut b) = duplex(1024);
@@ -825,20 +944,29 @@ mod tests {
         let out = dialogo(
             vec![
                 frame(json!({"version": 1, "identifier": "QualcosaDiNuovo"})),
-                frame(json!({"version": 1, "identifier": "EnableUnsignedCodeExecutionRequest", "udid": "x"})),
-                frame(json!({"version": 1, "identifier": "InstallProvisioningProfilesRequest",
-                             "udid": "x", "provisioningProfiles": []})),
-                frame(json!({"version": 1, "identifier": "RemoveProvisioningProfilesRequest",
-                             "udid": "x", "bundleIdentifiers": []})),
-                frame(json!({"version": 1, "identifier": "InstallProvisioningProfilesRequest",
-                             "udid": "x", "provisioningProfiles": ["a$b"]})),
+                frame(
+                    json!({"version": 1, "identifier": "EnableUnsignedCodeExecutionRequest",
+                             "udid": "x", "processID": 0}),
+                ),
+                frame(
+                    json!({"version": 1, "identifier": "InstallProvisioningProfilesRequest",
+                             "udid": "x", "provisioningProfiles": []}),
+                ),
+                frame(
+                    json!({"version": 1, "identifier": "RemoveProvisioningProfilesRequest",
+                             "udid": "x", "bundleIdentifiers": []}),
+                ),
+                frame(
+                    json!({"version": 1, "identifier": "InstallProvisioningProfilesRequest",
+                             "udid": "x", "provisioningProfiles": ["a$b"]}),
+                ),
             ],
             5,
         )
         .await;
         assert_eq!(out[0]["identifier"], "ErrorResponse");
         assert_eq!(out[0]["errorCode"], ERR_UNKNOWN_REQUEST);
-        assert_eq!(out[1]["errorCode"], ERR_UNSUPPORTED_IOS);
+        assert_eq!(out[1]["errorCode"], ERR_INVALID_REQUEST);
         assert_eq!(out[2]["identifier"], "InstallProvisioningProfilesResponse");
         assert_eq!(out[3]["identifier"], "RemoveProvisioningProfilesResponse");
         assert_eq!(out[4]["errorCode"], ERR_INVALID_REQUEST);

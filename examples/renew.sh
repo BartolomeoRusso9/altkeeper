@@ -4,7 +4,7 @@
 # Notifiche su ntfy (opzionali, vedi notifica.sh): rinnovi riusciti ed errori
 # (al massimo uno ogni 24 ore, perché il telefono può essere fuori casa).
 #
-# Mettilo nella stessa cartella di `altkeeper`, `rp-pairing.plist` e `account.json`.
+# Mettilo nella stessa cartella di `AltKeeper`, `rp-pairing.plist` e `account.json`.
 
 DIR="$(cd "$(dirname "$0")" && pwd)"
 cd "$DIR" || exit 1
@@ -15,7 +15,7 @@ export ALTKEEPER_PHONE="${ALTKEEPER_PHONE:-}"
 
 . ./notifica.sh
 
-OUT=$(./altkeeper renew --min-days 3 2>&1)
+OUT=$(./AltKeeper renew --min-days 3 2>&1)
 RC=$?
 {
   echo "=== $(date "+%F %T")"

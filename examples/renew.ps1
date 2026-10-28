@@ -5,7 +5,7 @@
 # il telefono puo' essere fuori casa). Il topic sta in notify.conf, su una riga:
 #   NTFY_TOPIC=un-nome-lungo-e-casuale
 #
-# Mettilo nella stessa cartella di altkeeper.exe, rp-pairing.plist e account.json.
+# Mettilo nella stessa cartella di AltKeeper.exe, rp-pairing.plist e account.json.
 
 $Dir = Split-Path -Parent $MyInvocation.MyCommand.Path
 Set-Location $Dir
@@ -42,7 +42,7 @@ function Notifica([string]$Titolo, [string]$Messaggio, [int]$Priorita, [string]$
     }
 }
 
-$Exe = Join-Path $Dir 'altkeeper.exe'
+$Exe = Join-Path $Dir 'AltKeeper.exe'
 $Out = @(& $Exe renew --min-days 3 2>&1 | ForEach-Object { "$_" })
 $Rc = $LASTEXITCODE
 

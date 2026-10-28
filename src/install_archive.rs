@@ -121,7 +121,7 @@ fn prepare_signed_app_archive(app_path: &Path) -> Result<NamedTempFile, String> 
     Ok(temporary)
 }
 
-fn signed_bundle_id(app_path: &Path) -> Result<String, String> {
+pub(crate) fn signed_bundle_id(app_path: &Path) -> Result<String, String> {
     let info = plist::Value::from_file(app_path.join("Info.plist")).map_err(err)?;
     info.as_dictionary()
         .and_then(|values| values.get("CFBundleIdentifier"))

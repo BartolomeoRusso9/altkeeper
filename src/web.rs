@@ -96,6 +96,14 @@ struct Snapshot {
     profiles_total: usize,
     apps: Vec<AppView>,
     profiles: Vec<ProfileView>,
+    jit_apps: Vec<JitAppView>,
+}
+
+#[derive(Clone)]
+struct JitAppView {
+    pid: u32,
+    name: String,
+    real_app_name: String,
 }
 
 #[derive(Clone, PartialEq, Debug)]
@@ -623,6 +631,8 @@ fn profile_router(app: Arc<App>) -> Router {
         .route("/api/state", get(state))
         .route("/api/logs", get(logs))
         .route("/api/check", post(check))
+        .route("/api/jit/apps", post(load_jit_apps))
+        .route("/api/jit/enable", post(enable_jit))
         .route("/api/phone-addresses", post(update_phone_addresses))
         .route("/api/auto-pair", post(update_auto_pair))
         .route("/api/renew", post(renew))
@@ -920,6 +930,13 @@ fn json_ok() -> (StatusCode, Json<Value>) {
     (StatusCode::OK, Json(json!({ "ok": true })))
 }
 
+fn json_job_accepted(job: &str) -> (StatusCode, Json<Value>) {
+    (
+        StatusCode::ACCEPTED,
+        Json(json!({ "ok": true, "job": job })),
+    )
+}
+
 const BUSY_MSG: &str = "Another operation is already running: please wait for it to finish.";
 
 /// Le righe di log dopo `?since=N` (0 = tutte quelle in memoria), per la sezione Logs.
@@ -1038,6 +1055,9 @@ async fn state(State(app): State<Arc<App>>) -> Json<Value> {
             "uuid": p.uuid, "bundle": p.bundle, "root": p.root, "label": p.label,
             "days": p.days, "expires": p.expires,
         })).collect::<Vec<_>>(),
+        "jit_apps": g.snapshot.jit_apps.iter().map(|app| json!({
+            "pid": app.pid, "name": app.name, "real_app_name": app.real_app_name,
+        })).collect::<Vec<_>>(),
         "job": {
             "kind": g.job.kind, "running": g.job.running,
             "lines": g.job.lines, "ok": g.job.ok,
@@ -1066,6 +1086,116 @@ async fn check(State(app): State<Arc<App>>) -> (StatusCode, Json<Value>) {
     app.lock().snapshot.checking = true;
     spawn_job(guard, run_check);
     json_ok()
+}
+
+async fn load_jit_apps(State(app): State<Arc<App>>) -> (StatusCode, Json<Value>) {
+    let Some(guard) = try_busy(&app) else {
+        return json_err(StatusCode::CONFLICT, BUSY_MSG);
+    };
+    app.lock().job = JobView {
+        kind: "jit_apps".into(),
+        running: true,
+        lines: vec!["Reading apps currently running on the iPhone…".into()],
+        ok: None,
+    };
+    spawn_job(guard, run_load_jit_apps);
+    json_job_accepted("jit_apps")
+}
+
+async fn run_load_jit_apps(app: Arc<App>) {
+    let _work = crate::altserver::phone_lock();
+    let result = phone::with_timeout("Listing running apps", Duration::from_secs(45), async {
+        let (_, mut link) =
+            phone::connect_auto_in(&app.dir, app.phone, PAIRING_FILE, |_: &str| {}).await?;
+        link.running_apps().await
+    })
+    .await;
+    let mut g = app.lock();
+    match result {
+        Ok(mut processes) => {
+            processes.sort_by(|left, right| {
+                left.real_app_name
+                    .cmp(&right.real_app_name)
+                    .then_with(|| left.name.cmp(&right.name))
+                    .then_with(|| left.pid.cmp(&right.pid))
+            });
+            g.snapshot.jit_apps = processes
+                .into_iter()
+                .map(|process| JitAppView {
+                    pid: process.pid,
+                    name: process.name,
+                    real_app_name: process.real_app_name,
+                })
+                .collect();
+            let count = g.snapshot.jit_apps.len();
+            g.job.lines.push(format!("Found {} running app(s).", count));
+            g.job.ok = Some(true);
+        }
+        Err(error) => {
+            g.snapshot.jit_apps.clear();
+            g.job.lines.push(format!("Error: {}", short_error(&error)));
+            g.job.ok = Some(false);
+        }
+    }
+    g.job.running = false;
+}
+
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct EnableJitReq {
+    pid: u32,
+}
+
+async fn enable_jit(
+    State(app): State<Arc<App>>,
+    Json(req): Json<EnableJitReq>,
+) -> (StatusCode, Json<Value>) {
+    if req.pid == 0
+        || !app
+            .lock()
+            .snapshot
+            .jit_apps
+            .iter()
+            .any(|process| process.pid == req.pid)
+    {
+        return json_err(
+            StatusCode::BAD_REQUEST,
+            "Refresh the running-app list and select an app.",
+        );
+    }
+    let Some(guard) = try_busy(&app) else {
+        return json_err(StatusCode::CONFLICT, BUSY_MSG);
+    };
+    app.lock().job = JobView {
+        kind: "jit_enable".into(),
+        running: true,
+        lines: vec![format!("Enabling JIT for process {}…", req.pid)],
+        ok: None,
+    };
+    spawn_job(guard, move |app| run_enable_jit(app, req.pid));
+    json_job_accepted("jit_enable")
+}
+
+async fn run_enable_jit(app: Arc<App>, pid: u32) {
+    let _work = crate::altserver::phone_lock();
+    let result = phone::with_timeout("Enabling JIT", Duration::from_secs(60), async {
+        let (_, mut link) =
+            phone::connect_auto_in(&app.dir, app.phone, PAIRING_FILE, |_: &str| {}).await?;
+        link.enable_jit(pid).await
+    })
+    .await;
+    let mut g = app.lock();
+    match result {
+        Ok(()) => {
+            g.job.lines.push(format!("JIT enabled for process {pid}."));
+            g.job.ok = Some(true);
+        }
+        Err(error) => {
+            g.job.lines.push(format!("Error: {}", short_error(&error)));
+            g.job.ok = Some(false);
+        }
+    }
+    g.job.running = false;
 }
 
 #[derive(Deserialize)]
@@ -1797,7 +1927,9 @@ async fn install(
             ok: None,
         };
     }
-    spawn_job(guard, move |app| run_install(app, uploaded, None, None));
+    spawn_job(guard, move |app| {
+        run_install(app, uploaded, None, None, false)
+    });
     json_ok()
 }
 
@@ -1838,6 +1970,9 @@ async fn inspect_install(
     let customize = uri
         .query()
         .is_some_and(|q| q.split('&').any(|part| part == "customize=true"));
+    let enable_jit = uri
+        .query()
+        .is_some_and(|q| q.split('&').any(|part| part == "enable_jit=true"));
     if manifest.extensions.is_empty() && !customize {
         app.lock().job = JobView {
             kind: "install".into(),
@@ -1845,7 +1980,9 @@ async fn inspect_install(
             lines: vec!["IPA uploaded (no extensions). Signing and installing…".into()],
             ok: None,
         };
-        spawn_job(guard, move |app| run_install(app, uploaded, None, None));
+        spawn_job(guard, move |app| {
+            run_install(app, uploaded, None, None, enable_jit)
+        });
         return (StatusCode::OK, Json(json!({ "installing": true })));
     }
     // For the rare archive containing many extensions, cap the preview surface.
@@ -1892,6 +2029,8 @@ async fn inspect_install(
 struct ConfirmInstallReq {
     token: String,
     keep_extensions: Vec<String>,
+    #[serde(default)]
+    enable_jit: bool,
     #[serde(default)]
     display_name: Option<String>,
     #[serde(default)]
@@ -1996,7 +2135,13 @@ async fn confirm_install(
         ok: None,
     };
     spawn_job(guard, move |app| {
-        run_install(app, prepared.upload, Some(req.keep_extensions), identity)
+        run_install(
+            app,
+            prepared.upload,
+            Some(req.keep_extensions),
+            identity,
+            req.enable_jit,
+        )
     });
     json_ok()
 }
@@ -2301,20 +2446,31 @@ async fn run_install(
     upload: UploadedIpa,
     selected_extensions: Option<Vec<String>>,
     identity: Option<NewInstallIdentity>,
+    enable_jit: bool,
 ) {
     let result = install_ipa(
         &app,
         &upload,
         selected_extensions.as_deref(),
         identity.as_ref(),
+        enable_jit,
     )
     .await;
-    let ok = result.is_ok();
-    if let Err(e) = result {
-        app.push_line(&format!("Error: {}", short_error(&e)));
-    } else {
-        app.push_line("Installation completed.");
-    }
+    let ok = match result {
+        Ok(None) => {
+            app.push_line("Installation completed.");
+            true
+        }
+        Ok(Some(error)) => {
+            app.push_line("Installation completed, but JIT could not be enabled.");
+            app.push_line(&format!("JIT error: {}", short_error(&error)));
+            false
+        }
+        Err(error) => {
+            app.push_line(&format!("Error: {}", short_error(&error)));
+            false
+        }
+    };
     {
         let mut g = app.lock();
         g.job.running = false;
@@ -2338,7 +2494,8 @@ async fn install_ipa(
     upload: &UploadedIpa,
     selected_extensions: Option<&[String]>,
     identity: Option<&NewInstallIdentity>,
-) -> Result<(), String> {
+    enable_jit: bool,
+) -> Result<Option<String>, String> {
     let account = apple::load_account(&app.dir)?;
     let mut session = apple::open_session_web(
         &app.dir,
@@ -2434,7 +2591,29 @@ async fn install_ipa(
     };
     let install = link.install_app(&signed_app.path, &progress);
 
-    phone::with_timeout("Installation", INSTALL_TIMEOUT, install).await
+    phone::with_timeout("Installation", INSTALL_TIMEOUT, install).await?;
+    if !enable_jit {
+        return Ok(None);
+    }
+
+    app.push_line("Launching the installed app to enable JIT…");
+    let jit_result = async {
+        let bundle_id = crate::install_archive::signed_bundle_id(&signed_app.path)?;
+        let pid = phone::with_timeout(
+            "Launching app for JIT",
+            Duration::from_secs(30),
+            link.launch_app(&bundle_id),
+        )
+        .await?;
+        phone::with_timeout(
+            "Enabling JIT",
+            Duration::from_secs(30),
+            link.enable_jit(pid),
+        )
+        .await
+    }
+    .await;
+    Ok(jit_result.err())
 }
 
 /// Tempo massimo per l'installazione di un'app (upload AFC + installazione).

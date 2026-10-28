@@ -30,8 +30,7 @@
   }
   .brand { display: flex; align-items: center; gap: 13px; min-width: 0; }
   .brand-mark {
-    display: grid; place-items: center; width: 42px; height: 42px; border-radius: 12px;
-    background: var(--accent); color: white; font-size: .88rem; font-weight: 750; letter-spacing: -.04em;
+    display: block; width: 42px; height: 42px; border-radius: 12px; object-fit: cover;
   }
   h1 { font-size: 1.55rem; line-height: 1.15; letter-spacing: -.045em; margin: 0; font-weight: 720; }
   .sub { color: var(--muted); margin: 4px 0 0; font-size: .9rem; }
@@ -64,6 +63,7 @@
     padding: 8px 12px; text-align: center; white-space: normal;
     word-break: keep-all; overflow-wrap: anywhere;
   }
+  .jit-actions select { flex: 1 1 190px; min-width: 0; }
   #btn-check, #btn-change, #btn-install, #btn-login, #btn-code, #btn-resend { min-width: 150px; }
   #code-form .row { justify-content: flex-start; flex-wrap: nowrap; gap: 8px; }
   .item-head button { width: 108px; flex: 0 0 108px; }
@@ -160,7 +160,7 @@
 <main>
   <header class="topbar">
     <div class="brand">
-      <span class="brand-mark" aria-hidden="true">AK</span>
+      <img class="brand-mark" src="/apple-touch-icon.png" alt="" aria-hidden="true">
       <div>
         <h1>AltKeeper</h1>
         <p class="sub" data-i18n="Keeps your iPhone apps alive by renewing their profiles.">Keeps your iPhone apps alive by renewing their profiles.</p>
@@ -246,6 +246,23 @@
   </section>
 
   <section class="card">
+    <h2 data-i18n="Just-in-time (JIT)">Just-in-time (JIT)</h2>
+    <p class="muted" data-i18n="Enable JIT for an app that is already running on the iPhone. A compatible Developer Disk Image must be mounted and Developer Mode enabled.">
+      Enable JIT for an app that is already running on the iPhone. A compatible Developer Disk Image must be mounted and Developer Mode enabled.
+    </p>
+    <div class="row jit-actions">
+      <select id="jit-app-select" aria-label="Running app" disabled>
+        <option value="">Load running apps first</option>
+      </select>
+      <button id="jit-refresh" type="button" data-i18n="Load running apps">Load running apps</button>
+      <button class="primary" id="jit-enable" type="button" data-i18n="Enable JIT" disabled>Enable JIT</button>
+    </div>
+    <p class="muted" id="jit-hint" aria-live="polite"></p>
+    <div class="banner bad" id="jit-error" hidden></div>
+    <div id="jit-job-slot"></div>
+  </section>
+
+  <section class="card">
     <h2 data-i18n="Automatic renewal">Automatic renewal</h2>
     <p class="muted" data-i18n="Runs once daily while this server is online. Renews expiring installed apps. If installed-app lookup fails, it falls back to all saved-team profiles. Default is OFF.">Runs once daily while this server is online. Renews expiring installed apps. If installed-app lookup fails, it falls back to all saved-team profiles. Default is OFF.</p>
     <div class="row">
@@ -294,11 +311,12 @@
       <select id="anisette-server" aria-label="Anisette server">
         <option value="https://ani3.stikstore.app">ani3.stikstore.app (default)</option>
         <option value="https://ani.jkcoxson.com">isideload public server</option>
+        <option value="http://127.0.0.1:8788">AltKeeper local server (127.0.0.1:8788)</option>
         <option value="custom">Custom URL</option>
       </select>
     </div>
     <label for="anisette-custom" data-i18n="Custom anisette URL">Custom anisette URL</label>
-    <input type="url" id="anisette-custom" placeholder="https://your-anisette-server">
+    <input type="url" id="anisette-custom" placeholder="http://192.168.1.50:8788">
     <div class="row action-row" style="margin-top:10px">
       <button id="anisette-save" type="button" data-i18n="Save server">Save server</button>
       <button id="anisette-clear" type="button" data-i18n="Restore default">Restore default</button>
@@ -336,6 +354,10 @@
       <label for="install-bundle-id" data-i18n="New Bundle ID (optional)">New Bundle ID (optional)</label>
       <input id="install-bundle-id" type="text" maxlength="160" autocapitalize="off" spellcheck="false"
         autocomplete="off" placeholder="e.g. com.example.youtubeclone">
+      <label class="check" for="install-enable-jit">
+        <input id="install-enable-jit" type="checkbox">
+        <span data-i18n="Enable JIT after installation (requires a mounted Developer Disk Image)">Enable JIT after installation (requires a mounted Developer Disk Image)</span>
+      </label>
       <p class="muted" data-i18n="These settings are for new installations only. Existing apps and automatic renewal are never modified. A new Bundle ID allows a separate copy; the Apple team suffix is added automatically.">These settings are for new installations only. Existing apps and automatic renewal are never modified. A new Bundle ID allows a separate copy; the Apple team suffix is added automatically.</p>
       <div class="row" style="margin-top:10px">
         <button class="primary" id="btn-install" type="submit" data-i18n="Sign and install">Sign and install</button>
@@ -430,6 +452,7 @@ let anisetteTestRunning = false;
 let anisetteDraftDirty = false, anisetteSavePending = false, anisettePendingUrl = null;
 let selectedDeviceId = localStorage.getItem("altkeeper-device") || "default";
 let deviceDrafts = [];
+let renderedJitApps = null;
 
 function deviceHeaders() {
   return { "X-AltKeeper-Device": selectedDeviceId };
@@ -478,7 +501,8 @@ function profilesText(n) { return n + " profiles"; }
 
 function placeJob(job) {
   const panel = $("job");
-  const slot = $(job.kind === "install" ? "install-job-slot" : "app-job-slot");
+  const slot = $(job.kind === "install" ? "install-job-slot"
+    : job.kind.startsWith("jit_") ? "jit-job-slot" : "app-job-slot");
   if (panel.parentElement !== slot) slot.append(panel);
 }
 
@@ -491,7 +515,7 @@ function installHint(s) {
   }
   if (!s.account.present) return t("Sign in with your Apple ID first.");
   if (!s.account.password_saved) return t("Save the Apple ID password on the server to sign and install.");
-  if (s.phone.reachable !== true) return t("The iPhone must be reachable on Wi-Fi.");
+  if (s.phone.reachable !== true) return t("The iPhone must be reachable over USB or Wi-Fi.");
   return s.busy ? t("Another operation is in progress.") : t("The Apple ID is used to sign the app.");
 }
 
@@ -555,7 +579,7 @@ function render(s) {
 
   const anisette = s.anisette || {};
   const select = $("anisette-server");
-  const knownAnisette = ["https://ani3.stikstore.app", "https://ani.jkcoxson.com"];
+  const knownAnisette = ["https://ani3.stikstore.app", "https://ani.jkcoxson.com", "http://127.0.0.1:8788"];
   if (anisetteDraftDirty && anisetteSavePending && anisette.url === anisettePendingUrl) {
     anisetteDraftDirty = false;
     anisetteSavePending = false;
@@ -583,6 +607,30 @@ function render(s) {
   const err = p.reachable === false ? p.error : "";
   banner("phone-error", err, "bad");
   $("phone-error").title = p.detail || "";
+  const jitSelect = $("jit-app-select");
+  const jitApps = s.jit_apps || [];
+  const jitAppsKey = JSON.stringify(jitApps);
+  if (jitAppsKey !== renderedJitApps) {
+    const selectedJitPid = jitSelect.value;
+    const placeholder = document.createElement("option");
+    placeholder.value = "";
+    placeholder.textContent = jitApps.length ? t("Select a running app") : t("Load running apps first");
+    const jitOptions = jitApps.map(app => {
+      const option = document.createElement("option");
+      option.value = String(app.pid);
+      option.textContent = (app.real_app_name || app.name) + " · PID " + app.pid;
+      return option;
+    });
+    jitSelect.replaceChildren(placeholder, ...jitOptions);
+    jitSelect.value = jitApps.some(app => String(app.pid) === selectedJitPid) ? selectedJitPid : "";
+    renderedJitApps = jitAppsKey;
+  }
+  jitSelect.disabled = !!s.busy || !jitApps.length;
+  $("jit-refresh").disabled = !!s.busy;
+  $("jit-enable").disabled = !!s.busy || !jitSelect.value;
+  $("jit-hint").textContent = jitApps.length
+    ? t("JIT applies to the selected app's current running session.")
+    : t("Load running apps from a connected iPhone to get started.");
 
   // Free-account limits: 3 active sideloaded apps, 10 App IDs per week.
   const qRow = $("quotas-row");
@@ -785,13 +833,15 @@ function render(s) {
         : job.kind === "pair_usb" ? t("Pairing iPhone over USB…")
         : job.kind === "install"
         ? t("Signing and installing the app. Keep this page open until it finishes…")
+        : job.kind === "jit_apps" ? t("Reading apps currently running on the iPhone…")
+        : job.kind === "jit_enable" ? t("Enabling JIT for the selected app…")
         : job.kind === "remove_profile"
         ? t("Backing up and deleting the selected profile…")
         : job.kind === "restore_profile" ? t("Restoring the selected profile…")
         : t("Renewal in progress. Keep this page open until it finishes…");
     }
     else if (job.canceled) { st.className = "banner"; st.textContent = t("Waiting canceled."); }
-    else if (job.ok) { st.className = "banner good"; st.textContent = job.kind === "install" ? t("App installed.") : job.kind === "remove_profile" ? t("Profile removed and backed up.") : job.kind === "restore_profile" ? t("Profile restored.") : job.kind === "pair_usb" ? t("iPhone paired over USB.") : t("Done."); }
+    else if (job.ok) { st.className = "banner good"; st.textContent = job.kind === "install" ? t("App installed.") : job.kind === "jit_apps" ? t("Running app list updated.") : job.kind === "jit_enable" ? t("JIT enabled for the selected app.") : job.kind === "remove_profile" ? t("Profile removed and backed up.") : job.kind === "restore_profile" ? t("Profile restored.") : job.kind === "pair_usb" ? t("iPhone paired over USB.") : t("Done."); }
     else { st.className = "banner bad"; st.textContent = t("It did not complete successfully. Check the last line."); }
     const log = $("job-log");
     const atEnd = log.scrollTop + log.clientHeight >= log.scrollHeight - 8;
@@ -987,6 +1037,17 @@ $("anisette-test").onclick = async () => {
 };
 $("btn-preview").onclick = () => {showPreview = !showPreview; if(state)render(state);};
 $("btn-check").onclick = () => act(() => api("/api/check", {}));
+$("jit-refresh").onclick = () => {
+  banner("jit-error", "");
+  act(() => api("/api/jit/apps", {}), "jit-error");
+};
+$("jit-app-select").onchange = () => { if (state) render(state); };
+$("jit-enable").onclick = () => {
+  const pid = Number($("jit-app-select").value);
+  if (!Number.isSafeInteger(pid) || pid <= 0) return;
+  banner("jit-error", "");
+  act(() => api("/api/jit/enable", {pid}), "jit-error");
+};
 $("btn-due").onclick = () => act(() => api("/api/renew", { mode: "due" }));
 $("btn-all").onclick = () => {
   if (confirm(t("Renew all apps now? This takes about a minute and usually does not need to be done often."))) {
@@ -1047,10 +1108,12 @@ $("ext-confirm").onclick = async () => {
       token: pendingInstall.token, keep_extensions: keep,
       display_name: $("install-display-name").value.trim() || null,
       bundle_id: $("install-bundle-id").value.trim() || null,
+      enable_jit: $("install-enable-jit").checked,
     });
     pendingInstall = null;
     $("install-display-name").value = "";
     $("install-bundle-id").value = "";
+    $("install-enable-jit").checked = false;
     banner("install-error", "");
   } catch(e) {
     banner("install-error", e.message, "bad");
@@ -1074,7 +1137,9 @@ $("install-form").onsubmit = async (ev) => {
     const form = new FormData();
     form.append("ipa", file);
     const customize = !!($("install-display-name").value.trim() || $("install-bundle-id").value.trim());
-    const r = await fetch("/api/install/inspect?customize=" + String(customize), {
+    const enableJit = $("install-enable-jit").checked;
+    const r = await fetch("/api/install/inspect?customize=" + String(customize)
+      + "&enable_jit=" + String(enableJit), {
       method: "POST",
       headers: { "X-Requested-With": "altkeeper", ...deviceHeaders() },
       body: form,
@@ -1087,6 +1152,7 @@ $("install-form").onsubmit = async (ev) => {
     else {
       $("install-display-name").value = "";
       $("install-bundle-id").value = "";
+      $("install-enable-jit").checked = false;
     }
     $("install-error").hidden = true;
   } catch (e) {

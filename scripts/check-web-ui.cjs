@@ -15,6 +15,11 @@ for (const snippet of [
   '<html lang="en">',
   'function profilesText(n)',
   'data-i18n="Your apps"',
+  'class="brand-mark" src="/apple-touch-icon.png" alt="" aria-hidden="true"',
+  'data-i18n="Just-in-time (JIT)"',
+  'data-i18n="Load running apps"',
+  'data-i18n="Enable JIT"',
+  'data-i18n="Enable JIT after installation (requires a mounted Developer Disk Image)"',
   'data-i18n="Send test notification"',
   'data-i18n="Sign and install"',
   'data-i18n="Discord failure notifications"',
@@ -28,6 +33,8 @@ for (const snippet of [
   '"/api/phone-addresses"',
   '"/api/auto-pair"',
   '"/api/pair-usb"',
+  '"/api/jit/apps"',
+  '"/api/jit/enable"',
   '"/api/renew/cancel-wait"',
   '"/api/anisette"',
   '"/api/anisette/test"',
@@ -64,7 +71,8 @@ for (const id of [
   "discord-save", "discord-clear", "discord-test",
   "phone-addresses-save", "btn-pair-usb", "anisette-save",
   "anisette-clear", "anisette-test", "auto-pair-enabled",
-  "btn-install", "btn-login", "btn-code",
+  "btn-install", "btn-login", "btn-code", "jit-refresh", "jit-enable", "jit-job-slot",
+  "install-enable-jit",
 ]) {
   assert(html.includes('id="' + id + '"'), "Missing control: " + id);
 }
@@ -78,6 +86,7 @@ assert(html.includes('<div class="row" style="margin-top:10px">'));
 // Safari icon and already-approved Discord test stay intact through localization.
 assert(html.includes('rel="apple-touch-icon"'));
 assert(html.includes('rel="icon"'));
+assert(!html.includes('class="brand-mark" aria-hidden="true">AK</span>'));
 assert(html.includes('"/api/discord/test"'));
 console.log("Localized dashboard JavaScript syntax, actions, labels and layout OK");
 
@@ -85,8 +94,11 @@ console.log("Localized dashboard JavaScript syntax, actions, labels and layout O
 // failure/success. A later renewal moves the same panel back without copying
 // log nodes or losing the reader's scroll position.
 {
-  const nodes = { "app-job-slot": {}, "install-job-slot": {}, "job": { scrollTop: 42 } };
-  for (const id of ["app-job-slot", "install-job-slot"]) {
+  const nodes = {
+    "app-job-slot": {}, "install-job-slot": {}, "jit-job-slot": {},
+    "job": { scrollTop: 42 },
+  };
+  for (const id of ["app-job-slot", "install-job-slot", "jit-job-slot"]) {
     nodes[id].append = panel => { panel.parentElement = nodes[id]; };
   }
   nodes.job.parentElement = nodes["app-job-slot"];
@@ -103,6 +115,8 @@ console.log("Localized dashboard JavaScript syntax, actions, labels and layout O
   assert.equal(nodes.job.scrollTop, 42);
   vm.runInContext('placeJob({kind:"renew",running:true})', context);
   assert.equal(nodes.job.parentElement, nodes["app-job-slot"]);
+  vm.runInContext('placeJob({kind:"jit_enable",running:true})', context);
+  assert.equal(nodes.job.parentElement, nodes["jit-job-slot"]);
   const hint = vm.runInContext('installHint({busy:true,job:{kind:"install",running:true}})', context);
   assert(hint.includes("Signing and installing"));
   assert.equal(vm.runInContext('installHint({busy:true,job:{kind:"install",running:false}})', context), "Checking…");
@@ -234,3 +248,56 @@ async function checkLogPolling() {
   assert.deepEqual(timers, [10000, 2000, 10000, 2000, 10000, 2000, 10000, 2000]);
 }
 checkLogPolling().catch(error => { console.error(error); process.exitCode = 1; });
+
+// Polling must leave the running-app options intact while a user chooses a PID.
+// A removed PID must fall back to a visible empty option and disable activation.
+{
+  let replacements = 0;
+  const select = {
+    value: "", children: [], disabled: true,
+    replaceChildren(...options) { this.children = options; replacements++; },
+  };
+  const controls = { "jit-app-select": select, "jit-refresh": {}, "jit-enable": {}, "jit-hint": {} };
+  const context = vm.createContext({
+    $: id => controls[id], t: text => text,
+    document: { createElement: () => ({ value: "", textContent: "" }) },
+  });
+  const jitRender = embedded[1].match(/  const jitSelect = \$\("jit-app-select"\);[\s\S]*?(?=\r?\n\r?\n  \/\/ Free-account limits)/);
+  assert(jitRender, "JIT rendering missing");
+  vm.runInContext('let renderedJitApps = null; function renderJit(s) {\n' + jitRender[0] + '\n}', context);
+  const render = state => { context.snapshot = state; vm.runInContext('renderJit(snapshot)', context); };
+  render({ jit_apps: [] });
+  assert.equal(select.children[0].value, "");
+  assert.equal(select.children[0].textContent, "Load running apps first");
+  assert.equal(select.disabled, true);
+  render({ jit_apps: [{ pid: 12, name: "First" }, { pid: 34, name: "Second" }] });
+  assert.equal(select.children[0].value, "");
+  assert.equal(select.children[0].textContent, "Select a running app");
+  assert.equal(select.disabled, false);
+  assert.equal(controls["jit-enable"].disabled, true);
+  select.value = "34";
+  const options = select.children;
+  const beforePolling = replacements;
+  render({ jit_apps: [{ pid: 12, name: "First" }, { pid: 34, name: "Second" }] });
+  assert.equal(select.children, options, "unchanged responses must preserve the option nodes");
+  assert.equal(replacements, beforePolling);
+  assert.equal(select.value, "34");
+  assert.equal(controls["jit-enable"].disabled, false);
+  render({ busy: true, jit_apps: [{ pid: 12, name: "First" }, { pid: 34, name: "Second" }] });
+  assert.equal(replacements, beforePolling, "busy-state updates must not rebuild options");
+  assert.equal(select.value, "34");
+  assert.equal(select.disabled, true);
+  assert.equal(controls["jit-refresh"].disabled, true);
+  assert.equal(controls["jit-enable"].disabled, true);
+  render({ jit_apps: [{ pid: 34, name: "Renamed" }] });
+  assert.equal(select.value, "34", "retain a PID that is still present after a list change");
+  assert.equal(select.children[1].textContent, "Renamed · PID 34");
+  render({ jit_apps: [{ pid: 12, name: "First" }] });
+  assert.equal(select.value, "", "a removed selection must show the placeholder");
+  assert(select.children.some(option => option.value === select.value));
+  assert.equal(controls["jit-enable"].disabled, true);
+  render({});
+  assert.equal(select.disabled, true);
+  assert.equal(select.children[0].textContent, "Load running apps first");
+  console.log("JIT options, selection and busy-state polling OK");
+}

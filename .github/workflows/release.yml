@@ -1,12 +1,12 @@
 # Compila AltKeeper per Windows, Linux e macOS e pubblica tutto in una GitHub Release.
 #
-# - Windows: `altkeeper.exe` + `altkeeper.exe.sha256`. L'aggiornamento dall'icona nella barra di
-#   sistema scarica proprio questi due file: i nomi non vanno cambiati.
-# - Linux (x86-64 e arm64) e macOS (Apple Silicon e Intel): `altkeeper-<tag>-<sistema>-<arch>.tar.gz`
-#   con il suo `.sha256`. Sono download manuali: l'auto-aggiornamento è solo per Windows.
-# - macOS: in più `AltKeeper-<tag>-macos-<arch>.zip` con `AltKeeper.app` (doppio clic: icona nella
-#   barra dei menu come AltServer, AltServer e pagina web; vedi scripts/macos-app.sh) e il suo
-#   `.sha256`. L'icona avvisa delle nuove versioni e apre la pagina della release.
+# - Windows: `AltKeeper-<tag>-Windows-x64.zip` contiene `AltKeeper.exe`, guide ed esempi;
+#   è disponibile anche il binario singolo `AltKeeper-<tag>-Windows-x64.exe`.
+#   L'updater usa inoltre `altkeeper.exe` + `altkeeper.exe.sha256`: non rinominare questi asset.
+# - Linux e macOS CLI: archivi con nome prodotto, versione, sistema e architettura, per esempio
+#   `AltKeeper-vX.Y.Z-Linux-x64.tar.gz` o `AltKeeper-vX.Y.Z-macOS-Apple-Silicon-CLI.tar.gz`.
+# - macOS GUI: `AltKeeper-vX.Y.Z-macOS-Apple-Silicon-App.zip` (o `macOS-Intel-App`) contiene
+#   `AltKeeper.app`; ogni pacchetto ha un file `.sha256` corrispondente.
 #
 # Parte SOLO a mano: GitHub -> Actions -> release -> "Run workflow" (scegli il branch).
 # Il tag della release è `v` + `version` di Cargo.toml e viene creato dalla release stessa.
@@ -42,19 +42,26 @@ jobs:
       matrix:
         include:
           - name: windows
+            package: Windows-x64
             runner: windows-latest
             test: true
           # ubuntu-22.04: glibc 2.35, così il binario gira anche su distribuzioni non recentissime.
           - name: linux-x86_64
+            package: Linux-x64
             runner: ubuntu-22.04
             test: true
           - name: linux-aarch64
+            package: Linux-ARM64
             runner: ubuntu-22.04-arm
             test: true
           - name: macos-aarch64
+            package: macOS-Apple-Silicon-CLI
+            app_package: macOS-Apple-Silicon-App
             runner: macos-latest
             test: true
           - name: macos-x86_64
+            package: macOS-Intel-CLI
+            app_package: macOS-Intel-App
             runner: macos-15-intel
             test: true
     runs-on: ${{ matrix.runner }}
@@ -78,16 +85,33 @@ jobs:
         run: |
           mkdir dist
           cp target/release/altkeeper.exe dist/altkeeper.exe
+          cp target/release/altkeeper.exe "dist/AltKeeper-${TAG}-Windows-x64.exe"
+          pkg="AltKeeper-${TAG}-Windows-x64"
+          mkdir -p "dist/$pkg"
+          cp target/release/altkeeper.exe "dist/$pkg/AltKeeper.exe"
+          cp LICENSE README.md README.it.md SECURITY.md THIRD-PARTY-NOTICES.md "dist/$pkg/"
+          cp -r examples "dist/$pkg/examples"
+          mkdir -p "dist/$pkg/docs"
+          cp -r docs/en docs/it "dist/$pkg/docs/"
+          powershell -NoProfile -Command "Compress-Archive -Path 'dist/$pkg/*' -DestinationPath 'dist/$pkg.zip' -Force"
           cd dist
           hash=$(sha256sum altkeeper.exe | cut -d' ' -f1)
           printf '%s  altkeeper.exe' "$hash" > altkeeper.exe.sha256
+          printf '%s  AltKeeper-%s-Windows-x64.exe' "$hash" "$TAG" \
+            > "AltKeeper-${TAG}-Windows-x64.exe.sha256"
+          sha256sum "$pkg.zip" > "$pkg.zip.sha256"
       - name: Package (Linux, macOS)
         if: matrix.name != 'windows'
         run: |
-          pkg="altkeeper-${TAG}-${{ matrix.name }}"
+          pkg="AltKeeper-${TAG}-${{ matrix.package }}"
           mkdir -p "dist/$pkg"
-          cp target/release/altkeeper LICENSE README.md README.it.md "dist/$pkg/"
+          cp target/release/altkeeper "dist/$pkg/AltKeeper"
+          cp target/release/altkeeper "dist/$pkg/altkeeper"
+          cp LICENSE README.md README.it.md \
+            SECURITY.md THIRD-PARTY-NOTICES.md "dist/$pkg/"
           cp -r examples "dist/$pkg/examples"
+          mkdir -p "dist/$pkg/docs"
+          cp -r docs/en docs/it "dist/$pkg/docs/"
           cd dist
           tar -czf "$pkg.tar.gz" "$pkg"
           rm -rf "$pkg"
@@ -104,7 +128,7 @@ jobs:
           # Controllo minimo: l'app deve avviare proprio il binario con l'icona.
           test "$(plutil -extract CFBundleExecutable raw "$app/Contents/Info.plist")" = altkeeper
           codesign --verify --strict "$app"
-          zip="AltKeeper-${TAG}-${{ matrix.name }}.zip"
+          zip="AltKeeper-${TAG}-${{ matrix.app_package }}.zip"
           ditto -c -k --keepParent "$app" "dist/$zip"
           rm -rf "$app"
           cd dist
@@ -134,5 +158,7 @@ jobs:
         with:
           tag_name: ${{ needs.prepare.outputs.tag }}
           target_commitish: ${{ github.sha }}
+          body: |
+            Modified MPL-2.0 source: [`vendor/omnisette/`](https://github.com/${{ github.repository }}/tree/${{ github.sha }}/vendor/omnisette).
           files: dist/*
           fail_on_unmatched_files: true
