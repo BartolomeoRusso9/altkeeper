@@ -17,17 +17,17 @@ use std::sync::{Arc, Mutex, MutexGuard};
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 use axum::{
-    Json, Router,
     extract::{DefaultBodyLimit, Multipart, Request, State},
-    http::{HeaderMap, HeaderValue, Method, StatusCode, Uri, header},
+    http::{header, HeaderMap, HeaderValue, Method, StatusCode, Uri},
     middleware::{self, Next},
     response::{Html, IntoResponse, Response},
     routing::{get, post},
+    Json, Router,
 };
 use serde::{Deserialize, Serialize};
-use serde_json::{Value, json};
+use serde_json::{json, Value};
 
-use crate::{PAIRING_FILE, apple, phone, profile};
+use crate::{apple, phone, profile, PAIRING_FILE};
 
 const INDEX_HTML: &str = include_str!("web/index.html");
 const APPLE_TOUCH_ICON: &[u8] = include_bytes!("web/apple-touch-icon.png");
@@ -35,11 +35,13 @@ const FAVICON_32: &[u8] = include_bytes!("web/favicon-32.png");
 const RENEW_LOG: &str = "renew.log";
 const AUTO_RENEW_CONFIG: &str = "state/auto-renew.json";
 const DISCORD_WEBHOOK_FILE: &str = "state/discord-webhook";
+const AUTO_PAIR_OFF_FILE: &str = "state/auto-pair-off";
 const APP_STATUS_FILE: &str = "state/app-renew-status.json";
 const RETRY_SECONDS: u64 = 30 * 60;
 const MAX_RETRIES: u8 = 2;
 const DAY_SECS: u64 = 24 * 60 * 60;
 const MAX_JOB_LINES: usize = 300;
+const CHECK_TIMEOUT: Duration = Duration::from_secs(45 + 12 * phone::MAX_SAVED_ADDRESSES as u64);
 const MAX_IPA_BYTES: usize = 1024 * 1024 * 1024;
 const PENDING_IPA_TTL: u64 = 15 * 60;
 
@@ -56,6 +58,7 @@ struct App {
     tfa: Arc<apple::TfaChannel>,
     auto_renew: Mutex<AutoRenewConfig>,
     pending_ipa: Mutex<Option<PendingIpa>>,
+    renewal_wait: crate::renewal_wait::Control,
 }
 
 #[derive(Default, Clone)]
@@ -137,11 +140,14 @@ impl App {
 }
 
 /// Segna il lavoro come finito quando viene lasciato (anche se il thread va in panico).
-struct BusyGuard(Arc<App>);
+struct BusyGuard {
+    app: Arc<App>,
+    _auto_pair_pause: phone::AutoPairPauseGuard,
+}
 
 impl Drop for BusyGuard {
     fn drop(&mut self) {
-        self.0.busy.store(false, Ordering::SeqCst);
+        self.app.busy.store(false, Ordering::SeqCst);
     }
 }
 
@@ -149,7 +155,10 @@ fn try_busy(app: &Arc<App>) -> Option<BusyGuard> {
     app.busy
         .compare_exchange(false, true, Ordering::SeqCst, Ordering::SeqCst)
         .ok()
-        .map(|_| BusyGuard(app.clone()))
+        .map(|_| BusyGuard {
+            app: app.clone(),
+            _auto_pair_pause: phone::pause_auto_pairing(),
+        })
 }
 
 /// Lancia `make(app)` in un thread con un runtime tutto suo.
@@ -157,39 +166,43 @@ fn spawn_job<Fut>(guard: BusyGuard, make: impl FnOnce(Arc<App>) -> Fut + Send + 
 where
     Fut: std::future::Future<Output = ()>,
 {
-    let app = guard.0.clone();
+    let app = guard.app.clone();
     // Più stack del predefinito (2 MB): i futuri del telefono e di Apple sono grandi, soprattutto in debug.
-    let _ = std::thread::Builder::new().stack_size(16 * 1024 * 1024).spawn(move || {
-        let _guard = guard;
-        let outcome = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-            let rt = tokio::runtime::Builder::new_current_thread()
-                .enable_all()
-                .build()
-                .expect("runtime");
-            rt.block_on(make(app.clone()));
-        }));
-        if outcome.is_err() {
-            let mut g = app.lock();
-            g.snapshot.checking = false;
-            g.job.running = false;
-            g.job.ok = Some(false);
-            g.job
-                .lines
-                .push("Internal error: the operation was interrupted.".into());
-            if g.login.phase == "working" {
-                g.login = LoginView {
-                    phase: "failed",
-                    message: "Internal error.".into(),
-                };
+    let _ = std::thread::Builder::new()
+        .stack_size(16 * 1024 * 1024)
+        .spawn(move || {
+            let _guard = guard;
+            let outcome = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+                let rt = tokio::runtime::Builder::new_current_thread()
+                    .enable_all()
+                    .build()
+                    .expect("runtime");
+                rt.block_on(make(app.clone()));
+            }));
+            if outcome.is_err() {
+                let mut g = app.lock();
+                g.snapshot.checking = false;
+                g.job.running = false;
+                g.job.ok = Some(false);
+                g.job
+                    .lines
+                    .push("Internal error: the operation was interrupted.".into());
+                if g.login.phase == "working" {
+                    g.login = LoginView {
+                        phase: "failed",
+                        message: "Internal error.".into(),
+                    };
+                }
             }
-        }
-    });
+        });
 }
 
 fn now() -> u64 {
-    SystemTime::now().duration_since(UNIX_EPOCH).map(|d| d.as_secs()).unwrap_or(0)
+    SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .map(|d| d.as_secs())
+        .unwrap_or(0)
 }
-
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 struct AutoRenewConfig {
@@ -207,7 +220,9 @@ struct AutoRenewConfig {
     #[serde(default)]
     last_error: Option<String>,
 }
-fn default_min_days() -> u8 { 3 }
+fn default_min_days() -> u8 {
+    3
+}
 
 impl Default for AutoRenewConfig {
     fn default() -> Self {
@@ -225,8 +240,12 @@ impl Default for AutoRenewConfig {
 
 fn parse_utc_time(value: &str) -> Option<u64> {
     let (hh, mm) = value.split_once(':')?;
-    if hh.len() != 2 || mm.len() != 2 { return None; }
-    if !hh.bytes().chain(mm.bytes()).all(|b| b.is_ascii_digit()) { return None; }
+    if hh.len() != 2 || mm.len() != 2 {
+        return None;
+    }
+    if !hh.bytes().chain(mm.bytes()).all(|b| b.is_ascii_digit()) {
+        return None;
+    }
     let hour: u64 = hh.parse().ok()?;
     let minute: u64 = mm.parse().ok()?;
     (hour < 24 && minute < 60).then_some(hour * 3600 + minute * 60)
@@ -241,12 +260,16 @@ fn utc_seconds_of_day(now_secs: u64) -> u64 {
 }
 
 fn next_auto_run(config: &AutoRenewConfig, now_secs: u64) -> Option<u64> {
-    if !config.enabled { return None; }
-    if let Some(retry_at) = config.retry_at { return Some(retry_at); }
+    if !config.enabled {
+        return None;
+    }
+    if let Some(retry_at) = config.retry_at {
+        return Some(retry_at);
+    }
     let target = parse_utc_time(&config.time)?;
     let today = utc_day(now_secs);
-    let can_run_today = utc_seconds_of_day(now_secs) < target
-        && config.last_attempt_day != Some(today);
+    let can_run_today =
+        utc_seconds_of_day(now_secs) < target && config.last_attempt_day != Some(today);
     let scheduled_day = if can_run_today { today } else { today + 1 };
     Some(scheduled_day * DAY_SECS + target)
 }
@@ -256,12 +279,18 @@ fn load_auto_renew() -> AutoRenewConfig {
         Ok(raw) => raw,
         Err(e) if e.kind() == std::io::ErrorKind::NotFound => return AutoRenewConfig::default(),
         Err(e) => {
-            crate::log::err(&format!("[auto-renew] Cannot read config ({e}); automatic renewal disabled"));
+            crate::log::err(&format!(
+                "[auto-renew] Cannot read config ({e}); automatic renewal disabled"
+            ));
             return AutoRenewConfig::default();
         }
     };
     match serde_json::from_str::<AutoRenewConfig>(&raw) {
-        Ok(config) if parse_utc_time(&config.time).is_some() && (1..=6).contains(&config.min_days) => config,
+        Ok(config)
+            if parse_utc_time(&config.time).is_some() && (1..=6).contains(&config.min_days) =>
+        {
+            config
+        }
         _ => {
             crate::log::err("[auto-renew] Invalid schedule config; automatic renewal disabled");
             AutoRenewConfig::default()
@@ -281,32 +310,56 @@ fn save_auto_renew(config: &AutoRenewConfig) -> Result<(), String> {
 
 fn retryable_renew_error(err: &str) -> bool {
     let lower = err.to_ascii_lowercase();
-    !["2fa", "incorrect password", "invalid password", "invalid credentials",
-      "unauthorized", "forbidden", "rate.limit", "too many requests", "429",
-      "apple id sign-in", "apple id login"].iter().any(|part| lower.contains(part))
+    ![
+        "2fa",
+        "incorrect password",
+        "invalid password",
+        "invalid credentials",
+        "unauthorized",
+        "forbidden",
+        "rate.limit",
+        "too many requests",
+        "429",
+        "apple id sign-in",
+        "apple id login",
+    ]
+    .iter()
+    .any(|part| lower.contains(part))
 }
 
 fn validate_discord_webhook(url: &str) -> bool {
-    let prefixes = ["https://discord.com/api/webhooks/", "https://discordapp.com/api/webhooks/"];
+    let prefixes = [
+        "https://discord.com/api/webhooks/",
+        "https://discordapp.com/api/webhooks/",
+    ];
     let Some(rest) = prefixes.iter().find_map(|prefix| url.strip_prefix(prefix)) else {
         return false;
     };
     let mut parts = rest.split('/');
     let Some(id) = parts.next() else { return false };
-    let Some(token) = parts.next() else { return false };
-    parts.next().is_none() && id.len() >= 10 && token.len() >= 20
+    let Some(token) = parts.next() else {
+        return false;
+    };
+    parts.next().is_none()
+        && id.len() >= 10
+        && token.len() >= 20
         && id.bytes().all(|b| b.is_ascii_digit())
-        && token.bytes().all(|b| b.is_ascii_alphanumeric() || b == b'-' || b == b'_')
+        && token
+            .bytes()
+            .all(|b| b.is_ascii_alphanumeric() || b == b'-' || b == b'_')
 }
 
 fn discord_configured() -> bool {
     std::fs::read_to_string(DISCORD_WEBHOOK_FILE)
-        .ok().is_some_and(|url| validate_discord_webhook(url.trim()))
+        .ok()
+        .is_some_and(|url| validate_discord_webhook(url.trim()))
 }
 
 fn send_discord_failure(error: &str) -> Result<(), String> {
-    let message = format!("AltKeeper: automatic renewal failed after retries.\n{}",
-        error.chars().take(240).collect::<String>());
+    let message = format!(
+        "AltKeeper: automatic renewal failed after retries.\n{}",
+        error.chars().take(240).collect::<String>()
+    );
     send_discord_message(&message)
 }
 
@@ -314,24 +367,44 @@ fn send_discord_message(message: &str) -> Result<(), String> {
     use std::io::Write;
     let url = std::fs::read_to_string(DISCORD_WEBHOOK_FILE).map_err(crate::phone::dbg)?;
     let url = url.trim();
-    if !validate_discord_webhook(url) { return Err("Invalid Discord webhook configuration".into()); }
+    if !validate_discord_webhook(url) {
+        return Err("Invalid Discord webhook configuration".into());
+    }
     // Pass the sensitive webhook URL via stdin (curl config), not process arguments.
     let body = json!({ "content": message }).to_string();
     let mut child = std::process::Command::new("curl")
-        .args(["--fail", "--silent", "--show-error", "--max-time", "12",
-            "--request", "POST", "--header", "Content-Type: application/json",
-            "--data-raw", &body, "--config", "-"])
+        .args([
+            "--fail",
+            "--silent",
+            "--show-error",
+            "--max-time",
+            "12",
+            "--request",
+            "POST",
+            "--header",
+            "Content-Type: application/json",
+            "--data-raw",
+            &body,
+            "--config",
+            "-",
+        ])
         .stdin(std::process::Stdio::piped())
         .stdout(std::process::Stdio::null())
         .stderr(std::process::Stdio::piped())
-        .spawn().map_err(crate::phone::dbg)?;
+        .spawn()
+        .map_err(crate::phone::dbg)?;
     // Validated webhook has no quote/backslash/newline, so it is safe for curl config.
     if let Some(mut stdin) = child.stdin.take() {
-        stdin.write_all(format!("url = \"{url}\"\n").as_bytes()).map_err(crate::phone::dbg)?;
+        stdin
+            .write_all(format!("url = \"{url}\"\n").as_bytes())
+            .map_err(crate::phone::dbg)?;
     }
     let output = child.wait_with_output().map_err(crate::phone::dbg)?;
-    if output.status.success() { Ok(()) }
-    else { Err("Discord rejected webhook notification".into()) }
+    if output.status.success() {
+        Ok(())
+    } else {
+        Err("Discord rejected webhook notification".into())
+    }
 }
 
 async fn auto_renew_loop(app: Arc<App>) {
@@ -343,14 +416,18 @@ async fn auto_renew_loop(app: Arc<App>) {
             let scheduled_due = parse_utc_time(&config.time)
                 .is_some_and(|target| utc_seconds_of_day(now_secs) >= target)
                 && config.last_attempt_day != Some(utc_day(now_secs));
-            if config.enabled && (retry_due || scheduled_due) { try_busy(&app) } else { None }
+            if config.enabled && (retry_due || scheduled_due) {
+                try_busy(&app)
+            } else {
+                None
+            }
         };
         if let Some(guard) = guard {
             let mut config = app.auto_renew.lock().unwrap_or_else(|e| e.into_inner());
             if config.enabled {
                 let is_retry = config.retry_at.is_some_and(|t| t <= now_secs);
-                let is_new_day = config.last_attempt_day != Some(utc_day(now_secs))
-                    && config.retry_at.is_none();
+                let is_new_day =
+                    config.last_attempt_day != Some(utc_day(now_secs)) && config.retry_at.is_none();
                 if is_retry || is_new_day {
                     let mut updated = config.clone();
                     if is_retry {
@@ -373,7 +450,9 @@ async fn auto_renew_loop(app: Arc<App>) {
                             lines: vec![format!("Scheduled renewal attempt {attempt}/3 (UTC).")],
                             ok: None,
                         };
-                        spawn_job(guard, move |app| run_renew(app, false, None, true, threshold, true));
+                        spawn_job(guard, move |app| {
+                            run_renew(app, false, None, true, threshold, true)
+                        });
                     }
                 }
             }
@@ -407,6 +486,7 @@ pub async fn serve(
 ) -> Result<(), String> {
     check_options(bind, &pin)?;
     cleanup_orphaned_ipa_uploads();
+    phone::start_auto_pair_monitor();
 
     let app = Arc::new(App {
         pin,
@@ -416,6 +496,7 @@ pub async fn serve(
         tfa: Arc::new(apple::TfaChannel::default()),
         auto_renew: Mutex::new(load_auto_renew()),
         pending_ipa: Mutex::new(None),
+        renewal_wait: crate::renewal_wait::Control::default(),
     });
     let router = Router::new()
         .route("/", get(index))
@@ -424,10 +505,16 @@ pub async fn serve(
         .route("/api/state", get(state))
         .route("/api/logs", get(logs))
         .route("/api/check", post(check))
+        .route("/api/phone-addresses", post(update_phone_addresses))
+        .route("/api/auto-pair", post(update_auto_pair))
         .route("/api/renew", post(renew))
+        .route("/api/renew/cancel-wait", post(cancel_renew_wait))
+        .route("/api/pair-usb", post(pair_usb))
         .route("/api/auto-renew", post(update_auto_renew))
         .route("/api/discord", post(update_discord))
         .route("/api/discord/test", post(test_discord))
+        .route("/api/anisette", post(update_anisette))
+        .route("/api/anisette/test", post(test_anisette))
         .route("/api/profile/remove", post(remove_profile))
         .route("/api/profile/restore", post(restore_profile))
         .route(
@@ -445,16 +532,29 @@ pub async fn serve(
         .layer(middleware::from_fn_with_state(app.clone(), guard))
         .with_state(app.clone());
 
-    let listener = tokio::net::TcpListener::bind(bind)
-        .await
-        .map_err(|e| crate::tr!(format!("non riesco ad ascoltare su {bind}: {e}"), format!("cannot listen on {bind}: {e}")))?;
+    let listener = tokio::net::TcpListener::bind(bind).await.map_err(|e| {
+        crate::tr!(
+            format!("non riesco ad ascoltare su {bind}: {e}"),
+            format!("cannot listen on {bind}: {e}")
+        )
+    })?;
     crate::log::line(&crate::tr!(
-        format!("Interfaccia web su http://{bind} ({})", if app.pin.is_some() {
-            "protetta da PIN: il nome utente può essere qualsiasi"
-        } else { "raggiungibile solo da questo computer" }),
-        format!("Web interface at http://{bind} ({})", if app.pin.is_some() {
-            "PIN-protected: any username is accepted"
-        } else { "only accessible from this computer" })
+        format!(
+            "Interfaccia web su http://{bind} ({})",
+            if app.pin.is_some() {
+                "protetta da PIN: il nome utente può essere qualsiasi"
+            } else {
+                "raggiungibile solo da questo computer"
+            }
+        ),
+        format!(
+            "Web interface at http://{bind} ({})",
+            if app.pin.is_some() {
+                "PIN-protected: any username is accepted"
+            } else {
+                "only accessible from this computer"
+            }
+        )
     ));
     // Built-in scheduler; no systemd socket/host privileges or separate cron required.
     tokio::spawn(auto_renew_loop(app.clone()));
@@ -472,7 +572,9 @@ pub async fn serve(
             tokio::time::sleep(Duration::from_secs(24 * 60 * 60)).await;
         }
     });
-    axum::serve(listener, router).await.map_err(|e| format!("{e:?}"))
+    axum::serve(listener, router)
+        .await
+        .map_err(|e| format!("{e:?}"))
 }
 
 // ---------------------------------------------------------------------------------------------
@@ -483,21 +585,24 @@ async fn guard(State(app): State<Arc<App>>, req: Request, next: Next) -> Respons
     // iOS Safari can fetch favorite icons separately from the authenticated tab,
     // so only these two fixed, non-sensitive PNGs are served without the PIN.
     let public_icon = req.method() == Method::GET
-        && matches!(req.uri().path(), "/apple-touch-icon.png" | "/favicon-32.png");
+        && matches!(
+            req.uri().path(),
+            "/apple-touch-icon.png" | "/favicon-32.png"
+        );
     if !public_icon && app.pin.is_none() && !host_is_local(req.headers()) {
         return (StatusCode::FORBIDDEN, "host non ammesso").into_response();
     }
     if !public_icon {
         if let Some(pin) = &app.pin {
             if !basic_password_ok(req.headers(), pin) {
-            // Rallenta chi prova PIN a caso.
-            tokio::time::sleep(Duration::from_secs(1)).await;
-            let mut res = (StatusCode::UNAUTHORIZED, "serve il PIN").into_response();
-            res.headers_mut().insert(
-                header::WWW_AUTHENTICATE,
-                HeaderValue::from_static("Basic realm=\"altkeeper\""),
-            );
-            return res;
+                // Rallenta chi prova PIN a caso.
+                tokio::time::sleep(Duration::from_secs(1)).await;
+                let mut res = (StatusCode::UNAUTHORIZED, "serve il PIN").into_response();
+                res.headers_mut().insert(
+                    header::WWW_AUTHENTICATE,
+                    HeaderValue::from_static("Basic realm=\"altkeeper\""),
+                );
+                return res;
             }
         }
     }
@@ -508,12 +613,23 @@ async fn guard(State(app): State<Arc<App>>, req: Request, next: Next) -> Respons
     }
     let mut res = next.run(req).await;
     let h = res.headers_mut();
-    h.insert(header::CACHE_CONTROL, HeaderValue::from_static(
-        if public_icon { "public, max-age=86400" } else { "no-store" }
-    ));
-    h.insert(header::X_CONTENT_TYPE_OPTIONS, HeaderValue::from_static("nosniff"));
+    h.insert(
+        header::CACHE_CONTROL,
+        HeaderValue::from_static(if public_icon {
+            "public, max-age=86400"
+        } else {
+            "no-store"
+        }),
+    );
+    h.insert(
+        header::X_CONTENT_TYPE_OPTIONS,
+        HeaderValue::from_static("nosniff"),
+    );
     h.insert(header::X_FRAME_OPTIONS, HeaderValue::from_static("DENY"));
-    h.insert(header::REFERRER_POLICY, HeaderValue::from_static("no-referrer"));
+    h.insert(
+        header::REFERRER_POLICY,
+        HeaderValue::from_static("no-referrer"),
+    );
     h.insert(
         header::CONTENT_SECURITY_POLICY,
         HeaderValue::from_static(
@@ -539,7 +655,10 @@ fn host_is_local(headers: &HeaderMap) -> bool {
 }
 
 fn basic_password_ok(headers: &HeaderMap, pin: &str) -> bool {
-    let Some(value) = headers.get(header::AUTHORIZATION).and_then(|v| v.to_str().ok()) else {
+    let Some(value) = headers
+        .get(header::AUTHORIZATION)
+        .and_then(|v| v.to_str().ok())
+    else {
         return false;
     };
     let Some(encoded) = value.strip_prefix("Basic ") else {
@@ -601,12 +720,18 @@ async fn index() -> Html<&'static str> {
 
 fn png_response(bytes: &'static [u8]) -> Response {
     let mut response = Response::new(axum::body::Body::from(bytes));
-    response.headers_mut().insert(header::CONTENT_TYPE, HeaderValue::from_static("image/png"));
+    response
+        .headers_mut()
+        .insert(header::CONTENT_TYPE, HeaderValue::from_static("image/png"));
     response
 }
 
-async fn apple_touch_icon() -> Response { png_response(APPLE_TOUCH_ICON) }
-async fn favicon_32() -> Response { png_response(FAVICON_32) }
+async fn apple_touch_icon() -> Response {
+    png_response(APPLE_TOUCH_ICON)
+}
+async fn favicon_32() -> Response {
+    png_response(FAVICON_32)
+}
 
 fn json_err(status: StatusCode, msg: &str) -> (StatusCode, Json<Value>) {
     (status, Json(json!({ "error": msg })))
@@ -652,16 +777,27 @@ async fn state(State(app): State<Arc<App>>) -> Json<Value> {
     // Copy the view and release its mutex before reading the schedule. Never
     // hold the UI and scheduler mutexes together (retry logging also uses UI).
     let g = app.lock().clone();
-    let schedule = app.auto_renew.lock().unwrap_or_else(|e| e.into_inner()).clone();
+    let schedule = app
+        .auto_renew
+        .lock()
+        .unwrap_or_else(|e| e.into_inner())
+        .clone();
     let next_scheduled = next_auto_run(&schedule, now());
     let asking = app.tfa.asking.load(Ordering::SeqCst);
     let login_phase = if asking { "needs_code" } else { g.login.phase };
     let code_error = app.tfa.last_error.lock().ok().and_then(|e| e.clone());
+    let phone_addresses = phone::saved_addresses();
+    let is_renewal = g.job.kind.starts_with("renew");
+    let anisette = apple::anisette_choice(Path::new("."));
 
     Json(json!({
         "now": now(),
         "busy": app.busy.load(Ordering::SeqCst),
         "pairing": pairing,
+        "auto_pair": {
+            "enabled": phone::auto_pair_configured(),
+            "locked": crate::env::is_set("NO_USB") || crate::env::is_set("NO_AUTO_PAIR"),
+        },
         "auto_renew": {
             "enabled": schedule.enabled,
             "time": schedule.time,
@@ -688,6 +824,20 @@ async fn state(State(app): State<Arc<App>>) -> Json<Value> {
             "detail": g.snapshot.detail,
             "profiles_total": g.snapshot.profiles_total,
         },
+        "phone_addresses": {
+            "addresses": phone_addresses.as_ref().map(|addresses|
+                addresses.iter().map(ToString::to_string).collect::<Vec<_>>()).unwrap_or_default(),
+            "error": phone_addresses.err(),
+        },
+        "anisette": match anisette {
+            Ok(choice) => json!({
+                "url": choice.url.clone(),
+                "source": choice.source,
+                "locked": choice.locked,
+                "default": choice.url == apple::DEFAULT_ANISETTE_URL,
+            }),
+            Err(error) => json!({ "error": error }),
+        },
         "quotas": {
             "installed_apps": g.snapshot.apps.len(),
             "max_installed_apps": 3,
@@ -709,6 +859,9 @@ async fn state(State(app): State<Arc<App>>) -> Json<Value> {
         "job": {
             "kind": g.job.kind, "running": g.job.running,
             "lines": g.job.lines, "ok": g.job.ok,
+            "waiting_for_phone": is_renewal && g.job.running && app.renewal_wait.is_waiting(),
+            "cancel_requested": is_renewal && app.renewal_wait.is_canceled(),
+            "canceled": is_renewal && g.job.ok == Some(false) && app.renewal_wait.is_canceled(),
         },
         "login": {
             "phase": login_phase,
@@ -733,6 +886,166 @@ async fn check(State(app): State<Arc<App>>) -> (StatusCode, Json<Value>) {
     json_ok()
 }
 
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct PhoneAddressesReq {
+    addresses: Vec<String>,
+}
+
+async fn update_phone_addresses(Json(req): Json<PhoneAddressesReq>) -> (StatusCode, Json<Value>) {
+    if let Err(error) = phone::validate_addresses(&req.addresses) {
+        return json_err(StatusCode::BAD_REQUEST, &error);
+    }
+    match phone::save_addresses(&req.addresses) {
+        Ok(addresses) => (
+            StatusCode::OK,
+            Json(json!({
+                "ok": true,
+                "addresses": addresses.iter().map(ToString::to_string).collect::<Vec<_>>(),
+            })),
+        ),
+        Err(error) => json_err(
+            StatusCode::INTERNAL_SERVER_ERROR,
+            &format!("Cannot save iPhone addresses: {error}"),
+        ),
+    }
+}
+
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct AutoPairReq {
+    enabled: bool,
+}
+
+async fn update_auto_pair(Json(req): Json<AutoPairReq>) -> (StatusCode, Json<Value>) {
+    if req.enabled && (crate::env::is_set("NO_USB") || crate::env::is_set("NO_AUTO_PAIR")) {
+        return json_err(
+            StatusCode::CONFLICT,
+            "Automatic pairing is disabled by ALTKEEPER_NO_USB or ALTKEEPER_NO_AUTO_PAIR.",
+        );
+    }
+    if req.enabled {
+        match std::fs::remove_file(AUTO_PAIR_OFF_FILE) {
+            Ok(()) => {}
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
+            Err(error) => {
+                return json_err(
+                    StatusCode::INTERNAL_SERVER_ERROR,
+                    &format!("Cannot enable automatic pairing: {error}"),
+                )
+            }
+        }
+    } else {
+        if let Err(error) = std::fs::create_dir_all("state")
+            .and_then(|_| crate::fsperm::restrict_dir(Path::new("state")))
+            .and_then(|_| crate::fsperm::write_private(Path::new(AUTO_PAIR_OFF_FILE), b"1"))
+        {
+            return json_err(
+                StatusCode::INTERNAL_SERVER_ERROR,
+                &format!("Cannot disable automatic pairing: {error}"),
+            );
+        }
+    }
+    (
+        StatusCode::OK,
+        Json(json!({ "ok": true, "enabled": req.enabled })),
+    )
+}
+
+async fn pair_usb(State(app): State<Arc<App>>) -> (StatusCode, Json<Value>) {
+    let Some(guard) = try_busy(&app) else {
+        return json_err(StatusCode::CONFLICT, BUSY_MSG);
+    };
+    app.lock().job = JobView {
+        kind: "pair_usb".into(),
+        running: true,
+        lines: vec!["Pairing iPhone over USB…".into()],
+        ok: None,
+    };
+    spawn_job(guard, run_pair_usb);
+    json_ok()
+}
+
+async fn run_pair_usb(app: Arc<App>) {
+    let result = phone::pair_usb(PAIRING_FILE).await;
+    match &result {
+        Ok(()) => app.push_line("USB pairing created successfully."),
+        Err(error) => app.push_line(&format!("Error: {error}")),
+    }
+    let mut g = app.lock();
+    g.job.running = false;
+    g.job.ok = Some(result.is_ok());
+}
+
+async fn cancel_renew_wait(State(app): State<Arc<App>>) -> (StatusCode, Json<Value>) {
+    let g = app.lock();
+    if !g.job.running || !app.renewal_wait.is_waiting() {
+        return json_err(StatusCode::CONFLICT, "No iPhone response wait is active.");
+    }
+    app.renewal_wait.cancel();
+    json_ok()
+}
+
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct AnisetteReq {
+    #[serde(default)]
+    url: Option<String>,
+    #[serde(default)]
+    clear: bool,
+}
+
+async fn update_anisette(
+    State(app): State<Arc<App>>,
+    Json(req): Json<AnisetteReq>,
+) -> (StatusCode, Json<Value>) {
+    let Some(_guard) = try_busy(&app) else {
+        return json_err(StatusCode::CONFLICT, BUSY_MSG);
+    };
+    if req.clear && req.url.is_some() {
+        return json_err(
+            StatusCode::BAD_REQUEST,
+            "Choose a URL or restore the default, not both.",
+        );
+    }
+    if !req.clear && req.url.is_none() {
+        return json_err(
+            StatusCode::BAD_REQUEST,
+            "Supply an anisette URL or set clear=true.",
+        );
+    }
+    let choice = match apple::save_anisette_choice(
+        Path::new("."),
+        if req.clear { None } else { req.url.as_deref() },
+    ) {
+        Ok(choice) => choice,
+        Err(error) => return json_err(StatusCode::BAD_REQUEST, &error),
+    };
+    crate::altserver::clear_anisette_cache().await;
+    (
+        StatusCode::OK,
+        Json(json!({
+            "ok": true,
+            "url": choice.url.clone(),
+            "source": choice.source,
+            "locked": choice.locked,
+            "default": choice.url == apple::DEFAULT_ANISETTE_URL,
+        })),
+    )
+}
+
+async fn test_anisette(State(app): State<Arc<App>>) -> (StatusCode, Json<Value>) {
+    let Some(_guard) = try_busy(&app) else {
+        return json_err(StatusCode::CONFLICT, BUSY_MSG);
+    };
+    match apple::anisette_for_altstore(Path::new(".")).await {
+        Ok(_) => json_ok(),
+        Err(error) => json_err(
+            StatusCode::BAD_GATEWAY,
+            &format!("Anisette server test failed: {error}"),
+        ),
+    }
+}
 
 #[derive(Deserialize)]
 struct AutoRenewReq {
@@ -750,20 +1063,28 @@ async fn update_auto_renew(
         return json_err(StatusCode::BAD_REQUEST, "Use a valid 24-hour time (HH:MM).");
     };
     if !(1..=6).contains(&req.min_days) {
-        return json_err(StatusCode::BAD_REQUEST, "Renewal threshold must be 1-6 days.");
+        return json_err(
+            StatusCode::BAD_REQUEST,
+            "Renewal threshold must be 1-6 days.",
+        );
     }
     if req.enabled {
         match apple::read_account(Path::new(".")) {
             Some(acc) if !acc.password.is_empty() && acc.team_id.is_some() => {}
-            _ => return json_err(StatusCode::BAD_REQUEST,
-                "Save your Apple ID password before enabling automatic renewal."),
+            _ => {
+                return json_err(
+                    StatusCode::BAD_REQUEST,
+                    "Save your Apple ID password before enabling automatic renewal.",
+                )
+            }
         }
     }
     let mut config = app.auto_renew.lock().unwrap_or_else(|e| e.into_inner());
     let mut updated = config.clone();
     // Turning on or changing the clock time after today's scheduled time
     // must NOT immediately trigger an unrequested refresh.
-    if req.enabled && (!config.enabled || config.time != req.time)
+    if req.enabled
+        && (!config.enabled || config.time != req.time)
         && utc_seconds_of_day(now()) >= target
     {
         updated.last_attempt_day = Some(utc_day(now()));
@@ -776,31 +1097,48 @@ async fn update_auto_renew(
         updated.retry_count = 0;
     }
     if let Err(err) = save_auto_renew(&updated) {
-        return json_err(StatusCode::INTERNAL_SERVER_ERROR, &format!("Cannot save schedule: {err}"));
+        return json_err(
+            StatusCode::INTERNAL_SERVER_ERROR,
+            &format!("Cannot save schedule: {err}"),
+        );
     }
     *config = updated;
     json_ok()
 }
 
-
 fn backup_views(team: &str) -> Vec<Value> {
-    let Ok(entries) = std::fs::read_dir(crate::SAVED_DIR) else { return Vec::new(); };
+    let Ok(entries) = std::fs::read_dir(crate::SAVED_DIR) else {
+        return Vec::new();
+    };
     let mut result = Vec::new();
     for entry in entries.flatten() {
-        if !entry.file_type().is_ok_and(|ft| ft.is_file()) { continue; }
+        if !entry.file_type().is_ok_and(|ft| ft.is_file()) {
+            continue;
+        }
         let path = entry.path();
-        if path.extension().and_then(|s| s.to_str()) != Some("mobileprovision") { continue; }
-        let Ok(bytes) = std::fs::read(&path) else { continue; };
-        let Some(p) = profile::parse(&bytes) else { continue; };
+        if path.extension().and_then(|s| s.to_str()) != Some("mobileprovision") {
+            continue;
+        }
+        let Ok(bytes) = std::fs::read(&path) else {
+            continue;
+        };
+        let Some(p) = profile::parse(&bytes) else {
+            continue;
+        };
         if p.team_id.as_deref() != Some(team)
-            || path.file_stem().and_then(|s| s.to_str())
-                .is_none_or(|stem| !stem.eq_ignore_ascii_case(&p.uuid)) { continue; }
+            || path
+                .file_stem()
+                .and_then(|s| s.to_str())
+                .is_none_or(|stem| !stem.eq_ignore_ascii_case(&p.uuid))
+        {
+            continue;
+        }
         result.push(json!({
             "uuid": p.uuid, "bundle": p.bundle_id, "expires":p.expires_text(),
             "days": p.days_left()
         }));
     }
-    result.sort_by(|a,b| a["bundle"].as_str().cmp(&b["bundle"].as_str()));
+    result.sort_by(|a, b| a["bundle"].as_str().cmp(&b["bundle"].as_str()));
     result
 }
 
@@ -812,25 +1150,29 @@ struct DiscordReq {
     clear: bool,
 }
 
-async fn update_discord(
-    Json(req): Json<DiscordReq>,
-) -> (StatusCode, Json<Value>) {
+async fn update_discord(Json(req): Json<DiscordReq>) -> (StatusCode, Json<Value>) {
     if req.clear {
         match std::fs::remove_file(DISCORD_WEBHOOK_FILE) {
             Ok(()) => return json_ok(),
             Err(e) if e.kind() == std::io::ErrorKind::NotFound => return json_ok(),
-            Err(_) => return json_err(StatusCode::INTERNAL_SERVER_ERROR, "Could not clear webhook"),
+            Err(_) => {
+                return json_err(StatusCode::INTERNAL_SERVER_ERROR, "Could not clear webhook")
+            }
         }
     }
     let Some(webhook) = req.webhook else {
         return json_err(StatusCode::BAD_REQUEST, "Supply a Discord webhook URL.");
     };
     if !validate_discord_webhook(&webhook) {
-        return json_err(StatusCode::BAD_REQUEST, "Expected a valid Discord webhook URL.");
+        return json_err(
+            StatusCode::BAD_REQUEST,
+            "Expected a valid Discord webhook URL.",
+        );
     }
     if std::fs::create_dir_all("state").is_err()
         || crate::fsperm::restrict_dir(Path::new("state")).is_err()
-        || crate::fsperm::write_private(Path::new(DISCORD_WEBHOOK_FILE), webhook.as_bytes()).is_err()
+        || crate::fsperm::write_private(Path::new(DISCORD_WEBHOOK_FILE), webhook.as_bytes())
+            .is_err()
     {
         return json_err(StatusCode::INTERNAL_SERVER_ERROR, "Could not save webhook");
     }
@@ -840,17 +1182,24 @@ async fn update_discord(
 /// User-initiated delivery check; never creates or renews a profile.
 async fn test_discord() -> (StatusCode, Json<Value>) {
     if !discord_configured() {
-        return json_err(StatusCode::BAD_REQUEST, "Configure a Discord webhook first.");
+        return json_err(
+            StatusCode::BAD_REQUEST,
+            "Configure a Discord webhook first.",
+        );
     }
     // curl is synchronous; leave Tokio free while we wait for Discord.
     let sent = tokio::task::spawn_blocking(|| {
         send_discord_message(
-            "AltKeeper test notification: Discord webhook is working. No renewal was performed."
+            "AltKeeper test notification: Discord webhook is working. No renewal was performed.",
         )
-    }).await;
+    })
+    .await;
     match sent {
         Ok(Ok(())) => json_ok(),
-        _ => json_err(StatusCode::BAD_GATEWAY, "Discord test delivery failed. Check webhook permissions and network access."),
+        _ => json_err(
+            StatusCode::BAD_GATEWAY,
+            "Discord test delivery failed. Check webhook permissions and network access.",
+        ),
     }
 }
 
@@ -865,16 +1214,28 @@ async fn restore_profile(
 ) -> (StatusCode, Json<Value>) {
     let team = apple::read_account(Path::new(".")).and_then(|a| a.team_id);
     let Some(team) = team else {
-        return json_err(StatusCode::BAD_REQUEST, "Sign in before restoring profiles.");
+        return json_err(
+            StatusCode::BAD_REQUEST,
+            "Sign in before restoring profiles.",
+        );
     };
-    if !backup_views(&team).iter().any(|p| p["uuid"].as_str() == Some(&req.uuid)) {
-        return json_err(StatusCode::NOT_FOUND, "Verified profile backup was not found.");
+    if !backup_views(&team)
+        .iter()
+        .any(|p| p["uuid"].as_str() == Some(&req.uuid))
+    {
+        return json_err(
+            StatusCode::NOT_FOUND,
+            "Verified profile backup was not found.",
+        );
     }
     let Some(guard) = try_busy(&app) else {
         return json_err(StatusCode::CONFLICT, BUSY_MSG);
     };
     app.lock().job = JobView {
-        kind:"restore_profile".into(), running:true, lines:Vec::new(), ok:None
+        kind: "restore_profile".into(),
+        running: true,
+        lines: Vec::new(),
+        ok: None,
     };
     spawn_job(guard, move |app| run_restore_profile(app, req.uuid, team));
     json_ok()
@@ -883,8 +1244,10 @@ async fn restore_profile(
 async fn run_restore_profile(app: Arc<App>, uuid: String, team: String) {
     let result: Result<String, String> = async {
         // Only original verified UUID-named files for the configured Apple team.
-        if uuid.len() > 64 || uuid.is_empty()
-            || !uuid.bytes().all(|b| b.is_ascii_hexdigit() || b == b'-') {
+        if uuid.len() > 64
+            || uuid.is_empty()
+            || !uuid.bytes().all(|b| b.is_ascii_hexdigit() || b == b'-')
+        {
             return Err("Invalid profile UUID".into());
         }
         let path = Path::new(crate::SAVED_DIR).join(format!("{uuid}.mobileprovision"));
@@ -894,18 +1257,27 @@ async fn run_restore_profile(app: Arc<App>, uuid: String, team: String) {
             return Err("Backup does not belong to the configured Apple team".into());
         }
         let (_, mut link) = phone::connect_auto(app.phone, PAIRING_FILE, |_: &str| {}).await?;
-        phone::with_timeout("Profile restore", Duration::from_secs(60),
-            link.install_profile(bytes)).await?;
-        Ok(format!("Restored profile {}. Original backup retained.", uuid))
-    }.await;
+        phone::with_timeout(
+            "Profile restore",
+            Duration::from_secs(60),
+            link.install_profile(bytes),
+        )
+        .await?;
+        Ok(format!(
+            "Restored profile {}. Original backup retained.",
+            uuid
+        ))
+    }
+    .await;
     let ok = result.is_ok();
     match result {
         Ok(line) => app.push_line(&line),
         Err(e) => app.push_line(&format!("Error: {}", short_error(&e))),
     }
     {
-        let mut g=app.lock();
-        g.job.running=false; g.job.ok=Some(ok);
+        let mut g = app.lock();
+        g.job.running = false;
+        g.job.ok = Some(ok);
     }
     run_check(app).await;
 }
@@ -929,7 +1301,10 @@ async fn renew(
                 return json_err(StatusCode::BAD_REQUEST, "Select an app to renew.");
             };
             if !app.lock().snapshot.apps.iter().any(|a| a.bundle == b) {
-                return json_err(StatusCode::NOT_FOUND, "App is not in the current profile list.");
+                return json_err(
+                    StatusCode::NOT_FOUND,
+                    "App is not in the current profile list.",
+                );
             }
             (true, false, Some(b))
         }
@@ -949,16 +1324,28 @@ async fn renew(
     };
     {
         let mut g = app.lock();
+        app.renewal_wait.reset();
         g.job = JobView {
-            kind: if bundle.is_some() { "renew_one".into() }
-                  else if force { "renew_all".into() } else { "renew_due".into() },
+            kind: if bundle.is_some() {
+                "renew_one".into()
+            } else if force {
+                "renew_all".into()
+            } else {
+                "renew_due".into()
+            },
             running: true,
             lines: Vec::new(),
             ok: None,
         };
     }
-    let threshold = app.auto_renew.lock().unwrap_or_else(|e| e.into_inner()).min_days as i64;
-    spawn_job(guard, move |app| run_renew(app, force, bundle, installed_only, threshold, false));
+    let threshold = app
+        .auto_renew
+        .lock()
+        .unwrap_or_else(|e| e.into_inner())
+        .min_days as i64;
+    spawn_job(guard, move |app| {
+        run_renew(app, force, bundle, installed_only, threshold, false)
+    });
     json_ok()
 }
 
@@ -971,8 +1358,17 @@ async fn remove_profile(
     State(app): State<Arc<App>>,
     Json(req): Json<RemoveProfileReq>,
 ) -> (StatusCode, Json<Value>) {
-    if !app.lock().snapshot.profiles.iter().any(|p| p.uuid.eq_ignore_ascii_case(&req.uuid)) {
-        return json_err(StatusCode::NOT_FOUND, "Profile is not in your team's current list. Check again.");
+    if !app
+        .lock()
+        .snapshot
+        .profiles
+        .iter()
+        .any(|p| p.uuid.eq_ignore_ascii_case(&req.uuid))
+    {
+        return json_err(
+            StatusCode::NOT_FOUND,
+            "Profile is not in your team's current list. Check again.",
+        );
     }
     let Some(guard) = try_busy(&app) else {
         return json_err(StatusCode::CONFLICT, BUSY_MSG);
@@ -993,7 +1389,9 @@ async fn remove_profile(
 /// Remove abandoned uploads from previous processes (the active process owns none at startup).
 fn cleanup_orphaned_ipa_uploads() {
     let dir = Path::new("state/uploads");
-    let Ok(entries) = std::fs::read_dir(dir) else { return; };
+    let Ok(entries) = std::fs::read_dir(dir) else {
+        return;
+    };
     for entry in entries.flatten() {
         let name = entry.file_name();
         let name = name.to_string_lossy();
@@ -1005,7 +1403,10 @@ fn cleanup_orphaned_ipa_uploads() {
 
 fn expire_pending_ipa(app: &App) {
     let mut pending = app.pending_ipa.lock().unwrap_or_else(|e| e.into_inner());
-    if pending.as_ref().is_some_and(|p| now().saturating_sub(p.created_at) > PENDING_IPA_TTL) {
+    if pending
+        .as_ref()
+        .is_some_and(|p| now().saturating_sub(p.created_at) > PENDING_IPA_TTL)
+    {
         *pending = None;
     }
 }
@@ -1054,7 +1455,8 @@ impl Drop for UploadInProgress {
 fn new_upload_file() -> Result<(PathBuf, std::fs::File), String> {
     let dir = Path::new("state").join("uploads");
     std::fs::create_dir_all(&dir).map_err(|e| format!("Cannot create upload directory: {e}"))?;
-    crate::fsperm::restrict_dir(&dir).map_err(|e| format!("Cannot protect upload directory: {e}"))?;
+    crate::fsperm::restrict_dir(&dir)
+        .map_err(|e| format!("Cannot protect upload directory: {e}"))?;
 
     let mut random = [0u8; 16];
     rustls::crypto::ring::default_provider()
@@ -1090,14 +1492,19 @@ async fn receive_ipa(multipart: &mut Multipart) -> Result<UploadedIpa, (StatusCo
         .map_err(|e| (StatusCode::BAD_REQUEST, format!("Invalid upload: {e}")))?
     {
         if field.name() != Some("ipa") || upload.is_some() {
-            return Err((StatusCode::BAD_REQUEST, "Send one IPA file in the 'ipa' field.".into()));
+            return Err((
+                StatusCode::BAD_REQUEST,
+                "Send one IPA file in the 'ipa' field.".into(),
+            ));
         }
         let filename = field.file_name().unwrap_or("");
         if !filename.to_ascii_lowercase().ends_with(".ipa") {
-            return Err((StatusCode::BAD_REQUEST, "Choose a file with the .ipa extension.".into()));
+            return Err((
+                StatusCode::BAD_REQUEST,
+                "Choose a file with the .ipa extension.".into(),
+            ));
         }
-        let (path, file) = new_upload_file()
-            .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e))?;
+        let (path, file) = new_upload_file().map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e))?;
         upload = Some(UploadInProgress {
             path,
             file: Some(file),
@@ -1110,22 +1517,44 @@ async fn receive_ipa(multipart: &mut Multipart) -> Result<UploadedIpa, (StatusCo
             .map_err(|e| (StatusCode::BAD_REQUEST, format!("Upload failed: {e}")))?
         {
             let Some(upload) = upload.as_mut() else {
-                return Err((StatusCode::INTERNAL_SERVER_ERROR, "Upload state was lost.".into()));
+                return Err((
+                    StatusCode::INTERNAL_SERVER_ERROR,
+                    "Upload state was lost.".into(),
+                ));
             };
             let next_size = upload.size.saturating_add(chunk.len());
             if next_size > MAX_IPA_BYTES {
-                return Err((StatusCode::PAYLOAD_TOO_LARGE, "IPA exceeds the 1 GiB limit.".into()));
+                return Err((
+                    StatusCode::PAYLOAD_TOO_LARGE,
+                    "IPA exceeds the 1 GiB limit.".into(),
+                ));
             }
-            upload.file.as_mut().ok_or_else(|| {
-                (StatusCode::INTERNAL_SERVER_ERROR, "Upload file was closed unexpectedly.".into())
-            })?.write_all(&chunk)
-                .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, format!("Cannot save upload: {e}")))?;
+            upload
+                .file
+                .as_mut()
+                .ok_or_else(|| {
+                    (
+                        StatusCode::INTERNAL_SERVER_ERROR,
+                        "Upload file was closed unexpectedly.".into(),
+                    )
+                })?
+                .write_all(&chunk)
+                .map_err(|e| {
+                    (
+                        StatusCode::INTERNAL_SERVER_ERROR,
+                        format!("Cannot save upload: {e}"),
+                    )
+                })?;
             upload.size = next_size;
         }
     }
 
-    let upload = upload
-        .ok_or_else(|| (StatusCode::BAD_REQUEST, "Choose an IPA file to install.".into()))?;
+    let upload = upload.ok_or_else(|| {
+        (
+            StatusCode::BAD_REQUEST,
+            "Choose an IPA file to install.".into(),
+        )
+    })?;
     if upload.size == 0 {
         return Err((StatusCode::BAD_REQUEST, "The IPA file is empty.".into()));
     }
@@ -1174,7 +1603,12 @@ async fn inspect_install(
 ) -> (StatusCode, Json<Value>) {
     match apple::read_account(Path::new(".")) {
         Some(a) if !a.password.is_empty() && a.team_id.is_some() => {}
-        _ => return json_err(StatusCode::BAD_REQUEST, "Save an Apple ID account before installing."),
+        _ => {
+            return json_err(
+                StatusCode::BAD_REQUEST,
+                "Save an Apple ID account before installing.",
+            )
+        }
     }
     let Some(guard) = try_busy(&app) else {
         return json_err(StatusCode::CONFLICT, BUSY_MSG);
@@ -1187,14 +1621,20 @@ async fn inspect_install(
     *app.pending_ipa.lock().unwrap_or_else(|e| e.into_inner()) = None;
     let manifest = match isideload::sideload::application::inspect_ipa(&uploaded.0) {
         Ok(entries) => entries,
-        Err(e) => return json_err(StatusCode::UNPROCESSABLE_ENTITY,
-            &format!("Cannot inspect the IPA: {e}")),
+        Err(e) => {
+            return json_err(
+                StatusCode::UNPROCESSABLE_ENTITY,
+                &format!("Cannot inspect the IPA: {e}"),
+            )
+        }
     };
-    let customize = uri.query().is_some_and(|q|
-        q.split('&').any(|part| part == "customize=true"));
+    let customize = uri
+        .query()
+        .is_some_and(|q| q.split('&').any(|part| part == "customize=true"));
     if manifest.extensions.is_empty() && !customize {
         app.lock().job = JobView {
-            kind: "install".into(), running: true,
+            kind: "install".into(),
+            running: true,
             lines: vec!["IPA uploaded (no extensions). Signing and installing…".into()],
             ok: None,
         };
@@ -1203,24 +1643,42 @@ async fn inspect_install(
     }
     // For the rare archive containing many extensions, cap the preview surface.
     if manifest.extensions.len() > 100 {
-        return json_err(StatusCode::UNPROCESSABLE_ENTITY, "IPA contains too many extensions.");
+        return json_err(
+            StatusCode::UNPROCESSABLE_ENTITY,
+            "IPA contains too many extensions.",
+        );
     }
-    let token = uploaded.0.file_stem()
-        .and_then(|s| s.to_str()).unwrap_or("").to_string();
-    let preview = manifest.extensions.iter().map(|ext| json!({
-        "bundle_id": ext.bundle_id, "name": ext.name,
-    })).collect::<Vec<_>>();
+    let token = uploaded
+        .0
+        .file_stem()
+        .and_then(|s| s.to_str())
+        .unwrap_or("")
+        .to_string();
+    let preview = manifest
+        .extensions
+        .iter()
+        .map(|ext| {
+            json!({
+                "bundle_id": ext.bundle_id, "name": ext.name,
+            })
+        })
+        .collect::<Vec<_>>();
     let mut pending = app.pending_ipa.lock().unwrap_or_else(|e| e.into_inner());
     *pending = Some(PendingIpa {
-        upload: uploaded, extensions: manifest.extensions,
+        upload: uploaded,
+        extensions: manifest.extensions,
         source_bundle_id: manifest.bundle_id.clone(),
-        token: token.clone(), created_at: now(),
+        token: token.clone(),
+        created_at: now(),
     });
-    (StatusCode::OK, Json(json!({
-        "needs_selection": true, "token": token, "extensions": preview,
-        "app_name": manifest.name, "bundle_id": manifest.bundle_id,
-        "max_app_ids": 1 + preview.len(),
-    })))
+    (
+        StatusCode::OK,
+        Json(json!({
+            "needs_selection": true, "token": token, "extensions": preview,
+            "app_name": manifest.name, "bundle_id": manifest.bundle_id,
+            "max_app_ids": 1 + preview.len(),
+        })),
+    )
 }
 
 #[derive(Deserialize)]
@@ -1241,22 +1699,37 @@ struct NewInstallIdentity {
 }
 
 fn validated_install_identity(
-    name: Option<String>, bundle: Option<String>, original: &str,
+    name: Option<String>,
+    bundle: Option<String>,
+    original: &str,
 ) -> Result<Option<NewInstallIdentity>, String> {
     let name = name.map(|s| s.trim().to_string()).filter(|s| !s.is_empty());
-    let bundle = bundle.map(|s| s.trim().to_string()).filter(|s| !s.is_empty());
-    if name.as_ref().is_some_and(|n| n.chars().count() > 40 || n.chars().any(char::is_control)) {
+    let bundle = bundle
+        .map(|s| s.trim().to_string())
+        .filter(|s| !s.is_empty());
+    if name
+        .as_ref()
+        .is_some_and(|n| n.chars().count() > 40 || n.chars().any(char::is_control))
+    {
         return Err("App name must be at most 40 characters with no control characters.".into());
     }
-    if bundle.as_ref().is_some_and(|id| !isideload::sideload::application::valid_custom_bundle_id(id)) {
+    if bundle
+        .as_ref()
+        .is_some_and(|id| !isideload::sideload::application::valid_custom_bundle_id(id))
+    {
         return Err("Custom Bundle ID must be reverse-DNS format (e.g. com.example.clone).".into());
     }
     if bundle.as_deref() == Some(original) {
         return Err("Custom Bundle ID must differ from the original ID.".into());
     }
-    if name.is_none() && bundle.is_none() { return Ok(None); }
-    Ok(Some(NewInstallIdentity { display_name: name, bundle_id: bundle,
-        source_bundle_id: original.to_string() }))
+    if name.is_none() && bundle.is_none() {
+        return Ok(None);
+    }
+    Ok(Some(NewInstallIdentity {
+        display_name: name,
+        bundle_id: bundle,
+        source_bundle_id: original.to_string(),
+    }))
 }
 
 async fn confirm_install(
@@ -1267,7 +1740,10 @@ async fn confirm_install(
         return json_err(StatusCode::CONFLICT, BUSY_MSG);
     };
     let mut pending = app.pending_ipa.lock().unwrap_or_else(|e| e.into_inner());
-    if pending.as_ref().is_some_and(|p| now().saturating_sub(p.created_at) > PENDING_IPA_TTL) {
+    if pending
+        .as_ref()
+        .is_some_and(|p| now().saturating_sub(p.created_at) > PENDING_IPA_TTL)
+    {
         *pending = None;
     }
     let Some(prepared) = pending.as_ref() else {
@@ -1276,16 +1752,26 @@ async fn confirm_install(
     if prepared.token != req.token {
         return json_err(StatusCode::BAD_REQUEST, "Invalid install selection.");
     }
-    let allowed: std::collections::HashSet<&str> = prepared.extensions.iter()
-        .map(|e| e.bundle_id.as_str()).collect();
+    let allowed: std::collections::HashSet<&str> = prepared
+        .extensions
+        .iter()
+        .map(|e| e.bundle_id.as_str())
+        .collect();
     let mut unique = std::collections::HashSet::new();
-    if req.keep_extensions.iter().any(|id| !allowed.contains(id.as_str())
-        || !unique.insert(id.as_str()))
+    if req
+        .keep_extensions
+        .iter()
+        .any(|id| !allowed.contains(id.as_str()) || !unique.insert(id.as_str()))
     {
-        return json_err(StatusCode::BAD_REQUEST, "Unknown or duplicate extension selection.");
+        return json_err(
+            StatusCode::BAD_REQUEST,
+            "Unknown or duplicate extension selection.",
+        );
     }
     let identity = match validated_install_identity(
-        req.display_name, req.bundle_id, &prepared.source_bundle_id,
+        req.display_name,
+        req.bundle_id,
+        &prepared.source_bundle_id,
     ) {
         Ok(v) => v,
         Err(msg) => return json_err(StatusCode::BAD_REQUEST, &msg),
@@ -1293,13 +1779,18 @@ async fn confirm_install(
     let prepared = pending.take().expect("checked pending");
     drop(pending);
     app.lock().job = JobView {
-        kind: "install".into(), running: true,
-        lines: vec![format!("IPA uploaded. Keeping {} of {} extensions.",
-            req.keep_extensions.len(), prepared.extensions.len())],
+        kind: "install".into(),
+        running: true,
+        lines: vec![format!(
+            "IPA uploaded. Keeping {} of {} extensions.",
+            req.keep_extensions.len(),
+            prepared.extensions.len()
+        )],
         ok: None,
     };
-    spawn_job(guard, move |app| run_install(app, prepared.upload,
-        Some(req.keep_extensions), identity));
+    spawn_job(guard, move |app| {
+        run_install(app, prepared.upload, Some(req.keep_extensions), identity)
+    });
     json_ok()
 }
 
@@ -1326,7 +1817,10 @@ async fn login(
     let Some(guard) = try_busy(&app) else {
         return json_err(StatusCode::CONFLICT, BUSY_MSG);
     };
-    app.lock().login = LoginView { phase: "working", message: String::new() };
+    app.lock().login = LoginView {
+        phase: "working",
+        message: String::new(),
+    };
     *app.tfa.last_error.lock().unwrap_or_else(|e| e.into_inner()) = None;
     let save = req.save_password;
     let password = req.password;
@@ -1371,7 +1865,7 @@ async fn run_check(app: Arc<App>) {
     app.lock().snapshot.checking = true;
     let team = apple::read_account(Path::new(".")).and_then(|a| a.team_id);
 
-    let result = tokio::time::timeout(Duration::from_secs(45), async {
+    let result = tokio::time::timeout(CHECK_TIMEOUT, async {
         let (addr, mut link) = phone::connect_auto(app.phone, PAIRING_FILE, |_: &str| {}).await?;
         let profiles = crate::phone_profiles(&mut link).await?;
         Ok::<_, String>((addr, profiles))
@@ -1388,8 +1882,14 @@ async fn run_check(app: Arc<App>) {
             g.snapshot.error = None;
             g.snapshot.detail = None;
             g.snapshot.profiles_total = profiles.len();
-            g.snapshot.apps = team.as_deref().map(|t| app_views(&profiles, t)).unwrap_or_default();
-            g.snapshot.profiles = team.as_deref().map(|t| profile_views(&profiles, t)).unwrap_or_default();
+            g.snapshot.apps = team
+                .as_deref()
+                .map(|t| app_views(&profiles, t))
+                .unwrap_or_default();
+            g.snapshot.profiles = team
+                .as_deref()
+                .map(|t| profile_views(&profiles, t))
+                .unwrap_or_default();
         }
         Ok(Err(e)) => {
             g.snapshot.apps.clear();
@@ -1403,17 +1903,34 @@ async fn run_check(app: Arc<App>) {
             g.snapshot.profiles.clear();
             g.snapshot.reachable = Some(false);
             g.snapshot.error = Some(friendly_error("non risponde"));
-            g.snapshot.detail = Some("nessuna risposta entro 45 secondi".into());
+            g.snapshot.detail = Some(format!(
+                "nessuna risposta entro {} secondi",
+                CHECK_TIMEOUT.as_secs()
+            ));
         }
     }
 }
 
 async fn run_renew(
-    app: Arc<App>, force: bool, bundle: Option<String>, installed_only: bool,
-    min_days: i64, automatic: bool,
+    app: Arc<App>,
+    force: bool,
+    bundle: Option<String>,
+    installed_only: bool,
+    min_days: i64,
+    automatic: bool,
 ) {
     let mut say = |s: &str| app.push_line(&english_job_line(s));
-    let result = crate::cmd_renew(app.phone, false, force, min_days, bundle.as_deref(), installed_only, &mut say).await;
+    let result = crate::cmd_renew(
+        app.phone,
+        false,
+        force,
+        min_days,
+        bundle.as_deref(),
+        installed_only,
+        Some(&app.renewal_wait),
+        &mut say,
+    )
+    .await;
     let ok = result.is_ok();
     let error = result.as_ref().err().map(|err| short_error(err));
     if let Some(err) = &error {
@@ -1440,13 +1957,12 @@ async fn run_renew(
         } else {
             let err = error.as_deref().unwrap_or("Unknown renewal error");
             updated.last_error = Some(err.to_owned());
-            if updated.enabled && updated.retry_count < MAX_RETRIES
-                && retryable_renew_error(err)
-            {
+            if updated.enabled && updated.retry_count < MAX_RETRIES && retryable_renew_error(err) {
                 updated.retry_at = Some(now() + RETRY_SECONDS);
                 retry_message = Some(format!(
                     "Automatic retry {}/{} in 30 minutes.",
-                    updated.retry_count + 1, MAX_RETRIES
+                    updated.retry_count + 1,
+                    MAX_RETRIES
                 ));
             } else {
                 updated.retry_at = None;
@@ -1476,34 +1992,62 @@ async fn run_renew(
 }
 
 fn app_renew_updates(
-    groups: Vec<AppView>, lines: &[String], selected: Option<&str>, at: u64,
+    groups: Vec<AppView>,
+    lines: &[String],
+    selected: Option<&str>,
+    at: u64,
 ) -> serde_json::Map<String, Value> {
-    let renewed: std::collections::HashSet<&str> = lines.iter()
-        .filter_map(|line| line.strip_prefix("RENEWED ")).collect();
-    let missing: std::collections::HashSet<&str> = lines.iter()
-        .filter_map(|line| line.strip_prefix("MISSING_APP_ID ")).collect();
-    let attempted: std::collections::HashSet<&str> = lines.iter()
+    let renewed: std::collections::HashSet<&str> = lines
+        .iter()
+        .filter_map(|line| line.strip_prefix("RENEWED "))
+        .collect();
+    let missing: std::collections::HashSet<&str> = lines
+        .iter()
+        .filter_map(|line| line.strip_prefix("MISSING_APP_ID "))
+        .collect();
+    let attempted: std::collections::HashSet<&str> = lines
+        .iter()
         .filter_map(|line| line.trim().split_once(": expires in "))
         .filter(|(_, tail)| tail.contains("downloading a new profile"))
-        .map(|(bundle,_)| bundle).collect();
+        .map(|(bundle, _)| bundle)
+        .collect();
     let mut updates = serde_json::Map::new();
     for group in groups {
-        if selected.is_some_and(|s| s != group.bundle) { continue; }
-        let in_group = group.members.iter().filter(|m| renewed.contains(m.bundle.as_str())).count();
-        let any_attempted = group.members.iter().any(|m|
-            attempted.contains(m.bundle.as_str()) || missing.contains(m.bundle.as_str()));
-        if in_group == 0 && !any_attempted && selected.is_none() { continue; }
-        let status = if in_group == group.members.len() { "success" }
-            else if in_group > 0 { "partial" } else { "failed" };
-        updates.insert(group.bundle, json!({"status":status,"at":at,"renewed":in_group,
-            "total":group.members.len()}));
+        if selected.is_some_and(|s| s != group.bundle) {
+            continue;
+        }
+        let in_group = group
+            .members
+            .iter()
+            .filter(|m| renewed.contains(m.bundle.as_str()))
+            .count();
+        let any_attempted = group
+            .members
+            .iter()
+            .any(|m| attempted.contains(m.bundle.as_str()) || missing.contains(m.bundle.as_str()));
+        if in_group == 0 && !any_attempted && selected.is_none() {
+            continue;
+        }
+        let status = if in_group == group.members.len() {
+            "success"
+        } else if in_group > 0 {
+            "partial"
+        } else {
+            "failed"
+        };
+        updates.insert(
+            group.bundle,
+            json!({"status":status,"at":at,"renewed":in_group,
+            "total":group.members.len()}),
+        );
     }
     updates
 }
 
 fn save_app_renew_status(app: &App, lines: &[String], selected: Option<&str>) {
     let groups = app.lock().snapshot.apps.clone();
-    let mut existing = std::fs::read_to_string(APP_STATUS_FILE).ok()
+    let mut existing = std::fs::read_to_string(APP_STATUS_FILE)
+        .ok()
         .and_then(|s| serde_json::from_str::<serde_json::Map<String, Value>>(&s).ok())
         .unwrap_or_default();
     existing.extend(app_renew_updates(groups, lines, selected, now()));
@@ -1521,10 +2065,15 @@ async fn run_remove_profile(app: Arc<App>, uuid: String) {
             .ok_or("Sign in to select a team before removing profiles.")?;
         let (_, mut link) = phone::connect_auto(app.phone, PAIRING_FILE, |_: &str| {}).await?;
         let p = crate::remove_profile_with_backup(&mut link, &uuid, Some(&team)).await?;
-        app.push_line(&format!("Removed profile for {} [{}]. Backup saved in {}.",
-            p.bundle_id.as_deref().unwrap_or("?"), p.uuid, crate::SAVED_DIR));
+        app.push_line(&format!(
+            "Removed profile for {} [{}]. Backup saved in {}.",
+            p.bundle_id.as_deref().unwrap_or("?"),
+            p.uuid,
+            crate::SAVED_DIR
+        ));
         Ok(())
-    }.await;
+    }
+    .await;
     let ok = result.is_ok();
     if let Err(e) = result {
         app.push_line(&format!("Error: {}", short_error(&e)));
@@ -1538,10 +2087,18 @@ async fn run_remove_profile(app: Arc<App>, uuid: String) {
 }
 
 async fn run_install(
-    app: Arc<App>, upload: UploadedIpa,
-    selected_extensions: Option<Vec<String>>, identity: Option<NewInstallIdentity>,
+    app: Arc<App>,
+    upload: UploadedIpa,
+    selected_extensions: Option<Vec<String>>,
+    identity: Option<NewInstallIdentity>,
 ) {
-    let result = install_ipa(&app, &upload, selected_extensions.as_deref(), identity.as_ref()).await;
+    let result = install_ipa(
+        &app,
+        &upload,
+        selected_extensions.as_deref(),
+        identity.as_ref(),
+    )
+    .await;
     let ok = result.is_ok();
     if let Err(e) = result {
         app.push_line(&format!("Error: {}", short_error(&e)));
@@ -1558,12 +2115,18 @@ async fn run_install(
 
 /// Fail closed when a customized install could overwrite an existing app:
 /// iPhones can report either the original ID or the Apple-team-suffixed ID.
-fn install_identity_taken(installed: &std::collections::HashSet<String>, raw_id: &str, signed_id: &str) -> bool {
+fn install_identity_taken(
+    installed: &std::collections::HashSet<String>,
+    raw_id: &str,
+    signed_id: &str,
+) -> bool {
     installed.contains(raw_id) || installed.contains(signed_id)
 }
 
 async fn install_ipa(
-    app: &Arc<App>, upload: &UploadedIpa, selected_extensions: Option<&[String]>,
+    app: &Arc<App>,
+    upload: &UploadedIpa,
+    selected_extensions: Option<&[String]>,
     identity: Option<&NewInstallIdentity>,
 ) -> Result<(), String> {
     let account = apple::load_account(Path::new("."))?;
@@ -1576,7 +2139,11 @@ async fn install_ipa(
     .await?;
     let team = apple::pick_team(&mut session, account.team_id.as_deref(), false).await?;
     let expected_ids = identity.map(|id| {
-        let raw = id.bundle_id.as_deref().unwrap_or(&id.source_bundle_id).to_string();
+        let raw = id
+            .bundle_id
+            .as_deref()
+            .unwrap_or(&id.source_bundle_id)
+            .to_string();
         let signed = format!("{raw}.{}", team.team_id);
         (raw, signed)
     });
@@ -1588,8 +2155,12 @@ async fn install_ipa(
 
         let (_, mut link) = phone::connect_auto(app.phone, PAIRING_FILE, |_: &str| {}).await?;
         if let Some((raw, signed)) = expected_ids.as_ref() {
-            let installed = phone::with_timeout("Installed app lookup", std::time::Duration::from_secs(20),
-                link.installed_app_ids()).await?;
+            let installed = phone::with_timeout(
+                "Installed app lookup",
+                std::time::Duration::from_secs(20),
+                link.installed_app_ids(),
+            )
+            .await?;
             if install_identity_taken(&installed, raw, signed) {
                 return Err(format!("Cannot customize an installed app ({signed}). Choose a different Bundle ID for a separate new install."));
             }
@@ -1618,10 +2189,16 @@ async fn install_ipa(
     // Check once more immediately before installation to avoid replacing an app
     // that appeared while the IPA was signing.
     if let Some((raw, signed)) = expected_ids.as_ref() {
-        let installed = phone::with_timeout("Installed app lookup", std::time::Duration::from_secs(20),
-            link.installed_app_ids()).await?;
+        let installed = phone::with_timeout(
+            "Installed app lookup",
+            std::time::Duration::from_secs(20),
+            link.installed_app_ids(),
+        )
+        .await?;
         if install_identity_taken(&installed, raw, signed) {
-            return Err(format!("Custom install would replace an existing app ({signed}); blocked."));
+            return Err(format!(
+                "Custom install would replace an existing app ({signed}); blocked."
+            ));
         }
     }
     app.push_line(&if via == phone::Via::Usb {
@@ -1668,7 +2245,11 @@ async fn run_login(app: Arc<App>, apple_id: String, password: String, save: bool
             dir,
             &apple::Account {
                 apple_id: apple_id.clone(),
-                password: if save { password.clone() } else { String::new() },
+                password: if save {
+                    password.clone()
+                } else {
+                    String::new()
+                },
                 team_id: Some(team.team_id.clone()),
             },
         )?;
@@ -1689,7 +2270,10 @@ async fn run_login(app: Arc<App>, apple_id: String, password: String, save: bool
                 )
             },
         },
-        Err(e) => LoginView { phase: "failed", message: short_apple_error(&e) },
+        Err(e) => LoginView {
+            phase: "failed",
+            message: short_apple_error(&e),
+        },
     };
     // I dati del telefono possono cambiare in base al team: il prossimo controllo li rifà.
     g.snapshot.checked_at = None;
@@ -1715,13 +2299,20 @@ fn level_for(days: i64) -> &'static str {
 
 /// Display one host app with all its latest extension profiles nested below.
 fn app_views(profiles: &[profile::PhoneProfile], team: &str) -> Vec<AppView> {
-    let mine = profiles.iter().filter(|p| p.team_id.as_deref() == Some(team));
+    let mine = profiles
+        .iter()
+        .filter(|p| p.team_id.as_deref() == Some(team));
     let latest = profile::latest_by_bundle(mine);
-    let bundles: Vec<&str> = latest.iter().filter_map(|p| p.bundle_id.as_deref()).collect();
+    let bundles: Vec<&str> = latest
+        .iter()
+        .filter_map(|p| p.bundle_id.as_deref())
+        .collect();
     let mut groups: std::collections::BTreeMap<String, Vec<MemberView>> =
         std::collections::BTreeMap::new();
     for p in &latest {
-        let Some(bundle) = p.bundle_id.as_deref() else { continue; };
+        let Some(bundle) = p.bundle_id.as_deref() else {
+            continue;
+        };
         let root = profile::group_root(bundle, &bundles, team).to_owned();
         groups.entry(root).or_default().push(MemberView {
             bundle: bundle.to_owned(),
@@ -1732,7 +2323,7 @@ fn app_views(profiles: &[profile::PhoneProfile], team: &str) -> Vec<AppView> {
     }
     let mut views = Vec::new();
     for (bundle, mut members) in groups {
-        members.sort_by(|a,b| a.bundle.cmp(&b.bundle));
+        members.sort_by(|a, b| a.bundle.cmp(&b.bundle));
         let earliest = members.iter().min_by_key(|m| m.days).unwrap();
         views.push(AppView {
             label: label_of(&bundle, team),
@@ -1743,16 +2334,18 @@ fn app_views(profiles: &[profile::PhoneProfile], team: &str) -> Vec<AppView> {
             members,
         });
     }
-    views.sort_by(|a,b| a.days.cmp(&b.days).then_with(|| a.label.cmp(&b.label)));
+    views.sort_by(|a, b| a.days.cmp(&b.days).then_with(|| a.label.cmp(&b.label)));
     views
 }
 
 fn profile_views(profiles: &[profile::PhoneProfile], team: &str) -> Vec<ProfileView> {
-    let bundles: Vec<&str> = profiles.iter()
+    let bundles: Vec<&str> = profiles
+        .iter()
         .filter(|p| p.team_id.as_deref() == Some(team))
         .filter_map(|p| p.bundle_id.as_deref())
         .collect();
-    let mut views: Vec<_> = profiles.iter()
+    let mut views: Vec<_> = profiles
+        .iter()
         .filter(|p| p.team_id.as_deref() == Some(team))
         .filter_map(|p| {
             let bundle = p.bundle_id.clone()?;
@@ -1767,8 +2360,12 @@ fn profile_views(profiles: &[profile::PhoneProfile], team: &str) -> Vec<ProfileV
             })
         })
         .collect();
-    views.sort_by(|a,b| a.root.cmp(&b.root).then_with(|| a.label.cmp(&b.label))
-        .then_with(|| b.expires.cmp(&a.expires)));
+    views.sort_by(|a, b| {
+        a.root
+            .cmp(&b.root)
+            .then_with(|| a.label.cmp(&b.label))
+            .then_with(|| b.expires.cmp(&a.expires))
+    });
     views
 }
 
@@ -1776,8 +2373,7 @@ fn profile_views(profiles: &[profile::PhoneProfile], team: &str) -> Vec<ProfileV
 fn friendly_error(err: &str) -> String {
     let e = err.to_lowercase();
     if e.contains("manca il pairing") {
-        "iPhone pairing is missing. Set it up once over USB (see the guide)."
-            .into()
+        "iPhone pairing is missing. Set it up once over USB (see the guide).".into()
     } else if e.contains("early eof") || e.contains("pairing con l'iphone non riuscito") {
         "The iPhone no longer recognizes the pairing: set it up again over USB.".into()
     } else if e.contains("no route to host")
@@ -1797,11 +2393,15 @@ fn short_error(err: &str) -> String {
     // Signing reports can start with an empty heading and put the actual
     // certificate/IPA/App ID cause below it. Do not discard those lines.
     let trimmed = err.trim_start();
-    if let Some(detail) = trimmed.strip_prefix("firma dell'app non riuscita:")
+    if let Some(detail) = trimmed
+        .strip_prefix("firma dell'app non riuscita:")
         .or_else(|| trimmed.strip_prefix("App signing failed:"))
     {
         let detail = detail.split_whitespace().collect::<Vec<_>>().join(" ");
-        return format!("App signing failed: {detail}").chars().take(1200).collect();
+        return format!("App signing failed: {detail}")
+            .chars()
+            .take(1200)
+            .collect();
     }
     let one_line = err
         .lines()
@@ -1881,7 +2481,10 @@ fn english_job_line(line: &str) -> String {
         .strip_prefix("USB non riuscita (")
         .and_then(|s| s.strip_suffix("), provo in Wi-Fi..."))
     {
-        return format!("USB connection failed ({}); trying Wi-Fi...", short_error(detail));
+        return format!(
+            "USB connection failed ({}); trying Wi-Fi...",
+            short_error(detail)
+        );
     }
     if let Some(date) = line.strip_prefix("      nuovo profilo valido fino al ") {
         return format!("      New profile valid until {date}");
@@ -1897,8 +2500,7 @@ fn short_apple_error(err: &str) -> String {
         return "Incorrect Apple ID or password.".into();
     }
     if e.contains("429") || e.contains("too many requests") {
-        return "Apple is rate-limiting requests. Wait a while, then try once."
-            .into();
+        return "Apple is rate-limiting requests. Wait a while, then try once.".into();
     }
     if e.contains("aborted") || e.contains("abort") {
         return "Sign-in canceled: the code did not arrive in time.".into();
@@ -1908,7 +2510,10 @@ fn short_apple_error(err: &str) -> String {
         .filter(|l| l.contains('●'))
         .last()
         .map(|l| l.trim().trim_start_matches('●').trim().to_string());
-    last.unwrap_or_else(|| short_error(err)).chars().take(240).collect()
+    last.unwrap_or_else(|| short_error(err))
+        .chars()
+        .take(240)
+        .collect()
 }
 
 /// Ultimi giri di `renew.log`, dal più recente. Legge sia le righe del cron sia quelle scritte
@@ -1930,7 +2535,10 @@ fn parse_history(text: &str, max: usize) -> Vec<Value> {
             let code = lines
                 .iter()
                 .rev()
-                .find_map(|l| l.strip_prefix("esito:").or_else(|| l.strip_prefix("result:")))
+                .find_map(|l| {
+                    l.strip_prefix("esito:")
+                        .or_else(|| l.strip_prefix("result:"))
+                })
                 .and_then(|c| c.trim().parse::<i32>().ok());
             let installed = lines
                 .iter()
@@ -1950,15 +2558,12 @@ fn parse_history(text: &str, max: usize) -> Vec<Value> {
                 friendly_error(last)
             } else if installed > 0 {
                 format!("Renewed {installed} apps")
-            } else if lines
-                .iter()
-                .any(|l| {
-                    l.contains("Niente da rinnovare")
-                        || l.contains("non serve rinnovare")
-                        || l.contains("Nothing to renew")
-                        || l.contains("no renewal needed")
-                })
-            {
+            } else if lines.iter().any(|l| {
+                l.contains("Niente da rinnovare")
+                    || l.contains("non serve rinnovare")
+                    || l.contains("Nothing to renew")
+                    || l.contains("no renewal needed")
+            }) {
                 "Nothing to renew".to_string()
             } else {
                 "Done".to_string()
@@ -1997,7 +2602,11 @@ fn local_time() -> String {
 }
 
 fn append_log(lines: &[String], ok: bool) {
-    let Ok(mut f) = std::fs::OpenOptions::new().create(true).append(true).open(RENEW_LOG) else {
+    let Ok(mut f) = std::fs::OpenOptions::new()
+        .create(true)
+        .append(true)
+        .open(RENEW_LOG)
+    else {
         return;
     };
     let _ = writeln!(f, "=== {} (interfaccia web)", local_time());
@@ -2037,6 +2646,49 @@ mod tests {
         assert!(mine(&v).is_empty());
     }
 
+    #[tokio::test(start_paused = true)]
+    async fn waiting_renewal_is_visible_and_cancelable_from_state_api() {
+        let app = Arc::new(App {
+            pin: None,
+            phone: None,
+            busy: AtomicBool::new(true),
+            inner: Mutex::new(Inner::default()),
+            tfa: Arc::new(apple::TfaChannel::default()),
+            auto_renew: Mutex::new(AutoRenewConfig::default()),
+            pending_ipa: Mutex::new(None),
+            renewal_wait: crate::renewal_wait::Control::default(),
+        });
+        {
+            let mut g = app.lock();
+            g.job.kind = "renew_one".into();
+            g.job.running = true;
+        }
+        let waiting = crate::renewal_wait::await_install(
+            || std::future::pending::<Result<(), crate::renewal_wait::AttemptError>>(),
+            || std::future::pending::<crate::renewal_wait::Probe>(),
+            &app.renewal_wait,
+            crate::renewal_wait::Policy {
+                grace: Duration::ZERO,
+                poll: Duration::from_secs(15),
+                max_wait: Duration::from_secs(3600),
+            },
+            |_| {},
+        );
+        let cancel_from_ui = async {
+            tokio::time::sleep(Duration::from_secs(1)).await;
+            let Json(snapshot) = state(State(app.clone())).await;
+            assert_eq!(snapshot["job"]["waiting_for_phone"], true);
+            assert_eq!(snapshot["job"]["cancel_requested"], false);
+            assert_eq!(
+                cancel_renew_wait(State(app.clone())).await.0,
+                StatusCode::OK
+            );
+        };
+        let (result, ()) = tokio::join!(waiting, cancel_from_ui);
+        assert_eq!(result, Err(crate::renewal_wait::CANCELLED.into()));
+        assert!(!app.renewal_wait.is_waiting());
+    }
+
     #[test]
     fn signing_error_keeps_cause_after_an_empty_first_line() {
         let cause = "Failed to retrieve certificate identity: test cause";
@@ -2044,26 +2696,37 @@ mod tests {
             let error = short_error(&format!("{prefix} \r\n    {cause}\n"));
             assert_eq!(error, format!("App signing failed: {cause}"));
         }
-        assert_eq!(short_error(&format!("App signing failed:\n{}", "x".repeat(2000))).chars().count(), 1200);
+        assert_eq!(
+            short_error(&format!("App signing failed:\n{}", "x".repeat(2000)))
+                .chars()
+                .count(),
+            1200
+        );
     }
 
     #[test]
     fn state_does_not_hold_ui_lock_while_waiting_for_schedule() {
         let app = Arc::new(App {
-            pin: None, phone: None, busy: AtomicBool::new(true),
+            pin: None,
+            phone: None,
+            busy: AtomicBool::new(true),
             inner: Mutex::new(Inner::default()),
             tfa: Arc::new(apple::TfaChannel::default()),
             auto_renew: Mutex::new(AutoRenewConfig::default()),
             pending_ipa: Mutex::new(None),
+            renewal_wait: crate::renewal_wait::Control::default(),
         });
         let schedule = app.auto_renew.lock().unwrap();
         let (started_tx, started_rx) = std::sync::mpsc::channel();
         let (done_tx, done_rx) = std::sync::mpsc::channel();
         let reader = app.clone();
         std::thread::spawn(move || {
-            let rt = tokio::runtime::Builder::new_current_thread().enable_all().build().unwrap();
+            let rt = tokio::runtime::Builder::new_current_thread()
+                .enable_all()
+                .build()
+                .unwrap();
             started_tx.send(()).unwrap();
-            rt.block_on(state(State(reader)));
+            let _ = rt.block_on(state(State(reader)));
             let _ = done_tx.send(());
         });
         started_rx.recv_timeout(Duration::from_secs(5)).unwrap();
@@ -2088,7 +2751,10 @@ mod tests {
         // Release before asserting so even the old behavior cannot hang CI.
         drop(schedule);
         done_rx.recv_timeout(Duration::from_secs(5)).unwrap();
-        assert!(!sustained_block, "state held the UI mutex while waiting for the schedule");
+        assert!(
+            !sustained_block,
+            "state held the UI mutex while waiting for the schedule"
+        );
     }
 
     #[test]
@@ -2120,29 +2786,57 @@ mod tests {
 
     #[test]
     fn custom_identity_accepts_independent_name_or_bundle_and_rejects_invalid_ids() {
-        assert!(validated_install_identity(None, None, "com.example.app").unwrap().is_none());
-        let renamed = validated_install_identity(Some(" New name ".into()), None, "com.example.app")
-            .unwrap().unwrap();
+        assert!(validated_install_identity(None, None, "com.example.app")
+            .unwrap()
+            .is_none());
+        let renamed =
+            validated_install_identity(Some(" New name ".into()), None, "com.example.app")
+                .unwrap()
+                .unwrap();
         assert_eq!(renamed.display_name.as_deref(), Some("New name"));
         assert!(renamed.bundle_id.is_none());
-        let cloned = validated_install_identity(None, Some("com.example.clone".into()), "com.example.app")
-            .unwrap().unwrap();
+        let cloned =
+            validated_install_identity(None, Some("com.example.clone".into()), "com.example.app")
+                .unwrap()
+                .unwrap();
         assert_eq!(cloned.bundle_id.as_deref(), Some("com.example.clone"));
         assert!(cloned.display_name.is_none());
-        assert!(validated_install_identity(None, Some("no_spaces allowed".into()), "com.example.app").is_err());
-        assert!(validated_install_identity(None, Some("com.example.app".into()), "com.example.app").is_err());
+        assert!(validated_install_identity(
+            None,
+            Some("no_spaces allowed".into()),
+            "com.example.app"
+        )
+        .is_err());
+        assert!(validated_install_identity(
+            None,
+            Some("com.example.app".into()),
+            "com.example.app"
+        )
+        .is_err());
         assert!(validated_install_identity(Some("x".repeat(41)), None, "com.example.app").is_err());
     }
 
     #[test]
     fn custom_install_never_overwrites_installed_raw_or_team_suffixed_ids() {
         let mut installed = std::collections::HashSet::new();
-        assert!(!install_identity_taken(&installed, "com.example.app", "com.example.app.TEAM"));
+        assert!(!install_identity_taken(
+            &installed,
+            "com.example.app",
+            "com.example.app.TEAM"
+        ));
         installed.insert("com.example.app".to_string());
-        assert!(install_identity_taken(&installed, "com.example.app", "com.example.app.TEAM"));
+        assert!(install_identity_taken(
+            &installed,
+            "com.example.app",
+            "com.example.app.TEAM"
+        ));
         installed.clear();
         installed.insert("com.example.app.TEAM".to_string());
-        assert!(install_identity_taken(&installed, "com.example.app", "com.example.app.TEAM"));
+        assert!(install_identity_taken(
+            &installed,
+            "com.example.app",
+            "com.example.app.TEAM"
+        ));
     }
 
     #[test]
@@ -2154,12 +2848,21 @@ mod tests {
         // Day 20 in UTC: scheduled for 06:00, 05:00 currently.
         let day = 20_u64;
         let now_secs = day * DAY_SECS + 5 * 3600;
-        let mut conf = AutoRenewConfig { enabled: true, time: "06:00".into(), last_attempt_day: None, ..AutoRenewConfig::default() };
-        assert_eq!(next_auto_run(&conf, now_secs),
-            Some(day * DAY_SECS + 6 * 3600));
+        let mut conf = AutoRenewConfig {
+            enabled: true,
+            time: "06:00".into(),
+            last_attempt_day: None,
+            ..AutoRenewConfig::default()
+        };
+        assert_eq!(
+            next_auto_run(&conf, now_secs),
+            Some(day * DAY_SECS + 6 * 3600)
+        );
         conf.last_attempt_day = Some(day);
-        assert_eq!(next_auto_run(&conf, now_secs),
-            Some((day + 1) * DAY_SECS + 6 * 3600));
+        assert_eq!(
+            next_auto_run(&conf, now_secs),
+            Some((day + 1) * DAY_SECS + 6 * 3600)
+        );
         conf.enabled = false;
         assert_eq!(next_auto_run(&conf, now_secs), None);
     }
@@ -2222,7 +2925,10 @@ mod tests {
         assert!(basic_password_ok(&vuoto, "1234"));
         assert!(!basic_password_ok(&ok, "9999"));
         assert!(!basic_password_ok(&headers(&[]), "1234"));
-        assert!(!basic_password_ok(&headers(&[("authorization", "Bearer 1234")]), "1234"));
+        assert!(!basic_password_ok(
+            &headers(&[("authorization", "Bearer 1234")]),
+            "1234"
+        ));
         // una password con i due punti dentro: vale tutto dopo il primo
         let due_punti = headers(&[("authorization", "Basic dTphOmI=")]); // u:a:b
         assert!(basic_password_ok(&due_punti, "a:b"));
@@ -2240,27 +2946,41 @@ mod tests {
 
     #[test]
     fn new_install_identity_validation_keeps_name_and_id_independent() {
-        assert!(validated_install_identity(None, None, "com.example.app").unwrap().is_none());
-        let renamed = validated_install_identity(Some("Cloned app".into()), None, "com.example.app")
-            .unwrap().unwrap();
+        assert!(validated_install_identity(None, None, "com.example.app")
+            .unwrap()
+            .is_none());
+        let renamed =
+            validated_install_identity(Some("Cloned app".into()), None, "com.example.app")
+                .unwrap()
+                .unwrap();
         assert_eq!(renamed.display_name.as_deref(), Some("Cloned app"));
         assert!(renamed.bundle_id.is_none());
         assert_eq!(renamed.source_bundle_id, "com.example.app");
-        let cloned = validated_install_identity(None, Some("com.example.clone".into()),
-            "com.example.app").unwrap().unwrap();
+        let cloned =
+            validated_install_identity(None, Some("com.example.clone".into()), "com.example.app")
+                .unwrap()
+                .unwrap();
         assert!(cloned.display_name.is_none());
         assert_eq!(cloned.bundle_id.as_deref(), Some("com.example.clone"));
-        assert!(validated_install_identity(None, Some("com.example.app".into()),
-            "com.example.app").is_err());
-        assert!(validated_install_identity(None, Some("bad bundle id".into()),
-            "com.example.app").is_err());
-        assert!(validated_install_identity(Some("x".repeat(41)), None,
-            "com.example.app").is_err());
+        assert!(validated_install_identity(
+            None,
+            Some("com.example.app".into()),
+            "com.example.app"
+        )
+        .is_err());
+        assert!(
+            validated_install_identity(None, Some("bad bundle id".into()), "com.example.app")
+                .is_err()
+        );
+        assert!(validated_install_identity(Some("x".repeat(41)), None, "com.example.app").is_err());
     }
 
     #[test]
     fn etichette_e_livelli() {
-        assert_eq!(label_of("com.spotify.client.TEAM", "TEAM"), "com.spotify.client");
+        assert_eq!(
+            label_of("com.spotify.client.TEAM", "TEAM"),
+            "com.spotify.client"
+        );
         assert_eq!(label_of("com.altro", "TEAM"), "com.altro");
         assert_eq!(level_for(-1), "urgent");
         assert_eq!(level_for(1), "urgent");
@@ -2307,11 +3027,20 @@ mod tests {
         ];
         let apps = app_views(&p, "TEAM");
         assert_eq!(apps.len(), 2);
-        let live = apps.iter().find(|a| a.bundle == "com.kdt.livecontainer").unwrap();
+        let live = apps
+            .iter()
+            .find(|a| a.bundle == "com.kdt.livecontainer")
+            .unwrap();
         assert_eq!(live.members.len(), 3);
         assert_eq!(live.days, 1);
         let profiles = profile_views(&p, "TEAM");
-        assert!(profiles.iter().filter(|p| p.root == "com.kdt.livecontainer").count() == 3);
+        assert!(
+            profiles
+                .iter()
+                .filter(|p| p.root == "com.kdt.livecontainer")
+                .count()
+                == 3
+        );
     }
 
     #[test]
@@ -2319,18 +3048,39 @@ mod tests {
         let team = "SAVEDTEAM1";
         let all = vec![
             profile("a", team, "com.google.ios.youtube", 6),
-            profile("b", team, "com.google.ios.youtube.PXUL22799Q.OpenYouTube.Extension", 5),
+            profile(
+                "b",
+                team,
+                "com.google.ios.youtube.PXUL22799Q.OpenYouTube.Extension",
+                5,
+            ),
             profile("c", team, "com.kdt.livecontainer", 6),
-            profile("d", team, "com.kdt.livecontainer.PXUL22799Q.LaunchAppExtension", 6),
+            profile(
+                "d",
+                team,
+                "com.kdt.livecontainer.PXUL22799Q.LaunchAppExtension",
+                6,
+            ),
             profile("e", team, "com.kdt.livecontainer.PXUL22799Q.LiveProcess", 2),
-            profile("f", team, "com.kdt.livecontainer.PXUL22799Q.ShareExtension", 6),
+            profile(
+                "f",
+                team,
+                "com.kdt.livecontainer.PXUL22799Q.ShareExtension",
+                6,
+            ),
         ];
         let apps = app_views(&all, team);
         assert_eq!(apps.len(), 2);
-        let youtube = apps.iter().find(|a| a.bundle == "com.google.ios.youtube").unwrap();
+        let youtube = apps
+            .iter()
+            .find(|a| a.bundle == "com.google.ios.youtube")
+            .unwrap();
         assert_eq!(youtube.members.len(), 2);
         assert_eq!(youtube.days, 5);
-        let live = apps.iter().find(|a| a.bundle == "com.kdt.livecontainer").unwrap();
+        let live = apps
+            .iter()
+            .find(|a| a.bundle == "com.kdt.livecontainer")
+            .unwrap();
         assert_eq!(live.members.len(), 4);
         assert_eq!(live.days, 2);
         let views = profile_views(&all, team);
@@ -2346,18 +3096,44 @@ mod tests {
         let team = "PXUL22799Q";
         let all = vec![
             profile("a", team, "com.google.ios.youtube.PXUL22799Q", 6),
-            profile("b", team, "com.google.ios.youtube.PXUL22799Q.OpenYouTube.Extension.PXUL22799Q", 6),
+            profile(
+                "b",
+                team,
+                "com.google.ios.youtube.PXUL22799Q.OpenYouTube.Extension.PXUL22799Q",
+                6,
+            ),
             profile("c", team, "com.kdt.livecontainer.PXUL22799Q", 6),
-            profile("d", team, "com.kdt.livecontainer.PXUL22799Q.LaunchAppExtension.PXUL22799Q", 6),
-            profile("e", team, "com.kdt.livecontainer.PXUL22799Q.LiveProcess.PXUL22799Q", 6),
-            profile("f", team, "com.kdt.livecontainer.PXUL22799Q.ShareExtension.PXUL22799Q", 6),
+            profile(
+                "d",
+                team,
+                "com.kdt.livecontainer.PXUL22799Q.LaunchAppExtension.PXUL22799Q",
+                6,
+            ),
+            profile(
+                "e",
+                team,
+                "com.kdt.livecontainer.PXUL22799Q.LiveProcess.PXUL22799Q",
+                6,
+            ),
+            profile(
+                "f",
+                team,
+                "com.kdt.livecontainer.PXUL22799Q.ShareExtension.PXUL22799Q",
+                6,
+            ),
         ];
         let apps = app_views(&all, team);
         assert_eq!(apps.len(), 2, "UI must show two apps, not six profiles");
-        let youtube = apps.iter().find(|a| a.label == "com.google.ios.youtube").unwrap();
+        let youtube = apps
+            .iter()
+            .find(|a| a.label == "com.google.ios.youtube")
+            .unwrap();
         assert_eq!(youtube.members.len(), 2);
         assert_eq!(youtube.bundle, "com.google.ios.youtube.PXUL22799Q");
-        let live = apps.iter().find(|a| a.label == "com.kdt.livecontainer").unwrap();
+        let live = apps
+            .iter()
+            .find(|a| a.label == "com.kdt.livecontainer")
+            .unwrap();
         assert_eq!(live.members.len(), 4);
         assert_eq!(live.bundle, "com.kdt.livecontainer.PXUL22799Q");
         let views = profile_views(&all, team);
@@ -2367,11 +3143,17 @@ mod tests {
 
     #[test]
     fn errori_in_parole_semplici() {
-        assert!(friendly_error("manca il pairing remoto rp-pairing.plist: crealo").contains("missing"));
-        assert!(friendly_error("pairing con l'iPhone non riuscito (Socket(... early eof ...))")
-            .contains("no longer recognizes"));
-        assert!(friendly_error("Os { code: 113, kind: HostUnreachable, message: \"No route to host\" }")
-            .contains("cannot find the iPhone"));
+        assert!(
+            friendly_error("manca il pairing remoto rp-pairing.plist: crealo").contains("missing")
+        );
+        assert!(
+            friendly_error("pairing con l'iPhone non riuscito (Socket(... early eof ...))")
+                .contains("no longer recognizes")
+        );
+        assert!(friendly_error(
+            "Os { code: 113, kind: HostUnreachable, message: \"No route to host\" }"
+        )
+        .contains("cannot find the iPhone"));
         assert!(friendly_error("non trovo l'iPhone in rete: è acceso").contains("cannot find"));
         assert_eq!(friendly_error("boh"), "boh");
     }
@@ -2402,8 +3184,10 @@ mod tests {
         let lungo = "login Apple ID non riuscito: \n ● Failed to log in\n ● GrandSlam error\n \
                      ● Auth error -20101: Your account information was entered incorrectly.";
         assert_eq!(short_apple_error(lungo), "Incorrect Apple ID or password.");
-        assert!(short_apple_error("HTTP status client error (429 Too Many Requests)")
-            .contains("rate-limiting"));
+        assert!(
+            short_apple_error("HTTP status client error (429 Too Many Requests)")
+                .contains("rate-limiting")
+        );
         assert_eq!(
             short_apple_error("x\n ● uno\n ● due cose non previste"),
             "due cose non previste"
@@ -2436,11 +3220,13 @@ esito: 0
         assert_eq!(h[0]["ok"], true);
         assert!(h[0]["when"].as_str().unwrap().contains("interfaccia web"));
         assert_eq!(h[1]["ok"], false);
-        assert!(h[1]["summary"].as_str().unwrap().contains("cannot find the iPhone"));
+        assert!(h[1]["summary"]
+            .as_str()
+            .unwrap()
+            .contains("cannot find the iPhone"));
         assert_eq!(h[2]["summary"], "Nothing to renew");
         assert_eq!(parse_history(log, 1).len(), 1);
         assert!(parse_history("", 5).is_empty());
         assert!(parse_history("righe senza intestazione\n", 5).is_empty());
     }
 }
-

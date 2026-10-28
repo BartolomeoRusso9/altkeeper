@@ -26,12 +26,12 @@ use std::rc::Rc;
 use std::sync::Mutex;
 use std::time::Duration;
 
-use serde_json::{Value, json};
+use serde_json::{json, Value};
 use tokio::io::{AsyncRead, AsyncReadExt, AsyncWrite, AsyncWriteExt};
-use tokio::net::TcpStream;
 use tokio::net::tcp::OwnedWriteHalf;
+use tokio::net::TcpStream;
 
-use crate::{PAIRING_FILE, apple, phone, profile};
+use crate::{apple, phone, profile, PAIRING_FILE};
 
 const SERVICE_TYPE: &str = "_altserver._tcp.local.";
 const MAX_JSON: usize = 4 * 1024 * 1024;
@@ -58,6 +58,10 @@ static WORK: Mutex<()> = Mutex::new(());
 pub(crate) fn phone_lock() -> std::sync::MutexGuard<'static, ()> {
     WORK.lock().unwrap_or_else(|e| e.into_inner())
 }
+
+pub(crate) fn try_phone_lock() -> Option<std::sync::MutexGuard<'static, ()>> {
+    WORK.try_lock().ok()
+}
 /// Nome completo del servizio annunciato, per toglierlo alla chiusura.
 static SERVICE_FULLNAME: std::sync::OnceLock<String> = std::sync::OnceLock::new();
 
@@ -77,31 +81,48 @@ fn log(msg: &str) {
 /// Si mette in ascolto sulla porta indicata (0 = una a caso), annuncia il servizio e torna:
 /// le connessioni le gestiscono thread propri. Restituisce la porta.
 pub fn start(port: u16, phone: Option<SocketAddr>) -> Result<u16, String> {
-    let listener = TcpListener::bind(("0.0.0.0", port))
-        .map_err(|e| crate::tr!(format!("AltServer: non riesco ad ascoltare sulla porta {port}: {e}"), format!("AltServer: cannot listen on port {port}: {e}")))?;
+    phone::start_auto_pair_monitor();
+    let listener = TcpListener::bind(("0.0.0.0", port)).map_err(|e| {
+        crate::tr!(
+            format!("AltServer: non riesco ad ascoltare sulla porta {port}: {e}"),
+            format!("AltServer: cannot listen on port {port}: {e}")
+        )
+    })?;
     let port = listener.local_addr().map_err(|e| e.to_string())?.port();
     let id = server_id()?;
     register_bonjour(port, &id)?;
-    log(&crate::tr!(format!("in ascolto sulla porta {port}, serverID {}...", &id[..8]), format!("listening on port {port}, serverID {}...", &id[..8])));
+    log(&crate::tr!(
+        format!("in ascolto sulla porta {port}, serverID {}...", &id[..8]),
+        format!("listening on port {port}, serverID {}...", &id[..8])
+    ));
 
     std::thread::spawn(move || {
         for stream in listener.incoming() {
             let Ok(stream) = stream else { continue };
             let ctx = Ctx { phone };
-            let _ = std::thread::Builder::new().stack_size(16 * 1024 * 1024).spawn(move || {
-                let peer = stream.peer_addr().map(|a| a.to_string()).unwrap_or_default();
-                let Ok(rt) = tokio::runtime::Builder::new_current_thread().enable_all().build()
-                else {
-                    return;
-                };
-                rt.block_on(async move {
-                    if stream.set_nonblocking(true).is_err() {
+            let _ = std::thread::Builder::new()
+                .stack_size(16 * 1024 * 1024)
+                .spawn(move || {
+                    let peer = stream
+                        .peer_addr()
+                        .map(|a| a.to_string())
+                        .unwrap_or_default();
+                    let Ok(rt) = tokio::runtime::Builder::new_current_thread()
+                        .enable_all()
+                        .build()
+                    else {
                         return;
-                    }
-                    let Ok(stream) = TcpStream::from_std(stream) else { return };
-                    handle_connection(stream, ctx, &peer).await;
+                    };
+                    rt.block_on(async move {
+                        if stream.set_nonblocking(true).is_err() {
+                            return;
+                        }
+                        let Ok(stream) = TcpStream::from_std(stream) else {
+                            return;
+                        };
+                        handle_connection(stream, ctx, &peer).await;
+                    });
                 });
-            });
         }
     });
     Ok(port)
@@ -122,10 +143,21 @@ fn server_id() -> Result<String, String> {
     rustls::crypto::ring::default_provider()
         .secure_random
         .fill(&mut bytes)
-        .map_err(|_| crate::tr!("non riesco a generare il serverID: numeri casuali non disponibili", "cannot generate serverID: secure randomness unavailable").to_string())?;
+        .map_err(|_| {
+            crate::tr!(
+                "non riesco a generare il serverID: numeri casuali non disponibili",
+                "cannot generate serverID: secure randomness unavailable"
+            )
+            .to_string()
+        })?;
     let id: String = bytes.iter().map(|b| format!("{b:02x}")).collect();
     let _ = std::fs::create_dir_all("state");
-    std::fs::write(&path, &id).map_err(|e| crate::tr!(format!("non riesco a salvare il serverID: {e}"), format!("cannot save serverID: {e}")))?;
+    std::fs::write(&path, &id).map_err(|e| {
+        crate::tr!(
+            format!("non riesco a salvare il serverID: {e}"),
+            format!("cannot save serverID: {e}")
+        )
+    })?;
     Ok(id)
 }
 
@@ -154,7 +186,8 @@ pub fn id() -> Result<String, String> {
 }
 
 fn register_bonjour(port: u16, id: &str) -> Result<(), String> {
-    let daemon = phone::mdns().ok_or(crate::tr!("Bonjour non disponibile", "Bonjour unavailable"))?;
+    let daemon =
+        phone::mdns().ok_or(crate::tr!("Bonjour non disponibile", "Bonjour unavailable"))?;
     let host = hostname();
     let props = [("serverID", id)];
     let info = mdns_sd::ServiceInfo::new(
@@ -180,7 +213,10 @@ pub fn stop() {
         if let Ok(done) = daemon.unregister(name) {
             let _ = done.recv_timeout(Duration::from_secs(2));
         }
-        log(crate::tr!("annuncio Bonjour tolto", "Bonjour announcement removed"));
+        log(crate::tr!(
+            "annuncio Bonjour tolto",
+            "Bonjour announcement removed"
+        ));
     }
 }
 
@@ -192,7 +228,13 @@ pub fn stop() {
 async fn read_frame<R: AsyncRead + Unpin>(r: &mut R) -> Result<Option<Vec<u8>>, String> {
     let mut len = [0u8; 4];
     match tokio::time::timeout(IO_TIMEOUT, r.read_exact(&mut len)).await {
-        Err(_) => return Err(crate::tr!("nessuna richiesta entro il tempo limite", "no request received before timeout").into()),
+        Err(_) => {
+            return Err(crate::tr!(
+                "nessuna richiesta entro il tempo limite",
+                "no request received before timeout"
+            )
+            .into())
+        }
         Ok(Err(e))
             if matches!(
                 e.kind(),
@@ -208,12 +250,21 @@ async fn read_frame<R: AsyncRead + Unpin>(r: &mut R) -> Result<Option<Vec<u8>>, 
     }
     let n = i32::from_le_bytes(len);
     if n <= 0 || n as usize > MAX_JSON {
-        return Err(crate::tr!(format!("lunghezza del messaggio non valida: {n}"), format!("invalid message length: {n}")));
+        return Err(crate::tr!(
+            format!("lunghezza del messaggio non valida: {n}"),
+            format!("invalid message length: {n}")
+        ));
     }
     let mut body = vec![0u8; n as usize];
     tokio::time::timeout(IO_TIMEOUT, r.read_exact(&mut body))
         .await
-        .map_err(|_| crate::tr!("messaggio incompleto: tempo scaduto", "incomplete message: timed out").to_string())?
+        .map_err(|_| {
+            crate::tr!(
+                "messaggio incompleto: tempo scaduto",
+                "incomplete message: timed out"
+            )
+            .to_string()
+        })?
         .map_err(|e| e.to_string())?;
     Ok(Some(body))
 }
@@ -245,7 +296,10 @@ fn error(code: i32) -> Value {
 async fn handle_connection(stream: TcpStream, ctx: Ctx, peer: &str) {
     let (mut rd, wr) = stream.into_split();
     let wr = Rc::new(tokio::sync::Mutex::new(wr));
-    log(&crate::tr!(format!("{peer}: connesso"), format!("{peer}: connected")));
+    log(&crate::tr!(
+        format!("{peer}: connesso"),
+        format!("{peer}: connected")
+    ));
 
     loop {
         let frame = match read_frame(&mut rd).await {
@@ -274,13 +328,18 @@ async fn handle_connection(stream: TcpStream, ctx: Ctx, peer: &str) {
             "RemoveProvisioningProfilesRequest" => Box::pin(remove_profiles(&ctx, &req)).await,
             "RemoveAppRequest" => Box::pin(remove_app(&ctx, &req)).await,
             "EnableUnsignedCodeExecutionRequest" => {
-                log(crate::tr!("JIT (EnableUnsignedCodeExecution) non supportato", "JIT (EnableUnsignedCodeExecution) is not supported"));
+                log(crate::tr!(
+                    "JIT (EnableUnsignedCodeExecution) non supportato",
+                    "JIT (EnableUnsignedCodeExecution) is not supported"
+                ));
                 error(ERR_UNSUPPORTED_IOS)
             }
-            "PrepareAppRequest" => match Box::pin(receive_and_install(&mut rd, &wr, &ctx, &req)).await {
-                Ok(()) => progress(1.0),
-                Err(code) => error(code),
-            },
+            "PrepareAppRequest" => {
+                match Box::pin(receive_and_install(&mut rd, &wr, &ctx, &req)).await {
+                    Ok(()) => progress(1.0),
+                    Err(code) => error(code),
+                }
+            }
             _ => error(ERR_UNKNOWN_REQUEST),
         };
         let what = match reply["errorCode"].as_i64() {
@@ -288,12 +347,18 @@ async fn handle_connection(stream: TcpStream, ctx: Ctx, peer: &str) {
             None => reply["identifier"].as_str().unwrap_or("?").to_string(),
         };
         if let Err(e) = send(&wr, &reply).await {
-            log(&crate::tr!(format!("{peer}: risposta ({what}) non consegnata: {e}"), format!("{peer}: response ({what}) could not be delivered: {e}")));
+            log(&crate::tr!(
+                format!("{peer}: risposta ({what}) non consegnata: {e}"),
+                format!("{peer}: response ({what}) could not be delivered: {e}")
+            ));
             break;
         }
         log(&format!("{peer}: -> {what}"));
     }
-    log(&crate::tr!(format!("{peer}: chiuso"), format!("{peer}: disconnected")));
+    log(&crate::tr!(
+        format!("{peer}: chiuso"),
+        format!("{peer}: disconnected")
+    ));
 }
 
 async fn send(wr: &Rc<tokio::sync::Mutex<OwnedWriteHalf>>, v: &Value) -> Result<(), String> {
@@ -304,11 +369,17 @@ async fn send(wr: &Rc<tokio::sync::Mutex<OwnedWriteHalf>>, v: &Value) -> Result<
 async fn phone_link(ctx: &Ctx) -> Result<phone::PhoneLink, i32> {
     match Box::pin(phone::connect_auto(ctx.phone, PAIRING_FILE, |_: &str| {})).await {
         Ok((addr, link)) => {
-            log(&crate::tr!(format!("telefono a {addr}"), format!("phone at {addr}")));
+            log(&crate::tr!(
+                format!("telefono a {addr}"),
+                format!("phone at {addr}")
+            ));
             Ok(link)
         }
         Err(e) => {
-            log(&crate::tr!(format!("telefono non raggiungibile: {e}"), format!("phone is unreachable: {e}")));
+            log(&crate::tr!(
+                format!("telefono non raggiungibile: {e}"),
+                format!("phone is unreachable: {e}")
+            ));
             Err(ERR_DEVICE_NOT_FOUND)
         }
     }
@@ -316,26 +387,52 @@ async fn phone_link(ctx: &Ctx) -> Result<phone::PhoneLink, i32> {
 
 /// Gli ultimi dati anisette: AltStore li chiede a ogni operazione, e generarli richiede
 /// un paio di secondi e due richieste di rete. Richieste in parallelo condividono il risultato.
-static ANISETTE_CACHE: tokio::sync::Mutex<Option<(std::time::Instant, Value)>> =
+static ANISETTE_CACHE: tokio::sync::Mutex<Option<(std::time::Instant, String, Value)>> =
     tokio::sync::Mutex::const_new(None);
 const ANISETTE_TTL: Duration = Duration::from_secs(20);
 
+pub async fn clear_anisette_cache() {
+    *ANISETTE_CACHE.lock().await = None;
+}
+
 async fn anisette() -> Value {
+    let choice = match apple::anisette_choice(Path::new(".")) {
+        Ok(choice) => choice,
+        Err(e) => {
+            log(&crate::tr!(
+                format!("server anisette non valido: {e}"),
+                format!("invalid anisette server: {e}")
+            ));
+            return error(ERR_INVALID_ANISETTE);
+        }
+    };
     let mut cache = ANISETTE_CACHE.lock().await;
-    if let Some((at, v)) = cache.as_ref() {
-        if at.elapsed() < ANISETTE_TTL {
+    if let Some((at, url, v)) = cache.as_ref() {
+        if url == &choice.url && at.elapsed() < ANISETTE_TTL {
             return json!({ "version": 1, "identifier": "AnisetteDataResponse", "anisetteData": v });
         }
     }
     let started = std::time::Instant::now();
     match apple::anisette_for_altstore(Path::new(".")).await {
         Ok(v) => {
-            log(&crate::tr!(format!("dati anisette pronti in {:.1} s", started.elapsed().as_secs_f32()), format!("anisette data ready in {:.1} s", started.elapsed().as_secs_f32())));
-            *cache = Some((std::time::Instant::now(), v.clone()));
+            log(&crate::tr!(
+                format!(
+                    "dati anisette pronti in {:.1} s",
+                    started.elapsed().as_secs_f32()
+                ),
+                format!(
+                    "anisette data ready in {:.1} s",
+                    started.elapsed().as_secs_f32()
+                )
+            ));
+            *cache = Some((std::time::Instant::now(), choice.url, v.clone()));
             json!({ "version": 1, "identifier": "AnisetteDataResponse", "anisetteData": v })
         }
         Err(e) => {
-            log(&crate::tr!(format!("dati anisette non disponibili: {e}"), format!("anisette data unavailable: {e}")));
+            log(&crate::tr!(
+                format!("dati anisette non disponibili: {e}"),
+                format!("anisette data unavailable: {e}")
+            ));
             error(ERR_INVALID_ANISETTE)
         }
     }
@@ -365,16 +462,28 @@ async fn install_profiles(ctx: &Ctx, req: &Value) -> Value {
                 .map(|p| p.bundle_id.unwrap_or(p.name))
                 .unwrap_or_else(|| "?".into());
             if let Err(e) = link.install_profile(blob).await {
-                log(&crate::tr!(format!("profilo {name} non installato: {e:?}"), format!("profile {name} failed to install: {e:?}")));
+                log(&crate::tr!(
+                    format!("profilo {name} non installato: {e:?}"),
+                    format!("profile {name} failed to install: {e:?}")
+                ));
                 return error(ERR_INSTALLATION_FAILED);
             }
-            log(&crate::tr!(format!("profilo installato: {name}"), format!("profile installed: {name}")));
+            log(&crate::tr!(
+                format!("profilo installato: {name}"),
+                format!("profile installed: {name}")
+            ));
         }
     }
     if let Some(active) = req["activeProfiles"].as_array() {
         log(&crate::tr!(
-            format!("activeProfiles ({} bundle) ricevuto: non tolgo profili dal telefono", active.len()),
-            format!("activeProfiles ({} bundles) received: leaving existing phone profiles untouched", active.len())
+            format!(
+                "activeProfiles ({} bundle) ricevuto: non tolgo profili dal telefono",
+                active.len()
+            ),
+            format!(
+                "activeProfiles ({} bundles) received: leaving existing phone profiles untouched",
+                active.len()
+            )
         ));
     }
     simple("InstallProvisioningProfilesResponse")
@@ -383,7 +492,11 @@ async fn install_profiles(ctx: &Ctx, req: &Value) -> Value {
 async fn remove_profiles(ctx: &Ctx, req: &Value) -> Value {
     let wanted: Vec<String> = req["bundleIdentifiers"]
         .as_array()
-        .map(|a| a.iter().filter_map(|v| v.as_str().map(str::to_lowercase)).collect())
+        .map(|a| {
+            a.iter()
+                .filter_map(|v| v.as_str().map(str::to_lowercase))
+                .collect()
+        })
         .unwrap_or_default();
     if !wanted.is_empty() {
         let _work = phone_lock();
@@ -394,7 +507,10 @@ async fn remove_profiles(ctx: &Ctx, req: &Value) -> Value {
         let raw = match link.profiles().await {
             Ok(r) => r,
             Err(e) => {
-                log(&crate::tr!(format!("non riesco a leggere i profili: {e:?}"), format!("cannot read profiles: {e:?}")));
+                log(&crate::tr!(
+                    format!("non riesco a leggere i profili: {e:?}"),
+                    format!("cannot read profiles: {e:?}")
+                ));
                 return error(ERR_INSTALLATION_FAILED);
             }
         };
@@ -405,8 +521,14 @@ async fn remove_profiles(ctx: &Ctx, req: &Value) -> Value {
                 .is_some_and(|b| wanted.contains(&b.to_lowercase()));
             if matches {
                 match link.remove_profile(&p.uuid).await {
-                    Ok(()) => log(&crate::tr!(format!("profilo tolto: {}", p.bundle_id.unwrap_or_default()), format!("profile removed: {}", p.bundle_id.unwrap_or_default()))),
-                    Err(e) => log(&crate::tr!(format!("profilo {} non tolto: {e:?}", p.uuid), format!("profile {} not removed: {e:?}", p.uuid))),
+                    Ok(()) => log(&crate::tr!(
+                        format!("profilo tolto: {}", p.bundle_id.unwrap_or_default()),
+                        format!("profile removed: {}", p.bundle_id.unwrap_or_default())
+                    )),
+                    Err(e) => log(&crate::tr!(
+                        format!("profilo {} non tolto: {e:?}", p.uuid),
+                        format!("profile {} not removed: {e:?}", p.uuid)
+                    )),
                 }
             }
         }
@@ -426,11 +548,17 @@ async fn remove_app(ctx: &Ctx, req: &Value) -> Value {
     let result = link.uninstall_app(bundle).await;
     match result {
         Ok(()) => {
-            log(&crate::tr!(format!("app disinstallata: {bundle}"), format!("app uninstalled: {bundle}")));
+            log(&crate::tr!(
+                format!("app disinstallata: {bundle}"),
+                format!("app uninstalled: {bundle}")
+            ));
             simple("RemoveAppResponse")
         }
         Err(e) => {
-            log(&crate::tr!(format!("app {bundle} non disinstallata: {e}"), format!("app {bundle} could not be uninstalled: {e}")));
+            log(&crate::tr!(
+                format!("app {bundle} non disinstallata: {e}"),
+                format!("app {bundle} could not be uninstalled: {e}")
+            ));
             error(ERR_APP_DELETION_FAILED)
         }
     }
@@ -446,10 +574,16 @@ async fn receive_and_install(
 ) -> Result<(), i32> {
     let size = req["contentSize"].as_u64().unwrap_or(0);
     if size == 0 || size > MAX_IPA {
-        log(&crate::tr!(format!("dimensione dell'app non valida: {size}"), format!("invalid app size: {size}")));
+        log(&crate::tr!(
+            format!("dimensione dell'app non valida: {size}"),
+            format!("invalid app size: {size}")
+        ));
         return Err(ERR_INVALID_REQUEST);
     }
-    log(&crate::tr!(format!("attendo l'app da AltStore: {size} byte"), format!("waiting for app from AltStore: {size} bytes")));
+    log(&crate::tr!(
+        format!("attendo l'app da AltStore: {size} byte"),
+        format!("waiting for app from AltStore: {size} bytes")
+    ));
     let mut ipa = vec![0u8; size as usize];
     let mut got = 0usize;
     let mut last_log = std::time::Instant::now();
@@ -457,27 +591,42 @@ async fn receive_and_install(
     while got < ipa.len() {
         match tokio::time::timeout_at(deadline, rd.read(&mut ipa[got..])).await {
             Ok(Ok(0)) => {
-                log(&crate::tr!(format!("AltStore ha chiuso la connessione dopo {got} di {size} byte"), format!("AltStore disconnected after {got} of {size} bytes")));
+                log(&crate::tr!(
+                    format!("AltStore ha chiuso la connessione dopo {got} di {size} byte"),
+                    format!("AltStore disconnected after {got} of {size} bytes")
+                ));
                 return Err(ERR_INVALID_REQUEST);
             }
             Ok(Ok(n)) => {
                 got += n;
                 if last_log.elapsed() >= Duration::from_secs(5) {
-                    log(&crate::tr!(format!("app in arrivo: {got} di {size} byte"), format!("receiving app: {got} of {size} bytes")));
+                    log(&crate::tr!(
+                        format!("app in arrivo: {got} di {size} byte"),
+                        format!("receiving app: {got} of {size} bytes")
+                    ));
                     last_log = std::time::Instant::now();
                 }
             }
             Ok(Err(e)) => {
-                log(&crate::tr!(format!("errore leggendo l'app dopo {got} di {size} byte: {e}"), format!("error receiving app after {got} of {size} bytes: {e}")));
+                log(&crate::tr!(
+                    format!("errore leggendo l'app dopo {got} di {size} byte: {e}"),
+                    format!("error receiving app after {got} of {size} bytes: {e}")
+                ));
                 return Err(ERR_INVALID_REQUEST);
             }
             Err(_) => {
-                log(&crate::tr!(format!("app non ricevuta per intero: {got} di {size} byte"), format!("app not fully received: {got} of {size} bytes")));
+                log(&crate::tr!(
+                    format!("app non ricevuta per intero: {got} di {size} byte"),
+                    format!("app not fully received: {got} of {size} bytes")
+                ));
                 return Err(ERR_INVALID_REQUEST);
             }
         }
     }
-    log(&crate::tr!(format!("app ricevuta: {} MB", size / 1_048_576), format!("app received: {} MB", size / 1_048_576)));
+    log(&crate::tr!(
+        format!("app ricevuta: {} MB", size / 1_048_576),
+        format!("app received: {} MB", size / 1_048_576)
+    ));
 
     // Il messaggio successivo deve essere BeginInstallationRequest.
     let next = match read_frame(rd).await {
@@ -489,13 +638,22 @@ async fn receive_and_install(
     }
     if let Some(active) = next["activeProfiles"].as_array() {
         log(&crate::tr!(
-            format!("activeProfiles ({} bundle) ricevuto: non tolgo profili dal telefono", active.len()),
-            format!("activeProfiles ({} bundles) received: leaving existing phone profiles untouched", active.len())
+            format!(
+                "activeProfiles ({} bundle) ricevuto: non tolgo profili dal telefono",
+                active.len()
+            ),
+            format!(
+                "activeProfiles ({} bundles) received: leaving existing phone profiles untouched",
+                active.len()
+            )
         ));
     }
     // Un IPA è uno zip.
     if !ipa.starts_with(b"PK") {
-        log(crate::tr!("il file ricevuto non è un IPA", "received file is not an IPA"));
+        log(crate::tr!(
+            "il file ricevuto non è un IPA",
+            "received file is not an IPA"
+        ));
         return Err(ERR_INVALID_APP);
     }
 
@@ -514,7 +672,10 @@ async fn receive_and_install(
     Box::pin(link.install_ipa_bytes_with_callback(ipa, callback))
         .await
         .map_err(|e| {
-            log(&crate::tr!(format!("installazione non riuscita: {e}"), format!("installation failed: {e}")));
+            log(&crate::tr!(
+                format!("installazione non riuscita: {e}"),
+                format!("installation failed: {e}")
+            ));
             ERR_INSTALLATION_FAILED
         })?;
     log(crate::tr!("app installata", "app installed"));
@@ -533,7 +694,9 @@ mod tests {
     #[tokio::test]
     async fn messaggi_con_la_lunghezza_davanti_in_little_endian() {
         let (mut a, mut b) = duplex(1024);
-        write_frame(&mut a, &json!({"identifier": "X", "version": 1})).await.unwrap();
+        write_frame(&mut a, &json!({"identifier": "X", "version": 1}))
+            .await
+            .unwrap();
         // 4 byte di lunghezza + JSON
         let mut raw = [0u8; 4];
         b.read_exact(&mut raw).await.unwrap();
@@ -555,7 +718,9 @@ mod tests {
         a.write_all(&(-5i32).to_le_bytes()).await.unwrap();
         assert!(read_frame(&mut b).await.is_err());
         let (mut a, mut b) = duplex(64);
-        a.write_all(&((MAX_JSON as i32) + 1).to_le_bytes()).await.unwrap();
+        a.write_all(&((MAX_JSON as i32) + 1).to_le_bytes())
+            .await
+            .unwrap();
         assert!(read_frame(&mut b).await.is_err());
         let (a, mut b) = duplex(64);
         drop(a);
@@ -564,7 +729,10 @@ mod tests {
 
     #[test]
     fn forme_delle_risposte_come_le_decodifica_altstore() {
-        assert_eq!(error(11), json!({"version": 3, "identifier": "ErrorResponse", "errorCode": 11}));
+        assert_eq!(
+            error(11),
+            json!({"version": 3, "identifier": "ErrorResponse", "errorCode": 11})
+        );
         assert_eq!(
             simple("RemoveAppResponse"),
             json!({"version": 1, "identifier": "RemoveAppResponse"})
@@ -577,8 +745,16 @@ mod tests {
     fn profili_base64_dalla_richiesta() {
         // "abc" e "hello" in base64
         let req = json!({"provisioningProfiles": ["YWJj", "aGVsbG8="]});
-        assert_eq!(decode_profiles(&req).unwrap(), vec![b"abc".to_vec(), b"hello".to_vec()]);
-        assert_eq!(decode_profiles(&json!({"provisioningProfiles": []})).unwrap().len(), 0);
+        assert_eq!(
+            decode_profiles(&req).unwrap(),
+            vec![b"abc".to_vec(), b"hello".to_vec()]
+        );
+        assert_eq!(
+            decode_profiles(&json!({"provisioningProfiles": []}))
+                .unwrap()
+                .len(),
+            0
+        );
         assert!(decode_profiles(&json!({"provisioningProfiles": ["a$b"]})).is_none());
         assert!(decode_profiles(&json!({})).is_none());
     }
@@ -664,7 +840,9 @@ mod tests {
             json!({"version": 1, "identifier": "PrepareAppRequest", "udid": "x", "contentSize": 2}),
         )];
         frames.push(b"PK".to_vec());
-        frames.push(frame(json!({"version": 1, "identifier": "AnisetteDataRequest"})));
+        frames.push(frame(
+            json!({"version": 1, "identifier": "AnisetteDataRequest"}),
+        ));
         let out = dialogo(frames, 1).await;
         assert_eq!(out[0]["errorCode"], ERR_UNKNOWN_REQUEST);
     }
@@ -688,7 +866,9 @@ mod tests {
                 });
 
                 let mut a = TcpStream::connect(addr).await.unwrap();
-                a.write_all(&frame(json!({"version": 1, "identifier": "Boh"}))).await.unwrap();
+                a.write_all(&frame(json!({"version": 1, "identifier": "Boh"})))
+                    .await
+                    .unwrap();
                 let r = read_frame(&mut a).await.unwrap().unwrap();
                 assert_eq!(
                     serde_json::from_slice::<Value>(&r).unwrap()["errorCode"],
@@ -696,7 +876,9 @@ mod tests {
                 );
                 // `a` resta aperta: `b` deve avere risposta lo stesso.
                 let mut b = TcpStream::connect(addr).await.unwrap();
-                b.write_all(&frame(json!({"version": 1, "identifier": "Boh"}))).await.unwrap();
+                b.write_all(&frame(json!({"version": 1, "identifier": "Boh"})))
+                    .await
+                    .unwrap();
                 let r = tokio::time::timeout(Duration::from_secs(2), read_frame(&mut b))
                     .await
                     .expect("la seconda connessione non deve aspettare la prima")

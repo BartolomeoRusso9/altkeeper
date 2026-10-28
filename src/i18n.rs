@@ -1,7 +1,7 @@
 //! Selezione della lingua per i messaggi rivolti all'utente.
 //!
 //! ALTKEEPER_LANG (o l'alias legacy ALTREFRESH_LANG): "it" o "en", con
-//! eventuali suffissi regionali. Per compatibilità il default resta italiano.
+//! eventuali suffissi regionali. Il default è inglese.
 //! Il protocollo AltStore, i JSON, gli ID e i nomi dei comandi non si traducono.
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -11,12 +11,18 @@ pub enum Language {
 }
 
 pub fn language_from(value: Option<&str>) -> Language {
-    let value = value.unwrap_or("").trim();
+    let Some(value) = value else {
+        return Language::English;
+    };
+    let value = value.trim();
+    if value.is_empty() {
+        return Language::English;
+    }
     let base = value.split(['-', '_']).next().unwrap_or("");
-    if base.eq_ignore_ascii_case("en") {
-        Language::English
-    } else {
+    if base.eq_ignore_ascii_case("it") {
         Language::Italian
+    } else {
+        Language::English
     }
 }
 
@@ -49,8 +55,15 @@ mod tests {
     use super::{language_from, Language};
 
     #[test]
-    fn default_e_valori_italiani() {
-        for raw in [None, Some(""), Some("it"), Some("IT"), Some("it-IT"), Some("it_it")] {
+    fn default_inglese() {
+        for raw in [None, Some(""), Some("en"), Some("EN"), Some("en-US")] {
+            assert_eq!(language_from(raw), Language::English);
+        }
+    }
+
+    #[test]
+    fn opzioni_italiane() {
+        for raw in [Some("it"), Some("IT"), Some("it-IT"), Some("it_it")] {
             assert_eq!(language_from(raw), Language::Italian);
         }
     }
@@ -63,9 +76,9 @@ mod tests {
     }
 
     #[test]
-    fn valori_sconosciuti_non_attivano_inglese() {
+    fn valori_sconosciuti_usano_inglese() {
         for raw in [Some("english"), Some("enough"), Some("ru"), Some("de-DE"), Some("xx_en")] {
-            assert_eq!(language_from(raw), Language::Italian);
+            assert_eq!(language_from(raw), Language::English);
         }
     }
 }

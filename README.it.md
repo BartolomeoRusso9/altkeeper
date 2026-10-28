@@ -24,7 +24,7 @@ C'è anche una piccola **pagina web** per vedere lo stato delle app e rinnovarle
 > versione al momento della scrittura), con il programma su un Mac e su un mini PC
 > Debian 13 (x86-64, Docker). Usa API private di Apple e il protocollo di AltStore, che possono
 > cambiare senza preavviso. Per uso personale con il proprio Apple ID; non affiliato ad Apple né ad
-> AltStore. La CLI supporta l'italiano (predefinito) e l'inglese per messaggi, errori e log;
+> AltStore. La CLI supporta l'inglese (predefinito) e l'italiano per messaggi, errori e log;
 > la pagina web e i messaggi delle librerie esterne hanno impostazioni indipendenti.
 >
 > Confermato con AltServer dall'immagine Docker sul mini PC Debian: il *Refresh* da AltStore installa
@@ -38,10 +38,10 @@ C'è anche una piccola **pagina web** per vedere lo stato delle app e rinnovarle
 ## Lingua della CLI (inglese / italiano)
 
 La CLI, inclusi i messaggi di errore, le richieste interattive e i log del server, usa
-l'italiano per impostazione predefinita per compatibilità. Per usare l'inglese, imposta
-`ALTKEEPER_LANG=en`; per l'italiano, `ALTKEEPER_LANG=it`. Funzionano anche `en-US`,
+l'inglese per impostazione predefinita. Per usare l'italiano, imposta
+`ALTKEEPER_LANG=it`; per l'inglese, `ALTKEEPER_LANG=en`. Funzionano anche `en-US`,
 `en_GB`, `it-IT` (senza distinzione maiuscole/minuscole). Lingue sconosciute
-ricadono sull'italiano. Se `ALTKEEPER_LANG` manca, funziona anche
+ricadono sull'inglese. Se `ALTKEEPER_LANG` manca, funziona anche
 `ALTREFRESH_LANG`. Questo cambia solo il testo visibile della CLI, non il
 protocollo AltStore, i dati JSON o la lingua della pagina web.
 
@@ -51,7 +51,7 @@ PowerShell (vale per la sessione corrente e per i processi figli):
 $env:ALTKEEPER_LANG = "en"
 .\target\release\altkeeper.exe --help
 .\target\release\altkeeper.exe login "you@example.com"
-# Per ripristinare il valore predefinito: Remove-Item Env:ALTKEEPER_LANG
+# Per usare il valore predefinito: Remove-Item Env:ALTKEEPER_LANG
 ```
 
 Prompt dei comandi (cmd.exe):
@@ -67,8 +67,8 @@ Linux/macOS:
 ALTKEEPER_LANG=en ./altkeeper phone
 ```
 
-Il file `examples/docker-compose.yml` usa una lista `environment:`: per l'inglese aggiungi
-`- ALTKEEPER_LANG=en`. Questo cambia i messaggi CLI e i log, **non** il protocollo,
+Il file `examples/docker-compose.yml` usa una lista `environment:`: per selezionare l'italiano aggiungi
+`- ALTKEEPER_LANG=it`. Questo cambia i messaggi CLI e i log, **non** il protocollo,
 i JSON o la pagina web. I comandi del menu 2FA restano `d`, `r` (se disponibile), `p<id>`.
 
 ## Cosa fa e cosa non fa
@@ -165,22 +165,24 @@ dns-sd -G v4 <host>.local                           # mostra l'indirizzo IP
 
 ### 3. Pairing (una volta sola, via USB)
 
-`pair-usb` ha bisogno dell'`usbmuxd` del computer raggiungibile via TCP. Su un Mac usa il piccolo
-ponte in `examples/`:
+`pair-usb` usa l'`usbmuxd` locale (su Windows, quello di iTunes / Dispositivi Apple su
+`127.0.0.1:27015`). L'iPhone deve essere collegato, sbloccato e autorizzare il computer. Su Mac
+viene usato direttamente il servizio USB integrato:
 
 ```sh
-# Terminale 1 (lascialo aperto): espone l'usbmuxd del Mac su 127.0.0.1:27015
-python3 examples/usbmux-bridge.py
-
-# Terminale 2, con l'iPhone collegato, sbloccato e con "Autorizza" già accettato:
-export USBMUXD_SOCKET_ADDRESS=127.0.0.1:27015
+# con l'iPhone collegato, sbloccato e con "Autorizza" già accettato:
 ./target/release/altkeeper pair-usb
 ```
 
-Crea `rp-pairing.plist`. Copialo accanto al binario sul server e tienilo riservato (`chmod 600`).
-Copiare sul server Debian un pairing fatto con un Mac ha funzionato nelle nostre prove. Su Linux la
-stessa idea con `socat` (`socat TCP-LISTEN:27015,bind=127.0.0.1,fork UNIX-CONNECT:/var/run/usbmuxd`)
-dovrebbe funzionare, ma non l'abbiamo provata.
+Crea `rp-pairing.plist` in modo riservato e atomico. Per un server remoto, crealo sul computer con
+il cavo e copialo sul server. `USBMUXD_SOCKET_ADDRESS=host:porta` resta supportato per un usbmuxd
+inoltrato. La pagina web e il tray offrono anche **Associa iPhone via USB**. L'associazione
+automatica opzionale si attiva quando colleghi un nuovo iPhone; in Docker funziona solo se il socket
+usbmuxd dell'host è montato nel container.
+Imposta `ALTKEEPER_NO_AUTO_PAIR=1` per spegnere il monitor (le connessioni USB restano disponibili).
+Se dopo 60 secondi un rinnovo non riceve risposta all'installazione, AltKeeper verifica il profilo
+con una connessione separata e continua ad aspettare fino a 12 ore, finché l'iPhone resta
+raggiungibile; nella pagina puoi premere **Annulla attesa**.
 
 Poi controlla il collegamento, dalla cartella del server:
 
@@ -320,7 +322,6 @@ end-to-end.
    Mac). Con l'iPhone collegato, sbloccato e autorizzato:
 
    ```powershell
-   $env:USBMUXD_SOCKET_ADDRESS = "127.0.0.1:27015"
    .\altkeeper.exe pair-usb
    ```
 
@@ -648,8 +649,13 @@ quale nome sta chiedendo il telefono.
 solo (vedi il passo 2). `ALTKEEPER_NO_MDNS=1` spegne Bonjour (reti che bloccano il multicast, o per
 provare la scansione). `ALTKEEPER_DEBUG=1` stampa cosa risponde Apple a ogni richiesta del login (stato,
 intestazioni, corpo degli errori; mai il corpo delle richieste né le risposte riuscite).
-`ALTKEEPER_ANISETTE_URL=https://...` usa un server anisette tuo (per esempio `anisette-v3-server`) al
-posto di quello predefinito; deve iniziare con `http://` o `https://`. Se quello predefinito smette di funzionare, vedi "Se qualcosa va storto".
+Per anisette il server predefinito è `https://ani3.stikstore.app`. Puoi sceglierne un altro nella
+pagina web o nel tray: il server pubblico di isideload (`https://ani.jkcoxson.com`) oppure un URL
+HTTP(S) personalizzato. La scelta della pagina viene salvata in modo riservato in
+`state/anisette-url`; `ALTKEEPER_ANISETTE_URL` ha la precedenza e blocca la scelta. Cancellandola si
+ripristina il server predefinito. AltKeeper mette da parte l'identità anisette quando cambia il
+server effettivo. Nel riquadro iPhone puoi anche salvare fino a due indirizzi IP:porta fissi (per
+esempio casa e VPN).
 
 `altkeeper --help` (anche `altkeeper login --help`) mostra la sintassi nella lingua configurata.
 
@@ -658,8 +664,8 @@ entrambi vince `ALTKEEPER_*`). `altkeeper --version` stampa la versione.
 
 ## Se qualcosa va storto
 
-- **"manca il pairing remoto"**: nella cartella non c'è `rp-pairing.plist`. Rifai il pairing
-  (passo 3).
+- **"manca il pairing remoto"**: nella cartella non c'è `rp-pairing.plist`. Usa **Associa iPhone via
+  USB** nella pagina web o nel tray, oppure esegui `altkeeper pair-usb` (passo 3).
 - **"pairing con l'iPhone non riuscito" / `early eof`**: l'iPhone non riconosce più quel pairing.
   Rifallo, oppure copia un `rp-pairing.plist` funzionante da un altro computer.
 - **"non trovo l'iPhone in rete", "No route to host", timeout**: l'iPhone non è in rete (in standby,
@@ -669,16 +675,11 @@ entrambi vince `ALTKEEPER_*`). `altkeeper --version` stampa la versione.
   iOS), poi dai all'iPhone un IP fisso nel router.
 - **AltStore dice "AltServer could not be found"**: vedi il passo 4. Controlla che il server sia
   acceso, sulla stessa rete, che AltStore abbia il permesso Rete locale, e leggi l'output del server.
-- **AltStore mostra un errore e nel log compare `not provisioned for this server (-45061)` o
-  `reprovision required`**: il server anisette pubblico predefinito non accetta l'identità salvata in
-  `state/anisette_state` (il server è cambiato o ha problemi). Metti da parte il file
-  (`mv state/anisette_state state/anisette_state.old`) e avvia con un altro server, per esempio
-  `ALTKEEPER_ANISETTE_URL=https://ani3.stikstore.app altkeeper altserver`. Si segnala che funziona
-  anche `https://mac-ani.jkcoxson.com`. Lascia la variabile impostata in modo permanente (profilo
-  della shell, `.env` del compose, oppure `Environment=` in un'unità systemd), altrimenti al prossimo
-  avvio si torna al server predefinito. Dopo la creazione della nuova identità Apple può chiedere di
-  nuovo un codice di verifica. I server pubblici vanno e vengono: se fallisce ancora, prova un altro,
-  oppure usane uno tuo (`anisette-v3-server`).
+- **AltStore segnala un errore anisette (`-45061` o `reprovision required`)**: usa il riquadro
+  **Server anisette** per provare o scegliere un altro server. AltKeeper mette da parte la vecchia
+  identità quando cambia l'URL effettivo. Dopo averne creata una nuova, Apple potrebbe chiedere di
+  nuovo il codice di verifica. I server pubblici vanno e vengono; puoi configurare
+  `ALTKEEPER_ANISETTE_URL` o usare un tuo `anisette-v3-server`.
 - **Un refresh da AltStore sembra bloccato subito dopo `PrepareAppRequest`**: AltStore manda prima
   l'app al server, e può pesare ben più di 100 MB. Con un Wi-Fi debole ci vogliono minuti; il server
   scrive `app in arrivo: X di Y byte` ogni pochi secondi mentre arriva, e rinuncia dopo 10 minuti in

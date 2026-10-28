@@ -7,20 +7,21 @@ use std::net::{IpAddr, SocketAddr};
 use std::path::Path;
 use std::time::{Duration, Instant};
 
+use futures_util::StreamExt;
 use idevice::{
-    IdeviceService, ReadWrite, RsdService,
     core_device_proxy::CoreDeviceProxy,
     installation_proxy::InstallationProxyClient,
     misagent::MisagentClient,
     provider::{IdeviceProvider, UsbmuxdProvider},
     remote_pairing::{
-        RemotePairingClient, RemotePairingLockdownService, RpPairingFile, RpPairingSocket,
-        tunnel::connect_tls_psk_tunnel_native,
+        tunnel::connect_tls_psk_tunnel_native, RemotePairingClient, RemotePairingLockdownService,
+        RpPairingFile, RpPairingSocket,
     },
     rsd::RsdHandshake,
     services::lockdown::LockdownClient,
     tcp::adapter::Adapter,
-    usbmuxd::{Connection, UsbmuxdAddr, UsbmuxdConnection},
+    usbmuxd::{Connection, UsbmuxdAddr, UsbmuxdListenEvent},
+    IdeviceService, ReadWrite, RsdService,
 };
 use tokio::net::TcpStream;
 
@@ -147,7 +148,9 @@ impl PhoneLink {
                 usb: Some(provider),
                 ..
             } => {
-                let mut client = InstallationProxyClient::connect(provider).await.map_err(dbg)?;
+                let mut client = InstallationProxyClient::connect(provider)
+                    .await
+                    .map_err(dbg)?;
                 client.get_apps(Some("User"), None).await.map_err(dbg)?
             }
             Self::Rsd {
@@ -156,7 +159,9 @@ impl PhoneLink {
                 usb: None,
                 ..
             } => {
-                let mut client = InstallationProxyClient::connect_rsd(adapter, hs).await.map_err(dbg)?;
+                let mut client = InstallationProxyClient::connect_rsd(adapter, hs)
+                    .await
+                    .map_err(dbg)?;
                 client.get_apps(Some("User"), None).await.map_err(dbg)?
             }
         };
@@ -169,6 +174,27 @@ impl PhoneLink {
         };
 
         misagent.install(profile).await.map_err(dbg)
+    }
+
+    pub async fn install_renewal_profile(
+        &mut self,
+        profile: Vec<u8>,
+    ) -> Result<(), crate::renewal_wait::AttemptError> {
+        let misagent = match self {
+            Self::Rsd { misagent, .. } | Self::Legacy { misagent, .. } => misagent,
+        };
+        misagent.install(profile).await.map_err(|error| {
+            let retryable = matches!(
+                &error,
+                idevice::IdeviceError::Socket(io)
+                    if io.kind() == std::io::ErrorKind::TimedOut
+            );
+            if retryable {
+                crate::renewal_wait::AttemptError::Retryable(dbg(error))
+            } else {
+                crate::renewal_wait::AttemptError::Fatal(dbg(error))
+            }
+        })
     }
 
     pub async fn remove_profile(&mut self, uuid: &str) -> Result<(), String> {
@@ -247,7 +273,7 @@ impl PhoneLink {
                         .await
                         .map_err(|e| format!("Installation failed: {e}"))
                 }
-            },
+            }
         }
     }
 
@@ -338,7 +364,13 @@ impl std::fmt::Display for Via {
 
 /// Aspetta il PIN mostrato sull'iPhone in `pin.txt` (max 2 minuti).
 async fn ask_pin() -> String {
-    println!("{}", crate::tr!("   l'iPhone chiede un PIN: scrivilo in pin.txt (attendo 2 minuti)", "   iPhone asks for a PIN: write it to pin.txt (waiting up to 2 minutes)"));
+    println!(
+        "{}",
+        crate::tr!(
+            "   l'iPhone chiede un PIN: scrivilo in pin.txt (attendo 2 minuti)",
+            "   iPhone asks for a PIN: write it to pin.txt (waiting up to 2 minutes)"
+        )
+    );
     for _ in 0..120 {
         if let Ok(s) = tokio::fs::read_to_string("pin.txt").await {
             let pin = s.trim().to_string();
@@ -426,6 +458,199 @@ pub fn usbmuxd_addr() -> Result<UsbmuxdAddr, String> {
     }
 }
 
+const AUTO_PAIR_OFF_FILE: &str = "state/auto-pair-off";
+static AUTO_PAIR_MONITOR_STARTED: std::sync::OnceLock<()> = std::sync::OnceLock::new();
+static AUTO_PAIR_PAUSE_COUNT: std::sync::atomic::AtomicUsize =
+    std::sync::atomic::AtomicUsize::new(0);
+
+pub struct AutoPairPauseGuard;
+
+impl Drop for AutoPairPauseGuard {
+    fn drop(&mut self) {
+        AUTO_PAIR_PAUSE_COUNT.fetch_sub(1, std::sync::atomic::Ordering::SeqCst);
+    }
+}
+
+pub fn pause_auto_pairing() -> AutoPairPauseGuard {
+    AUTO_PAIR_PAUSE_COUNT.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+    AutoPairPauseGuard
+}
+
+pub fn auto_pair_configured() -> bool {
+    !crate::env::is_set("NO_USB")
+        && !crate::env::is_set("NO_AUTO_PAIR")
+        && !Path::new(AUTO_PAIR_OFF_FILE).exists()
+}
+
+pub fn auto_pair_enabled() -> bool {
+    auto_pair_configured() && AUTO_PAIR_PAUSE_COUNT.load(std::sync::atomic::Ordering::SeqCst) == 0
+}
+
+pub fn start_auto_pair_monitor() {
+    if AUTO_PAIR_MONITOR_STARTED.set(()).is_err() {
+        return;
+    }
+    let result = std::thread::Builder::new()
+        .name("altkeeper-auto-pair".into())
+        .spawn(|| {
+            let runtime = match tokio::runtime::Builder::new_current_thread()
+                .enable_all()
+                .build()
+            {
+                Ok(runtime) => runtime,
+                Err(error) => {
+                    crate::log::err(&format!("[auto-pair] cannot start monitor: {error}"));
+                    return;
+                }
+            };
+            runtime.block_on(auto_pair_monitor());
+        });
+    if let Err(error) = result {
+        crate::log::err(&format!("[auto-pair] cannot start monitor thread: {error}"));
+    }
+}
+
+async fn auto_pair_monitor() {
+    let mut previous_devices = std::collections::HashMap::<u32, String>::new();
+    let mut pending = std::collections::HashMap::<u32, String>::new();
+    let mut attempted = HashSet::<String>::new();
+    loop {
+        if !auto_pair_enabled() {
+            tokio::time::sleep(Duration::from_secs(3)).await;
+            continue;
+        }
+        let addr = match usbmuxd_addr() {
+            Ok(addr) => addr,
+            Err(_) => {
+                tokio::time::sleep(Duration::from_secs(3)).await;
+                continue;
+            }
+        };
+        let mut mux = match tokio::time::timeout(Duration::from_secs(3), addr.connect(1)).await {
+            Ok(Ok(mux)) => mux,
+            _ => {
+                tokio::time::sleep(Duration::from_secs(3)).await;
+                continue;
+            }
+        };
+        let mut events = match tokio::time::timeout(Duration::from_secs(3), mux.listen()).await {
+            Ok(Ok(events)) => events,
+            _ => {
+                tokio::time::sleep(Duration::from_secs(3)).await;
+                continue;
+            }
+        };
+        let mut poll = tokio::time::interval(Duration::from_secs(3));
+        loop {
+            let event = tokio::select! {
+                event = events.next() => Some(event),
+                _ = poll.tick() => {
+                    if !auto_pair_enabled() {
+                        break;
+                    }
+                    if let Ok(devices) = list_usb_devices(&addr).await {
+                        let current = devices.iter()
+                            .filter(|device| device.connection_type == Connection::Usb)
+                            .map(|device| (device.device_id, device.udid.clone()))
+                            .collect::<std::collections::HashMap<_, _>>();
+                        for (id, udid) in &current {
+                            if !previous_devices.contains_key(id) {
+                                pending.insert(*id, udid.clone());
+                            }
+                        }
+                        for (id, udid) in &previous_devices {
+                            if !current.contains_key(id) {
+                                pending.remove(id);
+                                attempted.remove(udid);
+                            }
+                        }
+                        previous_devices = current;
+                    }
+                    None
+                }
+            };
+            if event.is_none() {
+                let candidates = pending
+                    .iter()
+                    .map(|(id, udid)| (*id, udid.clone()))
+                    .collect::<Vec<_>>();
+                for (id, udid) in candidates {
+                    if pairing_file_valid(Path::new(crate::PAIRING_FILE)).await {
+                        pending.remove(&id);
+                        attempted.insert(udid);
+                        continue;
+                    }
+                    let Some(_work) = crate::altserver::try_phone_lock() else {
+                        continue;
+                    };
+                    if !auto_pair_enabled() {
+                        break;
+                    }
+                    match pair_usb_for(crate::PAIRING_FILE, &udid).await {
+                        Ok(()) => {
+                            crate::log::line("[auto-pair] paired iPhone over USB");
+                            #[cfg(any(windows, target_os = "macos"))]
+                            crate::tray::notify_auto_pair();
+                        }
+                        Err(error) => {
+                            crate::log::err(&format!("[auto-pair] pairing failed: {error}"))
+                        }
+                    }
+                    pending.remove(&id);
+                    attempted.insert(udid);
+                }
+                continue;
+            }
+            let Some(Some(event)) = event else { break };
+            if !auto_pair_enabled() {
+                break;
+            }
+            match event {
+                Ok(UsbmuxdListenEvent::Connected(device))
+                    if device.connection_type == Connection::Usb =>
+                {
+                    if previous_devices
+                        .insert(device.device_id, device.udid.clone())
+                        .is_some()
+                    {
+                        continue;
+                    }
+                    if !attempted.contains(&device.udid) {
+                        pending.insert(device.device_id, device.udid);
+                    }
+                }
+                Ok(UsbmuxdListenEvent::Disconnected(device_id)) => {
+                    if let Some(udid) = previous_devices.remove(&device_id) {
+                        pending.remove(&device_id);
+                        attempted.remove(&udid);
+                    }
+                }
+                _ => {}
+            }
+        }
+        tokio::time::sleep(Duration::from_secs(3)).await;
+    }
+}
+
+async fn list_usb_devices(
+    addr: &UsbmuxdAddr,
+) -> Result<Vec<idevice::usbmuxd::UsbmuxdDevice>, String> {
+    let mut mux = tokio::time::timeout(Duration::from_secs(3), addr.connect(1))
+        .await
+        .map_err(|_| "usbmuxd connection timed out".to_string())?
+        .map_err(dbg)?;
+    tokio::time::timeout(Duration::from_secs(3), mux.get_devices())
+        .await
+        .map_err(|_| "usbmuxd device scan timed out".to_string())?
+        .map_err(dbg)
+}
+
+async fn pairing_file_valid(path: &Path) -> bool {
+    tokio::time::timeout(Duration::from_secs(2), RpPairingFile::read_from_file(path))
+        .await
+        .is_ok_and(|result| result.is_ok())
+}
+
 /// Si collega via USB, se un iPhone è collegato alla macchina su cui gira AltKeeper (o a un
 /// usbmuxd raggiungibile con `USBMUXD_SOCKET_ADDRESS`). Usa il tunnel CoreDeviceProxy: serve
 /// solo che il telefono si fidi già del computer ("Registra"), non il pairing remoto.
@@ -439,14 +664,16 @@ pub async fn connect_usb(say: &mut impl FnMut(&str)) -> Result<Option<PhoneLink>
     else {
         return Ok(None);
     };
-    let Ok(Ok(devs)) = tokio::time::timeout(Duration::from_secs(3), mux.get_devices()).await
-    else {
+    let Ok(Ok(devs)) = tokio::time::timeout(Duration::from_secs(3), mux.get_devices()).await else {
         return Ok(None);
     };
     let Some(dev) = devs.iter().find(|d| d.connection_type == Connection::Usb) else {
         return Ok(None);
     };
-    say(crate::tr!("iPhone trovato via USB, mi collego col cavo...", "iPhone found via USB, connecting over cable..."));
+    say(crate::tr!(
+        "iPhone trovato via USB, mi collego col cavo...",
+        "iPhone found via USB, connecting over cable..."
+    ));
     let provider = dev.to_provider(addr, "altkeeper");
 
     // Rileva iOS prima di provare CoreDeviceProxy/RSD. Il probe dedicato verifica anche
@@ -540,7 +767,11 @@ pub async fn connect_usb(say: &mut impl FnMut(&str)) -> Result<Option<PhoneLink>
             Ok(Some(link))
         }
         Ok(Err(e)) => Err(e),
-        Err(_) => Err(crate::tr!("il telefono non risponde via USB", "the phone is not responding over USB").into()),
+        Err(_) => Err(crate::tr!(
+            "il telefono non risponde via USB",
+            "the phone is not responding over USB"
+        )
+        .into()),
     }
 }
 
@@ -560,11 +791,71 @@ pub async fn with_timeout<T>(
     }
 }
 
+pub async fn reconnect(via: Via, pairing_path: &str) -> Result<PhoneLink, String> {
+    with_timeout("iPhone reconnection", Duration::from_secs(12), async {
+        match via {
+            Via::Wifi(addr) => connect(addr, pairing_path).await,
+            Via::Usb => connect_usb(&mut |_| {})
+                .await?
+                .ok_or_else(|| "iPhone USB connection was lost.".into()),
+        }
+    })
+    .await
+}
+
+pub async fn probe_profile(
+    via: Via,
+    pairing_path: &str,
+    uuid: &str,
+    team: &str,
+) -> crate::renewal_wait::Probe {
+    use crate::renewal_wait::Probe;
+    if let Via::Wifi(addr) = via {
+        if !matches!(
+            tokio::time::timeout(Duration::from_secs(3), TcpStream::connect(addr)).await,
+            Ok(Ok(_))
+        ) {
+            return Probe::Disconnected(format!("{addr} is no longer reachable"));
+        }
+    }
+    let mut link = match reconnect(via, pairing_path).await {
+        Ok(link) => link,
+        Err(error) => {
+            return match via {
+                Via::Wifi(_) => Probe::Unresponsive,
+                Via::Usb => Probe::Disconnected(error),
+            }
+        }
+    };
+    match with_timeout(
+        "Profile verification",
+        Duration::from_secs(10),
+        link.profiles(),
+    )
+    .await
+    {
+        Ok(raw)
+            if raw
+                .iter()
+                .filter_map(|bytes| crate::profile::parse(bytes))
+                .any(|p| {
+                    p.uuid.eq_ignore_ascii_case(uuid) && p.team_id.as_deref() == Some(team)
+                }) =>
+        {
+            Probe::Installed
+        }
+        Ok(_) => Probe::Connected,
+        Err(_) => Probe::Unresponsive,
+    }
+}
+
 /// L'unico demone mDNS del processo: ricerca dell'iPhone e annuncio di AltServer lo condividono
 /// (due demoni nello stesso processo si contendono la porta 5353 e le risposte si perdono).
 pub fn mdns() -> Option<&'static mdns_sd::ServiceDaemon> {
     static DAEMON: std::sync::OnceLock<Option<mdns_sd::ServiceDaemon>> = std::sync::OnceLock::new();
-    DAEMON.get_or_init(|| mdns_sd::ServiceDaemon::new().ok()).as_ref()
+    DAEMON
+        .get_or_init(|| mdns_sd::ServiceDaemon::new().ok())
+        .as_ref()
 }
 
 /// Cerca via Bonjour gli iPhone in rete (servizio `_remotepairing._tcp`): indirizzi IPv4 e porta.
@@ -610,7 +901,10 @@ pub async fn discover(wait: Duration) -> Vec<SocketAddr> {
 /// Gli altri indirizzi della stessa rete /24 (senza il proprio, né rete né broadcast).
 fn subnet_hosts(own: std::net::Ipv4Addr) -> Vec<std::net::Ipv4Addr> {
     let [a, b, c, d] = own.octets();
-    (1..=254u8).filter(|h| *h != d).map(|h| std::net::Ipv4Addr::new(a, b, c, h)).collect()
+    (1..=254u8)
+        .filter(|h| *h != d)
+        .map(|h| std::net::Ipv4Addr::new(a, b, c, h))
+        .collect()
 }
 
 /// Cerca il telefono senza Bonjour: prova la porta del servizio (di solito 49152) su tutta la
@@ -651,6 +945,77 @@ pub async fn scan_lan(port: u16) -> Vec<SocketAddr> {
 /// stessa porta mDNS (per esempio Home Assistant) le risposte dell'iPhone possono andare perse,
 /// quindi affidarsi solo alla ricerca sarebbe intermittente.
 const LAST_ADDR_FILE: &str = "state/phone-addr";
+const SAVED_ADDRS_FILE: &str = "state/phone-addresses.json";
+pub const MAX_SAVED_ADDRESSES: usize = 2;
+
+#[derive(serde::Serialize, serde::Deserialize)]
+#[serde(deny_unknown_fields)]
+struct SavedAddresses {
+    addresses: Vec<SocketAddr>,
+}
+
+pub fn validate_addresses(values: &[String]) -> Result<Vec<SocketAddr>, String> {
+    if values.len() > MAX_SAVED_ADDRESSES {
+        return Err("Save at most two iPhone addresses.".into());
+    }
+    let mut result = Vec::new();
+    for value in values {
+        let addr: SocketAddr = value
+            .trim()
+            .parse()
+            .map_err(|_| "Use an IP address and pairing port, for example 10.7.0.2:49152.")?;
+        let broadcast = matches!(addr.ip(), IpAddr::V4(ip) if ip.is_broadcast());
+        if addr.port() == 0 || addr.ip().is_unspecified() || addr.ip().is_multicast() || broadcast {
+            return Err("Use a specific iPhone IP address and a nonzero pairing port.".into());
+        }
+        if !result.contains(&addr) {
+            result.push(addr);
+        }
+    }
+    Ok(result)
+}
+
+fn read_saved_addresses(path: &Path) -> Result<Vec<SocketAddr>, String> {
+    let bytes = match std::fs::read(path) {
+        Ok(bytes) => bytes,
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(Vec::new()),
+        Err(e) => return Err(format!("Cannot read saved iPhone addresses: {e}")),
+    };
+    let saved: SavedAddresses = serde_json::from_slice(&bytes)
+        .map_err(|_| "Saved iPhone addresses are invalid; save them again.".to_string())?;
+    if saved.addresses.len() > MAX_SAVED_ADDRESSES
+        || saved.addresses.iter().any(|a| {
+            a.port() == 0
+                || a.ip().is_unspecified()
+                || a.ip().is_multicast()
+                || matches!(a.ip(), IpAddr::V4(ip) if ip.is_broadcast())
+        })
+    {
+        return Err("Saved iPhone addresses are invalid; save them again.".into());
+    }
+    Ok(saved.addresses)
+}
+
+pub fn saved_addresses() -> Result<Vec<SocketAddr>, String> {
+    read_saved_addresses(Path::new(SAVED_ADDRS_FILE))
+}
+
+pub fn save_addresses(values: &[String]) -> Result<Vec<SocketAddr>, String> {
+    let addresses = validate_addresses(values)?;
+    std::fs::create_dir_all("state").map_err(dbg)?;
+    crate::fsperm::restrict_dir(Path::new("state")).map_err(dbg)?;
+    let temporary = Path::new("state").join(format!("phone-addresses-{}.tmp", std::process::id()));
+    let bytes = serde_json::to_vec(&SavedAddresses {
+        addresses: addresses.clone(),
+    })
+    .map_err(dbg)?;
+    crate::fsperm::write_private(&temporary, &bytes).map_err(dbg)?;
+    if let Err(error) = std::fs::rename(&temporary, Path::new(SAVED_ADDRS_FILE)) {
+        let _ = std::fs::remove_file(&temporary);
+        return Err(format!("Cannot save iPhone addresses: {error}"));
+    }
+    Ok(addresses)
+}
 
 fn read_last_addr(path: &Path) -> Option<SocketAddr> {
     std::fs::read_to_string(path).ok()?.trim().parse().ok()
@@ -679,7 +1044,10 @@ pub async fn connect_auto(
         match connect_usb(&mut say).await {
             Ok(Some(link)) => return Ok((Via::Usb, link)),
             Ok(None) => {}
-            Err(e) => say(&crate::tr!(format!("USB non riuscita ({e}), provo in Wi-Fi..."), format!("USB connection failed ({e}); trying Wi-Fi..."))),
+            Err(e) => say(&crate::tr!(
+                format!("USB non riuscita ({e}), provo in Wi-Fi..."),
+                format!("USB connection failed ({e}); trying Wi-Fi...")
+            )),
         }
     }
     if !Path::new(pairing_path).exists() {
@@ -694,10 +1062,13 @@ pub async fn connect_auto(
     let mut last_err = String::new();
 
     let mut known: Vec<SocketAddr> = Vec::new();
-    known.extend(preferred);
-    if let Some(last) = read_last_addr(cache) {
-        if !known.contains(&last) {
-            known.push(last);
+    for addr in preferred
+        .into_iter()
+        .chain(read_saved_addresses(Path::new(SAVED_ADDRS_FILE))?)
+        .chain(read_last_addr(cache))
+    {
+        if !known.contains(&addr) {
+            known.push(addr);
         }
     }
     for addr in known {
@@ -708,12 +1079,23 @@ pub async fn connect_auto(
                 return Ok((Via::Wifi(addr), link));
             }
             Ok(Err(e)) => last_err = e,
-            Err(_) => last_err = crate::tr!(format!("{addr} non risponde"), format!("{addr} did not respond")),
+            Err(_) => {
+                last_err = crate::tr!(
+                    format!("{addr} non risponde"),
+                    format!("{addr} did not respond")
+                )
+            }
         }
-        say(&crate::tr!(format!("{addr} non risponde, cerco il telefono in rete..."), format!("{addr} did not respond; searching the network...")));
+        say(&crate::tr!(
+            format!("{addr} non risponde, cerco il telefono in rete..."),
+            format!("{addr} did not respond; searching the network...")
+        ));
     }
     if tried.is_empty() {
-        say(crate::tr!("Cerco il telefono in rete...", "Searching for the phone on the network..."));
+        say(crate::tr!(
+            "Cerco il telefono in rete...",
+            "Searching for the phone on the network..."
+        ));
     }
 
     // Bonjour, poi la scansione della rete (non dipende da Bonjour), poi Bonjour ancora una volta.
@@ -722,7 +1104,10 @@ pub async fn connect_auto(
     while step < 3 {
         let mut found = match step {
             1 => {
-                say(crate::tr!("Bonjour non risponde: cerco sulla rete locale...", "Bonjour did not respond; scanning the local network..."));
+                say(crate::tr!(
+                    "Bonjour non risponde: cerco sulla rete locale...",
+                    "Bonjour did not respond; scanning the local network..."
+                ));
                 scan_lan(port).await
             }
             _ => discover(Duration::from_secs(4)).await,
@@ -731,14 +1116,22 @@ pub async fn connect_auto(
         step += 1;
         for addr in found {
             tried.push(addr);
-            say(&crate::tr!(format!("Trovato un telefono a {addr}, provo..."), format!("Found an iPhone at {addr}; connecting...")));
+            say(&crate::tr!(
+                format!("Trovato un telefono a {addr}, provo..."),
+                format!("Found an iPhone at {addr}; connecting...")
+            ));
             match tokio::time::timeout(PER_TRY, connect(addr, pairing_path)).await {
                 Ok(Ok(link)) => {
                     write_last_addr(cache, addr);
                     return Ok((Via::Wifi(addr), link));
                 }
                 Ok(Err(e)) => last_err = e,
-                Err(_) => last_err = crate::tr!(format!("{addr} non risponde"), format!("{addr} did not respond")),
+                Err(_) => {
+                    last_err = crate::tr!(
+                        format!("{addr} non risponde"),
+                        format!("{addr} did not respond")
+                    )
+                }
             }
         }
     }
@@ -753,33 +1146,69 @@ pub async fn connect_auto(
     }
 }
 
-/// Crea il pairing remoto via USB, senza richieste sul telefono.
-/// Serve un usbmuxd raggiungibile via TCP in USBMUXD_SOCKET_ADDRESS
-/// (per esempio quello del Mac, inoltrato con un tunnel SSH).
+/// Crea il pairing remoto via USB senza sovrascrivere un pairing valido in caso di errore.
 pub async fn pair_usb(out: &str) -> Result<(), String> {
-    let var = std::env::var("USBMUXD_SOCKET_ADDRESS")
-        .map_err(|_| crate::tr!("manca USBMUXD_SOCKET_ADDRESS (ip:porta di un usbmuxd)", "USBMUXD_SOCKET_ADDRESS is missing (ip:port of usbmuxd)").to_string())?;
-    let sock: SocketAddr = var.parse().map_err(dbg)?;
-    let stream = TcpStream::connect(sock).await.map_err(dbg)?;
-    let mut mux = UsbmuxdConnection::new(Box::new(stream), 1);
-    let devs = mux.get_devices().await.map_err(dbg)?;
+    let _work = crate::altserver::phone_lock();
+    pair_usb_for(out, "").await
+}
+
+async fn pair_usb_for(out: &str, expected_udid: &str) -> Result<(), String> {
+    let addr = usbmuxd_addr()?;
+    let mut mux = tokio::time::timeout(Duration::from_secs(3), addr.connect(1))
+        .await
+        .map_err(|_| "Timed out connecting to usbmuxd.".to_string())?
+        .map_err(dbg)?;
+    let devs = tokio::time::timeout(Duration::from_secs(5), mux.get_devices())
+        .await
+        .map_err(|_| "Timed out looking for USB devices.".to_string())?
+        .map_err(dbg)?;
     let dev = devs
         .iter()
-        .find(|d| d.connection_type == Connection::Usb)
-        .ok_or(crate::tr!("nessun iPhone collegato via USB", "no iPhone connected via USB"))?;
-    let provider = dev.to_provider(UsbmuxdAddr::from_env_var().map_err(dbg)?, "altkeeper");
+        .find(|d| {
+            d.connection_type == Connection::Usb
+                && (expected_udid.is_empty() || d.udid == expected_udid)
+        })
+        .ok_or(crate::tr!(
+            "nessun iPhone collegato via USB",
+            "no iPhone connected via USB"
+        ))?;
+    let provider = dev.to_provider(addr, "altkeeper");
 
     let service = RemotePairingLockdownService::connect(&provider)
         .await
-        .map_err(dbg)?;
+        .map_err(|e| format!("Cannot start remote pairing. Unlock the iPhone, trust this computer, and try again: {e:?}"))?;
     let mut client = service.into_client(HOST_NAME).map_err(dbg)?;
     let mut pf = RpPairingFile::generate(HOST_NAME);
     // Su un canale USB già fidato non compare nessuna richiesta: il PIN non serve.
     client
         .connect(&mut pf, || async { "000000".to_string() })
         .await
-        .map_err(dbg)?;
-    pf.write_to_file(out).await.map_err(dbg)?;
+        .map_err(|e| format!("USB pairing failed. Unlock the iPhone and confirm that it trusts this computer: {e:?}"))?;
+    let output = Path::new(out);
+    let parent = output
+        .parent()
+        .filter(|p| !p.as_os_str().is_empty())
+        .unwrap_or(Path::new("."));
+    std::fs::create_dir_all(parent).map_err(dbg)?;
+    let name = output
+        .file_name()
+        .ok_or("Invalid pairing output path.")?
+        .to_string_lossy();
+    let temporary = parent.join(format!(".{name}.{}.tmp", std::process::id()));
+    crate::fsperm::write_private(&temporary, &[]).map_err(dbg)?;
+    if let Err(error) = pf.write_to_file(&temporary).await {
+        let _ = std::fs::remove_file(&temporary);
+        return Err(dbg(error));
+    }
+    if let Err(error) = crate::fsperm::restrict_file(&temporary) {
+        let _ = std::fs::remove_file(&temporary);
+        return Err(dbg(error));
+    }
+    if let Err(error) = std::fs::rename(&temporary, output) {
+        let _ = std::fs::remove_file(&temporary);
+        return Err(format!("Could not replace the pairing file: {error}"));
+    }
+    crate::fsperm::restrict_file(output).map_err(dbg)?;
     Ok(())
 }
 
@@ -822,6 +1251,32 @@ mod tests {
         assert!(e.starts_with("non trovo l'iPhone in rete"));
         assert!(e.contains("iOS 12"));
         assert!(e.contains("USB"));
+    }
+
+    #[test]
+    fn gli_indirizzi_salvati_sono_validati_e_deduplicati() {
+        let valid = vec![
+            "10.0.0.2:49152".to_string(),
+            "10.0.0.2:49152".to_string(),
+        ];
+        assert_eq!(
+            validate_addresses(&valid).unwrap(),
+            vec!["10.0.0.2:49152".parse().unwrap()]
+        );
+        assert!(validate_addresses(&[
+            "10.0.0.2:49152".into(),
+            "10.0.0.3:49152".into(),
+            "10.0.0.4:49152".into(),
+        ])
+        .is_err());
+        for invalid in [
+            "localhost:49152",
+            "0.0.0.0:49152",
+            "224.0.0.1:49152",
+            "10.0.0.2:0",
+        ] {
+            assert!(validate_addresses(&[invalid.into()]).is_err(), "{invalid}");
+        }
     }
 
     fn temp_file(name: &str) -> std::path::PathBuf {

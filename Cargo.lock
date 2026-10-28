@@ -75,10 +75,11 @@ dependencies = [
 
 [[package]]
 name = "altkeeper"
-version = "0.3.1"
+version = "0.4.0"
 dependencies = [
  "axum",
  "chrono",
+ "futures-util",
  "idevice",
  "isideload",
  "mdns-sd",
@@ -95,6 +96,7 @@ dependencies = [
  "tokio",
  "tracing-subscriber",
  "tray-icon",
+ "url",
  "windows-sys 0.61.2",
  "winreg",
  "winresource",

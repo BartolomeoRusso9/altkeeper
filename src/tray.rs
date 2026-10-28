@@ -16,12 +16,12 @@ use tao::platform::macos::{ActivationPolicy, EventLoopExtMacOS};
 #[cfg(windows)]
 use tao::platform::windows::EventLoopBuilderExtWindows;
 use tao::window::{Window, WindowBuilder};
-use tray_icon::menu::{CheckMenuItem, Menu, MenuEvent, MenuItem, PredefinedMenuItem};
+use tray_icon::menu::{CheckMenuItem, Menu, MenuEvent, MenuItem, PredefinedMenuItem, Submenu};
 use tray_icon::{Icon, MouseButton, TrayIcon, TrayIconBuilder, TrayIconEvent};
 #[cfg(windows)]
-use winreg::RegKey;
-#[cfg(windows)]
 use winreg::enums::HKEY_CURRENT_USER;
+#[cfg(windows)]
+use winreg::RegKey;
 use wry::{WebView, WebViewBuilder};
 
 #[cfg(windows)]
@@ -42,12 +42,25 @@ pub enum UserEvent {
     Tray(TrayIconEvent),
     Menu(MenuEvent),
     ServerFailed(String),
-    Status { reachable: bool, tip: String },
+    Status {
+        reachable: bool,
+        tip: String,
+    },
     Updates(Option<crate::update::Release>),
+    AutoPaired,
+    PairingDone(Result<(), String>),
     #[cfg_attr(not(windows), allow(dead_code))]
     Restart,
     #[cfg_attr(not(windows), allow(dead_code))]
     UpdateFailed(String),
+}
+
+static TRAY_PROXY: std::sync::OnceLock<EventLoopProxy<UserEvent>> = std::sync::OnceLock::new();
+
+pub fn notify_auto_pair() {
+    if let Some(proxy) = TRAY_PROXY.get() {
+        let _ = proxy.send_event(UserEvent::AutoPaired);
+    }
 }
 
 /// Aspetta (al massimo 20 s) che il processo `pid` finisca: dopo un aggiornamento la versione
@@ -56,7 +69,7 @@ pub enum UserEvent {
 pub fn wait_for_exit(pid: u32) {
     use windows_sys::Win32::Foundation::CloseHandle;
     use windows_sys::Win32::System::Threading::{
-        OpenProcess, PROCESS_SYNCHRONIZE, WaitForSingleObject,
+        OpenProcess, WaitForSingleObject, PROCESS_SYNCHRONIZE,
     };
     unsafe {
         let h = OpenProcess(PROCESS_SYNCHRONIZE, 0, pid);
@@ -78,7 +91,10 @@ fn check_updates(proxy: &EventLoopProxy<UserEvent>, manual: bool) {
     }
     if manual {
         match &latest {
-            Ok(None) => toast(&format!("AltKeeper {} is up to date.", env!("CARGO_PKG_VERSION"))),
+            Ok(None) => toast(&format!(
+                "AltKeeper {} is up to date.",
+                env!("CARGO_PKG_VERSION")
+            )),
             Err(e) => toast(&format!("Update check failed: {e}")),
             Ok(Some(_)) => {}
         }
@@ -97,11 +113,16 @@ pub fn hide_console() {
 
 #[cfg(windows)]
 pub fn message_box(text: &str) {
-    use windows_sys::Win32::UI::WindowsAndMessaging::{MB_ICONERROR, MB_OK, MessageBoxW};
+    use windows_sys::Win32::UI::WindowsAndMessaging::{MessageBoxW, MB_ICONERROR, MB_OK};
     let wide = |s: &str| s.encode_utf16().chain(Some(0)).collect::<Vec<u16>>();
     let (text, title) = (wide(text), wide("AltKeeper"));
     unsafe {
-        MessageBoxW(std::ptr::null_mut(), text.as_ptr(), title.as_ptr(), MB_OK | MB_ICONERROR);
+        MessageBoxW(
+            std::ptr::null_mut(),
+            text.as_ptr(),
+            title.as_ptr(),
+            MB_OK | MB_ICONERROR,
+        );
     }
 }
 
@@ -116,7 +137,10 @@ fn osascript(script: &str, text: &str) {
 
 #[cfg(target_os = "macos")]
 pub fn message_box(text: &str) {
-    osascript(r#"display alert "AltKeeper" message (item 1 of argv) as critical"#, text);
+    osascript(
+        r#"display alert "AltKeeper" message (item 1 of argv) as critical"#,
+        text,
+    );
 }
 
 /// Logo di AltKeeper (assets/logo.png) già ridotto in RGBA grezzo: a colori quando il telefono
@@ -132,7 +156,9 @@ pub fn logo(reachable: bool) -> Icon {
 
 #[cfg(windows)]
 fn run_key() -> io::Result<RegKey> {
-    RegKey::predef(HKEY_CURRENT_USER).create_subkey(RUN_KEY).map(|(k, _)| k)
+    RegKey::predef(HKEY_CURRENT_USER)
+        .create_subkey(RUN_KEY)
+        .map(|(k, _)| k)
 }
 
 #[cfg(windows)]
@@ -142,7 +168,9 @@ pub fn autostart_command(exe: &Path, dir: &Path) -> String {
 
 #[cfg(windows)]
 fn autostart_enabled_as(name: &str) -> bool {
-    run_key().and_then(|k| k.get_value::<String, _>(name)).is_ok()
+    run_key()
+        .and_then(|k| k.get_value::<String, _>(name))
+        .is_ok()
 }
 
 #[cfg(windows)]
@@ -164,7 +192,9 @@ fn agents_dir() -> PathBuf {
     if cfg!(test) {
         return std::env::temp_dir().join(format!("altkeeper-agents-{}", std::process::id()));
     }
-    let home = std::env::var_os("HOME").map(PathBuf::from).unwrap_or_default();
+    let home = std::env::var_os("HOME")
+        .map(PathBuf::from)
+        .unwrap_or_default();
     home.join("Library/LaunchAgents")
 }
 
@@ -175,7 +205,10 @@ fn agent_path(name: &str) -> PathBuf {
 
 #[cfg(target_os = "macos")]
 fn xml_escape(s: &str) -> String {
-    s.replace('&', "&amp;").replace('<', "&lt;").replace('>', "&gt;").replace('"', "&quot;")
+    s.replace('&', "&amp;")
+        .replace('<', "&lt;")
+        .replace('>', "&gt;")
+        .replace('"', "&quot;")
 }
 
 /// Il LaunchAgent che al login avvia `exe tray --dir dir`.
@@ -223,7 +256,9 @@ fn set_autostart_as(name: &str, on: bool, exe: &Path, dir: &Path) -> io::Result<
         };
     }
     if translocated(exe) {
-        return Err(io::Error::other("move AltKeeper.app to the Applications folder first"));
+        return Err(io::Error::other(
+            "move AltKeeper.app to the Applications folder first",
+        ));
     }
     std::fs::create_dir_all(agents_dir())?;
     std::fs::write(&path, launch_agent(name, exe, dir))
@@ -251,7 +286,11 @@ pub fn summary(days: &[i64]) -> String {
         return "AltKeeper: no apps".into();
     };
     let n = days.len();
-    let apps = if n == 1 { "1 app".to_string() } else { format!("{n} apps") };
+    let apps = if n == 1 {
+        "1 app".to_string()
+    } else {
+        format!("{n} apps")
+    };
     let next = match min {
         ..0 => "one has expired".to_string(),
         0 => "one expires today".to_string(),
@@ -286,7 +325,9 @@ pub fn notes(lines: &[String]) -> Vec<Note> {
             }
         } else if matches!(
             msg,
-            "[altserver] app installed" | "[altserver] app installata" | "[web] Installation completed."
+            "[altserver] app installed"
+                | "[altserver] app installata"
+                | "[web] Installation completed."
         ) {
             out.push(Note::Installed);
         } else if let Some(e) = msg
@@ -308,7 +349,9 @@ pub struct FailGate {
 
 impl FailGate {
     pub fn allow(&mut self, now: Instant) -> bool {
-        let ok = self.last.is_none_or(|t| now.duration_since(t) >= Duration::from_secs(600));
+        let ok = self
+            .last
+            .is_none_or(|t| now.duration_since(t) >= Duration::from_secs(600));
         if ok {
             self.last = Some(now);
         }
@@ -319,12 +362,18 @@ impl FailGate {
 #[cfg(windows)]
 fn toast(text: &str) {
     use tauri_winrt_notification::Toast;
-    let _ = Toast::new(Toast::POWERSHELL_APP_ID).title("AltKeeper").text1(text).show();
+    let _ = Toast::new(Toast::POWERSHELL_APP_ID)
+        .title("AltKeeper")
+        .text1(text)
+        .show();
 }
 
 #[cfg(target_os = "macos")]
 fn toast(text: &str) {
-    osascript(r#"display notification (item 1 of argv) with title "AltKeeper""#, text);
+    osascript(
+        r#"display notification (item 1 of argv) with title "AltKeeper""#,
+        text,
+    );
 }
 
 /// Apre un indirizzo nel browser predefinito.
@@ -375,7 +424,10 @@ fn watch_state(addr: SocketAddr, proxy: EventLoopProxy<UserEvent>) {
                 .as_array()
                 .map(|a| a.iter().filter_map(|x| x["days"].as_i64()).collect())
                 .unwrap_or_default();
-            let _ = proxy.send_event(UserEvent::Status { reachable, tip: summary(&days) });
+            let _ = proxy.send_event(UserEvent::Status {
+                reachable,
+                tip: summary(&days),
+            });
         }
         // Il primo controllo del telefono parte con la prima richiesta: si riguarda presto.
         std::thread::sleep(Duration::from_secs(if round == 0 { 60 } else { 300 }));
@@ -431,7 +483,10 @@ fn app_menu() -> Menu {
     let app = Submenu::with_items(
         "AltKeeper",
         true,
-        &[&PredefinedMenuItem::hide(None), &PredefinedMenuItem::close_window(None)],
+        &[
+            &PredefinedMenuItem::hide(None),
+            &PredefinedMenuItem::close_window(None),
+        ],
     );
     let edit = Submenu::with_items(
         "Edit",
@@ -467,7 +522,9 @@ fn build_tray(menu: &Menu) -> TrayIcon {
     };
     (0..30)
         .find_map(|_| {
-            build().map_err(|_| std::thread::sleep(Duration::from_secs(2))).ok()
+            build()
+                .map_err(|_| std::thread::sleep(Duration::from_secs(2)))
+                .ok()
         })
         .unwrap_or_else(|| {
             message_box("AltKeeper cannot create its tray icon. Start it again.");
@@ -491,6 +548,7 @@ pub fn run(bind: SocketAddr, dir: &Path, start: impl FnOnce(EventLoopProxy<UserE
     #[cfg(target_os = "macos")]
     event_loop.set_activation_policy(ActivationPolicy::Accessory);
     let proxy = event_loop.create_proxy();
+    let _ = TRAY_PROXY.set(proxy.clone());
     let p = proxy.clone();
     TrayIconEvent::set_event_handler(Some(move |e| {
         let _ = p.send_event(UserEvent::Tray(e));
@@ -511,6 +569,32 @@ pub fn run(bind: SocketAddr, dir: &Path, start: impl FnOnce(EventLoopProxy<UserE
     let logs = MenuItem::new("Show logs", true, None);
     let autostart =
         CheckMenuItem::new(AUTOSTART_LABEL, true, autostart_enabled_as(RUN_VALUE), None);
+    let pair_usb = MenuItem::new("Pair iPhone over USB", true, None);
+    let anisette_choice = crate::apple::anisette_choice(dir);
+    let anisette_locked = crate::env::var("ANISETTE_URL").is_some()
+        || anisette_choice.as_ref().is_ok_and(|choice| choice.locked);
+    let anisette_url = anisette_choice
+        .as_ref()
+        .map(|choice| choice.url.as_str())
+        .unwrap_or("");
+    if let Err(error) = &anisette_choice {
+        crate::log::err(&format!("[tray] cannot read anisette server: {error}"));
+    }
+    let ani_default = CheckMenuItem::new(
+        "ani3.stikstore.app (default)",
+        !anisette_locked,
+        anisette_url == crate::apple::DEFAULT_ANISETTE_URL,
+        None,
+    );
+    let ani_isideload = CheckMenuItem::new(
+        "isideload public server",
+        !anisette_locked,
+        anisette_url == crate::apple::ISIDELOAD_ANISETTE_URL,
+        None,
+    );
+    let ani_other = MenuItem::new("Other…", !anisette_locked, None);
+    let anisette_menu = Submenu::new("Anisette server", true);
+    let _ = anisette_menu.append_items(&[&ani_default, &ani_isideload, &ani_other]);
     let check = MenuItem::new("Check for updates", true, None);
     let update_now = MenuItem::new("Up to date", false, None);
     let quit = MenuItem::new("Quit", true, None);
@@ -518,6 +602,9 @@ pub fn run(bind: SocketAddr, dir: &Path, start: impl FnOnce(EventLoopProxy<UserE
     let _ = menu.append_items(&[
         &open,
         &logs,
+        &PredefinedMenuItem::separator(),
+        &pair_usb,
+        &anisette_menu,
         &PredefinedMenuItem::separator(),
         &autostart,
         &check,
@@ -531,6 +618,7 @@ pub fn run(bind: SocketAddr, dir: &Path, start: impl FnOnce(EventLoopProxy<UserE
     let mut tray: Option<TrayIcon> = None;
 
     std::thread::spawn(watch_log);
+    crate::phone::start_auto_pair_monitor();
     let p = proxy.clone();
     std::thread::spawn(move || watch_state(bind, p));
     let p = proxy.clone();
@@ -566,6 +654,40 @@ pub fn run(bind: SocketAddr, dir: &Path, start: impl FnOnce(EventLoopProxy<UserE
                     show(&mut slot, target, &url);
                 } else if e.id == logs.id() {
                     show(&mut slot, target, &format!("{url}#logs"));
+                } else if e.id == pair_usb.id() {
+                    if Path::new(crate::PAIRING_FILE).exists() {
+                        show(&mut slot, target, &format!("{url}#pairing"));
+                    } else {
+                        let p = check_proxy.clone();
+                        std::thread::spawn(move || {
+                            let result = tokio::runtime::Builder::new_current_thread()
+                                .enable_all()
+                                .build()
+                                .map_err(|error| error.to_string())
+                                .and_then(|runtime| {
+                                    runtime.block_on(crate::phone::pair_usb(crate::PAIRING_FILE))
+                                });
+                            let _ = p.send_event(UserEvent::PairingDone(result));
+                        });
+                    }
+                } else if e.id == ani_default.id() || e.id == ani_isideload.id() {
+                    let selected = if e.id == ani_default.id() {
+                        crate::apple::DEFAULT_ANISETTE_URL
+                    } else {
+                        crate::apple::ISIDELOAD_ANISETTE_URL
+                    };
+                    match crate::apple::save_anisette_choice(&dir, Some(selected)) {
+                        Ok(_) => {
+                            let _ = ani_default.set_checked(selected == crate::apple::DEFAULT_ANISETTE_URL);
+                            let _ = ani_isideload.set_checked(selected == crate::apple::ISIDELOAD_ANISETTE_URL);
+                            if let Ok(handle) = tokio::runtime::Handle::try_current() {
+                                handle.spawn(crate::altserver::clear_anisette_cache());
+                            }
+                        }
+                        Err(error) => crate::log::err(&format!("[tray] cannot change anisette server: {error}")),
+                    }
+                } else if e.id == ani_other.id() {
+                    show(&mut slot, target, &format!("{url}#anisette"));
                 } else if e.id == autostart.id() {
                     let on = autostart.is_checked();
                     if let Err(err) = set_autostart_as(RUN_VALUE, on, &exe, &dir) {
@@ -608,6 +730,14 @@ pub fn run(bind: SocketAddr, dir: &Path, start: impl FnOnce(EventLoopProxy<UserE
                     let _ = tray.set_tooltip(Some(tip));
                 }
             }
+            Event::UserEvent(UserEvent::AutoPaired) => toast("iPhone paired over USB."),
+            Event::UserEvent(UserEvent::PairingDone(result)) => match result {
+                Ok(()) => toast("iPhone paired over USB."),
+                Err(error) => {
+                    crate::log::err(&format!("[tray] USB pairing failed: {error}"));
+                    toast(&format!("USB pairing failed: {error}"));
+                }
+            },
             Event::UserEvent(UserEvent::Updates(latest)) if !staging => {
                 if let Some(r) = &latest {
                     if cfg!(windows) {
@@ -696,7 +826,10 @@ mod tests {
     fn summary_text() {
         assert_eq!(summary(&[]), "AltKeeper: no apps");
         assert_eq!(summary(&[1]), "AltKeeper: 1 app, next expiry in 1 day");
-        assert_eq!(summary(&[6, 4, 5]), "AltKeeper: 3 apps, next expiry in 4 days");
+        assert_eq!(
+            summary(&[6, 4, 5]),
+            "AltKeeper: 3 apps, next expiry in 4 days"
+        );
         assert_eq!(summary(&[0, 3]), "AltKeeper: 2 apps, one expires today");
         assert_eq!(summary(&[-2]), "AltKeeper: 1 app, one has expired");
     }
@@ -754,8 +887,14 @@ mod tests {
     #[cfg(windows)]
     #[test]
     fn autostart_command_is_quoted() {
-        let cmd = autostart_command(Path::new(r"C:\Alt Keeper\altkeeper.exe"), Path::new(r"C:\Alt Keeper"));
-        assert_eq!(cmd, r#""C:\Alt Keeper\altkeeper.exe" tray --dir "C:\Alt Keeper""#);
+        let cmd = autostart_command(
+            Path::new(r"C:\Alt Keeper\altkeeper.exe"),
+            Path::new(r"C:\Alt Keeper"),
+        );
+        assert_eq!(
+            cmd,
+            r#""C:\Alt Keeper\altkeeper.exe" tray --dir "C:\Alt Keeper""#
+        );
     }
 
     #[cfg(target_os = "macos")]
@@ -774,7 +913,13 @@ mod tests {
         ));
         assert!(plist.contains("<key>RunAtLoad</key>\n  <true/>"));
         let parsed: plist::Value = plist::from_bytes(plist.as_bytes()).unwrap();
-        assert_eq!(parsed.as_dictionary().unwrap()["ProgramArguments"].as_array().unwrap().len(), 4);
+        assert_eq!(
+            parsed.as_dictionary().unwrap()["ProgramArguments"]
+                .as_array()
+                .unwrap()
+                .len(),
+            4
+        );
     }
 
     #[cfg(target_os = "macos")]
@@ -782,7 +927,9 @@ mod tests {
     fn translocated_app_is_not_started_at_login() {
         // Un nome suo: i test girano in parallelo e `autostart_roundtrip...` attiva TEST_VALUE.
         const NAME: &str = "io.github.altkeeper.test-translocated";
-        let exe = Path::new("/private/var/folders/x/AppTranslocation/ABC/d/AltKeeper.app/Contents/MacOS/altkeeper");
+        let exe = Path::new(
+            "/private/var/folders/x/AppTranslocation/ABC/d/AltKeeper.app/Contents/MacOS/altkeeper",
+        );
         assert!(set_autostart_as(NAME, true, exe, Path::new("/tmp")).is_err());
         assert!(!autostart_enabled_as(NAME));
         let d = temp_dir("translocated");

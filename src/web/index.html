@@ -123,7 +123,7 @@
     max-height: 240px; overflow-y: auto; margin: 10px 0 0; white-space: pre-wrap; word-break: break-word;
   }
   .hist .ico { width: 1.4em; display: inline-block; }
-  pre.logs { max-height: 60vh; white-space: pre; }
+  pre.logs { max-height: 60vh; white-space: pre-wrap; overflow-wrap: anywhere; }
   .quotas-row { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; }
   .quota-badge {
     display: inline-flex; align-items: center; padding: 3px 10px;
@@ -141,8 +141,11 @@
   <h1>AltKeeper</h1>
   <p class="sub" data-i18n="Keeps your iPhone apps alive by renewing their profiles.">Keeps your iPhone apps alive by renewing their profiles.</p>
 
+  <div id="pairing">
   <div class="banner bad" id="no-pairing" hidden>
-    <span data-i18n="iPhone pairing is missing">iPhone pairing is missing</span> (<code>rp-pairing.plist</code>). <span data-i18n="Set it up once with a USB cable: follow the guide in the README.">Set it up once with a USB cable: follow the guide in the README.</span>
+    <span data-i18n="iPhone pairing is missing">iPhone pairing is missing</span> (<code>rp-pairing.plist</code>). <span data-i18n="Pair it over USB.">Pair it over USB.</span>
+    <button id="btn-pair-usb-banner" type="button" data-i18n="Pair iPhone over USB">Pair iPhone over USB</button>
+  </div>
   </div>
 
   <section class="card" aria-live="polite">
@@ -153,6 +156,24 @@
       <button id="btn-check" type="button" data-i18n="Check again">Check again</button>
     </div>
     <div class="banner bad" id="phone-error" hidden></div>
+    <div class="row action-row" style="margin-top:10px">
+      <button id="btn-pair-usb" type="button" data-i18n="Pair iPhone over USB">Pair iPhone over USB</button>
+    </div>
+    <label class="check" for="auto-pair-enabled">
+      <input id="auto-pair-enabled" type="checkbox">
+      <span data-i18n="Pair automatically when a new iPhone connects over USB">Pair automatically when a new iPhone connects over USB</span>
+    </label>
+    <details style="margin-top:12px">
+      <summary data-i18n="Connection addresses">Connection addresses</summary>
+      <label for="phone-addresses" data-i18n="Saved iPhone addresses (optional)">Saved iPhone addresses (optional)</label>
+      <textarea id="phone-addresses" rows="2" spellcheck="false" autocapitalize="off" autocomplete="off" placeholder="10.7.0.2:49152" style="width:100%;max-width:100%;box-sizing:border-box;font:inherit;padding:10px;border:1px solid var(--line);border-radius:8px;background:var(--bg);color:var(--text)"></textarea>
+      <p class="muted" data-i18n="Save up to two IP:port addresses, one per line, such as your home and VPN addresses.">Save up to two IP:port addresses, one per line, such as your home and VPN addresses.</p>
+      <div class="row action-row">
+        <button id="phone-addresses-save" type="button" data-i18n="Save addresses">Save addresses</button>
+      </div>
+      <div class="banner good" id="phone-addresses-message" role="status" aria-live="polite" hidden></div>
+      <div class="banner bad" id="phone-addresses-error" hidden></div>
+    </details>
   </section>
 
   <section class="card">
@@ -175,6 +196,7 @@
     <div id="app-job-slot">
       <div id="job" hidden>
         <div class="banner" id="job-status"></div>
+        <button id="btn-cancel-wait" type="button" data-i18n="Cancel waiting" hidden>Cancel waiting</button>
         <pre class="log" id="job-log"></pre>
       </div>
     </div>
@@ -208,6 +230,7 @@
     </div>
     <div class="banner bad" id="auto-error" hidden></div>
     <div class="divider"></div>
+    <div id="anisette">
     <label for="discord-webhook" data-i18n="Discord failure notifications">Discord failure notifications</label>
     <div class="row">
       <span class="pill" id="discord-pill" data-i18n="Not configured">Not configured</span>
@@ -221,6 +244,27 @@
     </div>
     <div class="banner bad" id="discord-error" hidden></div>
     <div class="banner" id="discord-test-result" role="status" aria-live="polite" hidden></div>
+    <div class="divider"></div>
+    <h2 data-i18n="Anisette server">Anisette server</h2>
+    <p class="muted" data-i18n="Choose the server used for Apple authentication and AltStore.">Choose the server used for Apple authentication and AltStore.</p>
+    <div class="row">
+      <select id="anisette-server" aria-label="Anisette server">
+        <option value="https://ani3.stikstore.app">ani3.stikstore.app (default)</option>
+        <option value="https://ani.jkcoxson.com">isideload public server</option>
+        <option value="custom">Custom URL</option>
+      </select>
+    </div>
+    <label for="anisette-custom" data-i18n="Custom anisette URL">Custom anisette URL</label>
+    <input type="url" id="anisette-custom" placeholder="https://your-anisette-server">
+    <div class="row action-row" style="margin-top:10px">
+      <button id="anisette-save" type="button" data-i18n="Save server">Save server</button>
+      <button id="anisette-clear" type="button" data-i18n="Restore default">Restore default</button>
+      <button id="anisette-test" type="button" data-i18n="Test server">Test server</button>
+    </div>
+    <div class="muted" id="anisette-source"></div>
+    <div class="banner bad" id="anisette-error" hidden></div>
+    <div class="banner" id="anisette-test-result" role="status" aria-live="polite" hidden></div>
+    </div>
   </section>
 
   <section class="card">
@@ -321,6 +365,7 @@
       <button id="btn-logs-clear" type="button" data-i18n="Clear view">Clear view</button>
     </div>
     <pre class="log logs" id="logs-view"></pre>
+    <div class="banner good" id="logs-message" role="status" aria-live="polite" hidden></div>
   </section>
 
   <footer data-i18n="For use on your home network only.">For use on your home network only.</footer>
@@ -336,6 +381,9 @@ let pendingInstall = null;
 let expandedApps = new Set(), expandedProfiles = new Set(), showPreview = false;
 let autoDraftDirty = false, autoSavePending = false;
 let refreshInFlight = false, refreshQueued = false;
+let phoneAddressDraftDirty = false;
+let logsPollTimer = null;
+let anisetteTestRunning = false;
 
 async function api(path, body, signal) {
   const opt = body === undefined ? {} : {
@@ -424,6 +472,28 @@ function banner(id, text, cls) {
 function render(s) {
   state = s;
   show("no-pairing", !s.pairing);
+  $("btn-pair-usb").disabled = !!s.busy;
+  $("btn-pair-usb-banner").disabled = !!s.busy;
+  $("auto-pair-enabled").checked = !!s.auto_pair?.enabled;
+  $("auto-pair-enabled").disabled = !!s.auto_pair?.locked;
+  if (!phoneAddressDraftDirty) {
+    $("phone-addresses").value = (s.phone_addresses?.addresses || []).join("\n");
+  }
+  banner("phone-addresses-error", s.phone_addresses?.error || "", "bad");
+  $("btn-cancel-wait").hidden = !(s.job.running && s.job.waiting_for_phone);
+  $("btn-cancel-wait").disabled = !!s.job.cancel_requested;
+
+  const anisette = s.anisette || {};
+  const select = $("anisette-server");
+  const knownAnisette = ["https://ani3.stikstore.app", "https://ani.jkcoxson.com"];
+  select.value = knownAnisette.includes(anisette.url) ? anisette.url : "custom";
+  $("anisette-custom").value = select.value === "custom" ? (anisette.url || "") : "";
+  $("anisette-source").textContent = anisette.error
+    ? anisette.error
+    : "Using " + (anisette.url || "unknown") + " (" + (anisette.source || "unknown") + ").";
+  for (const id of ["anisette-server", "anisette-custom", "anisette-save", "anisette-clear", "anisette-test"]) {
+    $(id).disabled = !!s.busy || !!anisette.locked || (id === "anisette-test" && anisetteTestRunning);
+  }
 
   // iPhone
   const pill = $("phone-pill"), p = s.phone;
@@ -632,14 +702,18 @@ function render(s) {
     const st = $("job-status");
     if (job.running) {
       st.className = "banner";
-      st.textContent = job.kind === "install"
+      st.textContent = job.waiting_for_phone
+        ? job.cancel_requested ? t("Stopping the wait…") : t("Waiting for iPhone response. Unlock it and keep it awake; you can cancel this wait.")
+        : job.kind === "pair_usb" ? t("Pairing iPhone over USB…")
+        : job.kind === "install"
         ? t("Signing and installing the app. Keep this page open until it finishes…")
         : job.kind === "remove_profile"
         ? t("Backing up and deleting the selected profile…")
         : job.kind === "restore_profile" ? t("Restoring the selected profile…")
         : t("Renewal in progress. Keep this page open until it finishes…");
     }
-    else if (job.ok) { st.className = "banner good"; st.textContent = job.kind === "install" ? t("App installed.") : job.kind === "remove_profile" ? t("Profile removed and backed up.") : job.kind === "restore_profile" ? t("Profile restored.") : t("Done."); }
+    else if (job.canceled) { st.className = "banner"; st.textContent = t("Waiting canceled."); }
+    else if (job.ok) { st.className = "banner good"; st.textContent = job.kind === "install" ? t("App installed.") : job.kind === "remove_profile" ? t("Profile removed and backed up.") : job.kind === "restore_profile" ? t("Profile restored.") : job.kind === "pair_usb" ? t("iPhone paired over USB.") : t("Done."); }
     else { st.className = "banner bad"; st.textContent = t("It did not complete successfully. Check the last line."); }
     const log = $("job-log");
     const atEnd = log.scrollTop + log.clientHeight >= log.scrollHeight - 8;
@@ -690,7 +764,8 @@ async function refresh() {
     if (!refreshQueued) {
       render(latest);
       fast = latest.busy || latest.phone.checking || latest.login.phase === "working" ||
-             latest.login.phase === "needs_code" || latest.job.running;
+             latest.login.phase === "needs_code" || latest.job.running ||
+             (!latest.pairing && latest.auto_pair?.enabled);
     }
   } catch (e) {
     if (!refreshQueued) banner("phone-error", t("Cannot reach the server: ") + e.message, "bad");
@@ -749,6 +824,63 @@ $("discord-test").onclick = async () => {
   } catch (e) {
     banner("discord-test-result", e.message, "bad");
   } finally {
+    refresh();
+  }
+};
+
+for (const id of ["phone-addresses"]) {
+  $(id).addEventListener("input", () => { phoneAddressDraftDirty = true; });
+}
+$("phone-addresses-save").onclick = () => {
+  banner("phone-addresses-error", "");
+  banner("phone-addresses-message", "");
+  const addresses = $("phone-addresses").value.split(/\r?\n/).map(x => x.trim()).filter(Boolean);
+  act(async () => {
+    const saved = await api("/api/phone-addresses", {addresses});
+    phoneAddressDraftDirty = false;
+    $("phone-addresses").value = saved.addresses.join("\n");
+    banner("phone-addresses-message", t("Addresses saved."), "good");
+  }, "phone-addresses-error");
+};
+
+function requestUsbPairing() {
+  if (state?.pairing && !confirm(t("A pairing file already exists. Replace it with a new USB pairing?"))) return;
+  act(() => api("/api/pair-usb", {}));
+}
+$("btn-pair-usb").onclick = requestUsbPairing;
+$("btn-pair-usb-banner").onclick = requestUsbPairing;
+$("btn-cancel-wait").onclick = () => act(() => api("/api/renew/cancel-wait", {}));
+$("auto-pair-enabled").onchange = () => {
+  const enabled = $("auto-pair-enabled").checked;
+  act(() => api("/api/auto-pair", {enabled}));
+};
+
+$("anisette-server").onchange = () => {
+  $("anisette-custom").disabled = $("anisette-server").value !== "custom" || !!state?.anisette?.locked;
+};
+$("anisette-save").onclick = () => {
+  banner("anisette-error", "");
+  const selected = $("anisette-server").value;
+  const url = selected === "custom" ? $("anisette-custom").value.trim() : selected;
+  if (!url) return banner("anisette-error", t("Enter a complete HTTP or HTTPS anisette URL."), "bad");
+  act(() => api("/api/anisette", {url}), "anisette-error");
+};
+$("anisette-clear").onclick = () => {
+  if (confirm(t("Restore the default anisette server?"))) {
+    act(() => api("/api/anisette", {clear:true}), "anisette-error");
+  }
+};
+$("anisette-test").onclick = async () => {
+  banner("anisette-test-result", "");
+  anisetteTestRunning = true;
+  $("anisette-test").disabled = true;
+  try {
+    await api("/api/anisette/test", {});
+    banner("anisette-test-result", t("Anisette server test succeeded."), "good");
+  } catch (error) {
+    banner("anisette-test-result", error.message, "bad");
+  } finally {
+    anisetteTestRunning = false;
     refresh();
   }
 };
@@ -891,9 +1023,14 @@ $("btn-resend").onclick = () => act(() => api("/api/login/resend", {}), "code-er
 // Logs: only new lines are fetched; the view keeps the last 2,000.
 let logSeq = 0;
 async function pollLogs() {
+  if (document.hidden) return;
+  if (logsPollTimer) clearTimeout(logsPollTimer);
+  const controller = new AbortController();
+  const timeout = setTimeout(() => controller.abort(), 10000);
   try {
-    let r = await api("/api/logs?since=" + logSeq);
-    if (r.seq < logSeq) r = await api("/api/logs?since=0");
+    let r = await api("/api/logs?since=" + logSeq, undefined, controller.signal);
+    if (r.seq < logSeq) r = await api("/api/logs?since=0", undefined, controller.signal);
+    banner("logs-message", "");
     if (r.lines.length) {
       const v = $("logs-view");
       const atEnd = v.scrollTop + v.clientHeight >= v.scrollHeight - 4;
@@ -902,16 +1039,46 @@ async function pollLogs() {
       if (atEnd) v.scrollTop = v.scrollHeight;
     }
     logSeq = r.seq;
-  } catch (_) {}
-  setTimeout(pollLogs, 2000);
+  } catch (error) {
+    banner("logs-message", t("Could not load logs: ") + error.message, "bad");
+  } finally {
+    clearTimeout(timeout);
+    if (!document.hidden) logsPollTimer = setTimeout(pollLogs, 2000);
+  }
 }
-$("btn-logs-copy").onclick = () => navigator.clipboard.writeText($("logs-view").textContent);
+$("btn-logs-copy").onclick = async () => {
+  const text = $("logs-view").textContent;
+  try {
+    if (navigator.clipboard?.writeText) await navigator.clipboard.writeText(text);
+    else throw new Error("Clipboard API unavailable");
+    banner("logs-message", t("Logs copied."), "good");
+  } catch (_) {
+    const area = document.createElement("textarea");
+    area.value = text;
+    area.style.position = "fixed";
+    area.style.opacity = "0";
+    document.body.append(area);
+    area.select();
+    const copied = document.execCommand("copy");
+    area.remove();
+    banner("logs-message", copied ? t("Logs copied.") : t("Could not copy logs; select and copy them manually."),
+      copied ? "good" : "bad");
+  }
+};
 $("btn-logs-clear").onclick = () => { $("logs-view").textContent = ""; };
 
 refresh();
 pollLogs();
+document.addEventListener("visibilitychange", () => {
+  if (document.hidden) {
+    clearTimeout(logsPollTimer);
+  } else {
+    pollLogs();
+  }
+});
 if (location.hash === "#logs") $("logs").scrollIntoView();
+if (location.hash === "#anisette") $("anisette").scrollIntoView();
+if (location.hash === "#pairing") $("pairing").scrollIntoView();
 </script>
 </body>
 </html>
-

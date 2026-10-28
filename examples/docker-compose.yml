@@ -14,10 +14,13 @@ services:
     working_dir: /data
     volumes:
       - /srv/altkeeper:/data
+      # Optional: required for USB access and automatic pairing inside the container.
+      # - /var/run/usbmuxd:/var/run/usbmuxd
     environment:
       - TZ=Europe/Rome
       # - ALTKEEPER_LANG=en
       - ALTKEEPER_WEB_PIN=${ALTKEEPER_WEB_PIN:?imposta ALTKEEPER_WEB_PIN in .env}
+      # - ALTKEEPER_NO_AUTO_PAIR=1
     command: ["serve", "--bind", "0.0.0.0:8787", "--altserver"]
     logging:
       driver: json-file
