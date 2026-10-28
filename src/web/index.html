@@ -311,11 +311,12 @@
       <select id="anisette-server" aria-label="Anisette server">
         <option value="https://ani3.stikstore.app">ani3.stikstore.app (default)</option>
         <option value="https://ani.jkcoxson.com">isideload public server</option>
+        <option value="http://127.0.0.1:8788">AltKeeper local server (127.0.0.1:8788)</option>
         <option value="custom">Custom URL</option>
       </select>
     </div>
     <label for="anisette-custom" data-i18n="Custom anisette URL">Custom anisette URL</label>
-    <input type="url" id="anisette-custom" placeholder="https://your-anisette-server">
+    <input type="url" id="anisette-custom" placeholder="http://192.168.1.50:8788">
     <div class="row action-row" style="margin-top:10px">
       <button id="anisette-save" type="button" data-i18n="Save server">Save server</button>
       <button id="anisette-clear" type="button" data-i18n="Restore default">Restore default</button>
@@ -577,7 +578,7 @@ function render(s) {
 
   const anisette = s.anisette || {};
   const select = $("anisette-server");
-  const knownAnisette = ["https://ani3.stikstore.app", "https://ani.jkcoxson.com"];
+  const knownAnisette = ["https://ani3.stikstore.app", "https://ani.jkcoxson.com", "http://127.0.0.1:8788"];
   if (anisetteDraftDirty && anisetteSavePending && anisette.url === anisettePendingUrl) {
     anisetteDraftDirty = false;
     anisetteSavePending = false;

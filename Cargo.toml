@@ -9,7 +9,7 @@ readme = "README.md"
 
 [dependencies]
 chrono = { version = "0.4", default-features = false, features = ["clock"] }
-axum = { version = "0.8.9", default-features = false, features = ["http1", "tokio", "json", "multipart"] }
+axum = { version = "0.8.9", default-features = false, features = ["http1", "tokio", "json", "multipart", "ws"] }
 idevice = { version = "0.1.68", default-features = false, features = [
   "ring",
   "remote_pairing",
@@ -52,10 +52,16 @@ winresource = "0.1"
 # Icona nella barra di sistema (Windows) o nella barra dei menu (macOS), con la finestra della pagina.
 [target.'cfg(any(windows, target_os = "macos"))'.dependencies]
 tao = "0.37"
-sha2 = "0.10"
 reqwest = { version = "0.13", default-features = false, features = ["blocking", "json", "rustls-no-provider"] }
 tray-icon = "0.26"
 wry = "0.57"
+
+[target.'cfg(any(target_os = "linux", target_os = "macos", windows))'.dependencies]
+base64 = "0.21"
+hex = "0.4"
+omnisette = { git = "https://github.com/SideStore/apple-private-apis.git", rev = "03beb1aa42991ccdad6214dee77e72282bef461f", version = "0.1.0", default-features = false, features = ["async", "remote-anisette"] }
+sha2 = "0.10"
+uuid = "1"
 
 [target.'cfg(windows)'.dependencies]
 tauri-winrt-notification = "0.8"
@@ -67,6 +73,9 @@ windows-sys = { version = "0.61", features = ["Win32_Foundation", "Win32_System_
 # le impostazioni di trasporto HTTP/1.1 portate dalla vecchia copia 0.3.17.
 [patch.crates-io]
 isideload = { path = "vendor/isideload" }
+
+[patch."https://github.com/SideStore/apple-private-apis.git"]
+omnisette = { path = "vendor/omnisette" }
 
 [profile.release]
 opt-level = "s"

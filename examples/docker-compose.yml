@@ -14,6 +14,8 @@ services:
     working_dir: /data
     volumes:
       - /srv/altkeeper:/data
+      # For the local Anisette engine, place the supplied libraries under this read-only mount:
+      # - /srv/anisette-libraries:/data/anisette-libraries:ro
       # Optional: required for USB access and automatic pairing inside the container.
       # - /var/run/usbmuxd:/var/run/usbmuxd
     environment:
@@ -21,6 +23,7 @@ services:
       # - ALTKEEPER_LANG=en
       - ALTKEEPER_WEB_PIN=${ALTKEEPER_WEB_PIN:?imposta ALTKEEPER_WEB_PIN in .env}
       # - ALTKEEPER_NO_AUTO_PAIR=1
+    # Add "--anisette-bind", "0.0.0.0:8788" only when intentionally hosting local Anisette.
     command: ["serve", "--bind", "0.0.0.0:8787", "--altserver"]
     logging:
       driver: json-file

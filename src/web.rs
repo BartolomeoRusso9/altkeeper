@@ -930,6 +930,13 @@ fn json_ok() -> (StatusCode, Json<Value>) {
     (StatusCode::OK, Json(json!({ "ok": true })))
 }
 
+fn json_job_accepted(job: &str) -> (StatusCode, Json<Value>) {
+    (
+        StatusCode::ACCEPTED,
+        Json(json!({ "ok": true, "job": job })),
+    )
+}
+
 const BUSY_MSG: &str = "Another operation is already running: please wait for it to finish.";
 
 /// Le righe di log dopo `?since=N` (0 = tutte quelle in memoria), per la sezione Logs.
@@ -1092,7 +1099,7 @@ async fn load_jit_apps(State(app): State<Arc<App>>) -> (StatusCode, Json<Value>)
         ok: None,
     };
     spawn_job(guard, run_load_jit_apps);
-    json_ok()
+    json_job_accepted("jit_apps")
 }
 
 async fn run_load_jit_apps(app: Arc<App>) {
@@ -1166,7 +1173,7 @@ async fn enable_jit(
         ok: None,
     };
     spawn_job(guard, move |app| run_enable_jit(app, req.pid));
-    json_ok()
+    json_job_accepted("jit_enable")
 }
 
 async fn run_enable_jit(app: Arc<App>, pid: u32) {

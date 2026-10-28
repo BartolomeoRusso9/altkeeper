@@ -18,8 +18,8 @@ root=$(cd "$(dirname "$0")/.." && pwd)
 app="$out/AltKeeper.app"
 rm -rf "$app"
 mkdir -p "$app/Contents/MacOS" "$app/Contents/Resources"
-cp "$bin" "$app/Contents/MacOS/altkeeper"
-chmod +x "$app/Contents/MacOS/altkeeper"
+cp "$bin" "$app/Contents/MacOS/AltKeeper"
+chmod +x "$app/Contents/MacOS/AltKeeper"
 
 # Icona .icns dal logo (256x256).
 iconset=$(mktemp -d)/AltKeeper.iconset
@@ -43,7 +43,7 @@ cat > "$app/Contents/Info.plist" <<PLIST
   <key>CFBundleName</key><string>AltKeeper</string>
   <key>CFBundleDisplayName</key><string>AltKeeper</string>
   <key>CFBundleIdentifier</key><string>io.github.altkeeper</string>
-  <key>CFBundleExecutable</key><string>altkeeper</string>
+  <key>CFBundleExecutable</key><string>AltKeeper</string>
   <key>CFBundleIconFile</key><string>AltKeeper</string>
   <key>CFBundlePackageType</key><string>APPL</string>
   <key>CFBundleInfoDictionaryVersion</key><string>6.0</string>
