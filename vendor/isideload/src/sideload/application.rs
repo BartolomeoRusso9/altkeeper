@@ -61,7 +61,7 @@ pub fn inspect_ipa(path: &Path) -> Result<IpaManifest, Report> {
     let mut ids = HashSet::new();
     for i in 0..archive.len() {
         let mut entry = archive.by_index(i)?;
-        let entry_name = entry.name().to_owned();
+        let entry_name = entry.name()?.into_owned();
         let parts: Vec<_> = entry_name.split('/').collect();
         let is_main = parts.len() == 3 && parts[0] == "Payload"
             && parts[1].ends_with(".app") && parts[2] == "Info.plist";
