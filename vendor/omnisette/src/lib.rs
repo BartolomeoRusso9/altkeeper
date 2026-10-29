@@ -68,6 +68,8 @@ pub const DEFAULT_ANISETTE_URL_V3: &str = "https://ani.sidestore.io";
 #[derive(Clone, Debug)]
 pub struct AnisetteConfiguration {
     anisette_url: String,
+    #[allow(dead_code)] // only read with the `remote-anisette-v3` feature
+    #[allow(dead_code)] // only read with the remote-anisette-v3 feature
     anisette_url_v3: String,
     configuration_path: PathBuf,
     macos_serial: String,

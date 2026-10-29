@@ -388,26 +388,26 @@ use posix_windows::*;
 impl LoaderHelpers {
     pub fn setup_hooks() {
         let mut hooks = HashMap::new();
-        hooks.insert("arc4random".to_owned(), arc4random as usize);
-        hooks.insert("chmod".to_owned(), chmod as usize);
+        hooks.insert("arc4random".to_owned(), arc4random as *const () as usize);
+        hooks.insert("chmod".to_owned(), chmod as *const () as usize);
         hooks.insert(
             "__system_property_get".to_owned(),
-            __system_property_get as usize,
+            __system_property_get as *const () as usize,
         );
-        hooks.insert("__errno".to_owned(), __errno_location as usize);
-        hooks.insert("close".to_owned(), close as usize);
-        hooks.insert("free".to_owned(), free as usize);
-        hooks.insert("fstat".to_owned(), fstat as usize);
-        hooks.insert("ftruncate".to_owned(), ftruncate as usize);
-        hooks.insert("gettimeofday".to_owned(), gettimeofday as usize);
-        hooks.insert("lstat".to_owned(), lstat as usize);
-        hooks.insert("malloc".to_owned(), malloc as usize);
-        hooks.insert("mkdir".to_owned(), mkdir as usize);
-        hooks.insert("open".to_owned(), open as usize);
-        hooks.insert("read".to_owned(), read as usize);
-        hooks.insert("strncpy".to_owned(), strncpy as usize);
-        hooks.insert("umask".to_owned(), umask as usize);
-        hooks.insert("write".to_owned(), write as usize);
+        hooks.insert("__errno".to_owned(), __errno_location as *const () as usize);
+        hooks.insert("close".to_owned(), close as *const () as usize);
+        hooks.insert("free".to_owned(), free as *const () as usize);
+        hooks.insert("fstat".to_owned(), fstat as *const () as usize);
+        hooks.insert("ftruncate".to_owned(), ftruncate as *const () as usize);
+        hooks.insert("gettimeofday".to_owned(), gettimeofday as *const () as usize);
+        hooks.insert("lstat".to_owned(), lstat as *const () as usize);
+        hooks.insert("malloc".to_owned(), malloc as *const () as usize);
+        hooks.insert("mkdir".to_owned(), mkdir as *const () as usize);
+        hooks.insert("open".to_owned(), open as *const () as usize);
+        hooks.insert("read".to_owned(), read as *const () as usize);
+        hooks.insert("strncpy".to_owned(), strncpy as *const () as usize);
+        hooks.insert("umask".to_owned(), umask as *const () as usize);
+        hooks.insert("write".to_owned(), write as *const () as usize);
 
         hook_manager::add_hooks(hooks);
     }

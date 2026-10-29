@@ -19,17 +19,11 @@ fn err(e: impl std::fmt::Display) -> String {
     e.to_string()
 }
 
-/// On Linux, one IPA avoids thousands of remote AFC create/open/close operations.
-/// Windows uses the previous directory path until ZIP file permissions are verified there.
+/// One IPA avoids thousands of remote AFC create/open/close operations, so it is the default
+/// on every platform. `ALTKEEPER_INSTALL_MODE=directory` goes back to the file-by-file upload.
 pub(crate) fn use_archive_on_wifi() -> bool {
-    let mode = std::env::var("ALTKEEPER_INSTALL_MODE").unwrap_or_default();
-    if mode.eq_ignore_ascii_case("directory") {
-        false
-    } else if mode.eq_ignore_ascii_case("archive") {
-        true // explicit opt-in, also on Windows
-    } else {
-        cfg!(unix)
-    }
+    !std::env::var("ALTKEEPER_INSTALL_MODE")
+        .is_ok_and(|mode| mode.eq_ignore_ascii_case("directory"))
 }
 
 fn permissions(metadata: &Metadata, directory: bool) -> u32 {
