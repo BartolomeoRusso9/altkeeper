@@ -68,6 +68,8 @@ pub const DEFAULT_ANISETTE_URL_V3: &str = "https://ani.sidestore.io";
 #[derive(Clone, Debug)]
 pub struct AnisetteConfiguration {
     anisette_url: String,
+    #[allow(dead_code)] // only read with the `remote-anisette-v3` feature
+    #[allow(dead_code)] // only read with the remote-anisette-v3 feature
     anisette_url_v3: String,
     configuration_path: PathBuf,
     macos_serial: String,
@@ -191,6 +193,7 @@ mod tests {
     use simplelog::{ColorChoice, ConfigBuilder, TermLogger, TerminalMode};
 
     pub fn init_logger() {
+        let _ = rustls::crypto::ring::default_provider().install_default();
         if TermLogger::init(
             LevelFilter::Trace,
             ConfigBuilder::new()

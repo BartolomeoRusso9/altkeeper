@@ -1,3 +1,9 @@
+// objc msg_send! expands to a cfg(feature = "cargo-clippy") that this crate does not declare.
+#![allow(unexpected_cfgs)]
+
+// objc's `msg_send!` expands to a `cfg(feature = "cargo-clippy")` that this crate doesn't declare.
+#![allow(unexpected_cfgs)]
+
 use crate::anisette_headers_provider::AnisetteHeadersProvider;
 use anyhow::Result;
 
