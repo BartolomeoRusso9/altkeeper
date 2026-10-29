@@ -261,10 +261,16 @@ impl AppleAccount {
                 LoginState::NeedsSMS2FA(id) => {
                     self.update_trusted_numbers().await;
                     info!("SMS 2FA required");
-                    self.login_state = self
-                        .send_sms_2fa(id)
-                        .await
-                        .context("Failed to complete SMS 2FA")?;
+                    // [altkeeper patch] dal 14-10-2026 Apple risponde 403 (body vuoto) all'invio
+                    // SMS: invece di far fallire l'intero login, si ripiega sulla 2FA via
+                    // dispositivo fidato (push sull'iPhone/iPad dell'utente, poi codice).
+                    match self.send_sms_2fa(id).await {
+                        Ok(state) => self.login_state = state,
+                        Err(e) => {
+                            warn!("SMS 2FA send failed ({}); falling back to trusted device 2FA", e);
+                            self.login_state = LoginState::NeedsDevice2FA;
+                        }
+                    }
                 }
                 LoginState::NeedsSMS2FAVerification(id) => {
                     let response = two_factor_callback(TwoFactorCallbackParams {
