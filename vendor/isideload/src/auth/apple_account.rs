@@ -92,6 +92,9 @@ enum SmsSendOutcome {
     Sent,
     ActiveChallenge,
     ServiceError(SMSTwoFactorError),
+    /// Apple refused the SMS send with HTTP 403 and an empty body: the SMS channel is
+    /// blocked for this account and the caller should use the trusted-device flow.
+    Blocked,
 }
 
 #[derive(Deserialize)]
@@ -502,6 +505,10 @@ impl AppleAccount {
             SmsSendOutcome::ActiveChallenge => {
                 info!("SMS 2FA challenge already active, proceeding to verification");
             }
+            SmsSendOutcome::Blocked => {
+                warn!("SMS 2FA send blocked (HTTP 403, empty body); falling back to trusted-device 2FA");
+                return Ok(LoginState::NeedsDevice2FA);
+            }
             SmsSendOutcome::ServiceError(error) => {
                 if error.code == "-28248" {
                     warn!("{} - {}", error.title, error.message);
@@ -614,6 +621,10 @@ impl AppleAccount {
             && !challenge.security_code.security_code_cooldown
         {
             return Ok(SmsSendOutcome::ActiveChallenge);
+        }
+
+        if status == 403 && text.trim().is_empty() {
+            return Ok(SmsSendOutcome::Blocked);
         }
 
         bail!(
@@ -1158,5 +1169,41 @@ fn censor_email(email: &str) -> String {
         }
     } else {
         "***".to_string()
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    const SERVICE_ERROR_BODY: &str =
+        r#"{"serviceErrors":[{"code":"-1","title":"t","message":"m"}]}"#;
+
+    /// HTTP 403 with an empty body is the signal that the SMS channel is blocked.
+    #[test]
+    fn blocked_classifies_403_with_empty_body() {
+        let outcome = AppleAccount::classify_sms_send_response(403, "", 1);
+        assert!(matches!(outcome, Ok(SmsSendOutcome::Blocked)));
+    }
+
+    /// Whitespace-only bodies are treated as empty too.
+    #[test]
+    fn blocked_classifies_403_with_whitespace_body() {
+        let outcome = AppleAccount::classify_sms_send_response(403, "   ", 1);
+        assert!(matches!(outcome, Ok(SmsSendOutcome::Blocked)));
+    }
+
+    /// A service error payload still wins over the 403/empty-body fallback.
+    #[test]
+    fn service_error_takes_precedence_over_blocked() {
+        let outcome = AppleAccount::classify_sms_send_response(403, SERVICE_ERROR_BODY, 1);
+        assert!(matches!(outcome, Ok(SmsSendOutcome::ServiceError(_))));
+    }
+
+    /// Anything else must keep propagating as an error, not silently fall back.
+    #[test]
+    fn other_statuses_still_bail() {
+        assert!(AppleAccount::classify_sms_send_response(500, "", 1).is_err());
+        assert!(AppleAccount::classify_sms_send_response(400, "", 1).is_err());
     }
 }
