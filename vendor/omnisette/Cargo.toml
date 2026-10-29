@@ -36,5 +36,6 @@ objc = "0.2"
 objc-foundation = "0.1"
 
 [dev-dependencies]
+rustls = { version = "0.23", default-features = false, features = ["ring", "std"] }
 tokio = { version = "1", features = ["rt", "macros"] }
 simplelog = "0.12"

@@ -42,7 +42,7 @@ fn permissions(metadata: &Metadata, directory: bool) -> u32 {
 
 /// On Windows there are no Unix modes, so executables would be archived as 0o644 and
 /// installd would reject them. Mach-O binaries (thin or fat) get 0o755.
-#[cfg(not(unix))]
+#[cfg(any(not(unix), test))]
 fn is_macho(path: &Path) -> bool {
     use std::io::Read;
     let mut magic = [0u8; 4];
@@ -50,6 +50,7 @@ fn is_macho(path: &Path) -> bool {
         && matches!(
             u32::from_be_bytes(magic),
             0xfeedface | 0xfeedfacf | 0xcefaedfe | 0xcffaedfe | 0xcafebabe | 0xbebafeca
+                | 0xcafebabf | 0xbfbafeca
         )
 }
 
@@ -211,6 +212,24 @@ pub(crate) async fn install_signed_app_rsd(
 mod tests {
     use super::*;
     use std::io::Read;
+
+    #[test]
+    fn recognizes_thin_and_fat_macho_magic_values() {
+        let root = tempfile::tempdir().unwrap();
+        let binary = root.path().join("Demo");
+        for magic in [
+            0xfeedface_u32, 0xfeedfacf, 0xcefaedfe, 0xcffaedfe,
+            0xcafebabe, 0xbebafeca, 0xcafebabf, 0xbfbafeca,
+        ] {
+            fs::write(&binary, magic.to_be_bytes()).unwrap();
+            assert!(is_macho(&binary), "unrecognized Mach-O magic: {magic:#x}");
+        }
+        for data in [b"".as_slice(), b"\xca\xfe\xba", b"data"] {
+            fs::write(&binary, data).unwrap();
+            assert!(!is_macho(&binary));
+        }
+        assert!(!is_macho(&root.path().join("missing")));
+    }
 
     #[test]
     fn packages_signed_app_with_payload_and_nested_files() {

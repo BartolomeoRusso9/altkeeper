@@ -193,6 +193,7 @@ mod tests {
     use simplelog::{ColorChoice, ConfigBuilder, TermLogger, TerminalMode};
 
     pub fn init_logger() {
+        let _ = rustls::crypto::ring::default_provider().install_default();
         if TermLogger::init(
             LevelFilter::Trace,
             ConfigBuilder::new()
