@@ -1,5 +1,12 @@
 # Changelog
 
+## Unreleased
+
+### Fixed
+- Sign-in no longer fails when Apple rejects the SMS 2FA request with HTTP 403 (empty body):
+  the vendored isideload now logs a warning and falls back to trusted-device 2FA (push +
+  6-digit code) instead of aborting the whole login.
+
 ## 0.4.0
 
 ### Added
