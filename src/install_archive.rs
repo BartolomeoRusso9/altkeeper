@@ -22,9 +22,14 @@ fn err(e: impl std::fmt::Display) -> String {
 /// On Linux, one IPA avoids thousands of remote AFC create/open/close operations.
 /// Windows uses the previous directory path until ZIP file permissions are verified there.
 pub(crate) fn use_archive_on_wifi() -> bool {
-    cfg!(unix)
-        && !std::env::var("ALTKEEPER_INSTALL_MODE")
-            .is_ok_and(|mode| mode.eq_ignore_ascii_case("directory"))
+    let mode = std::env::var("ALTKEEPER_INSTALL_MODE").unwrap_or_default();
+    if mode.eq_ignore_ascii_case("directory") {
+        false
+    } else if mode.eq_ignore_ascii_case("archive") {
+        true // explicit opt-in, also on Windows
+    } else {
+        cfg!(unix)
+    }
 }
 
 fn permissions(metadata: &Metadata, directory: bool) -> u32 {
@@ -39,6 +44,19 @@ fn permissions(metadata: &Metadata, directory: bool) -> u32 {
         let _ = metadata;
         if directory { 0o755 } else { 0o644 }
     }
+}
+
+/// On Windows there are no Unix modes, so executables would be archived as 0o644 and
+/// installd would reject them. Mach-O binaries (thin or fat) get 0o755.
+#[cfg(not(unix))]
+fn is_macho(path: &Path) -> bool {
+    use std::io::Read;
+    let mut magic = [0u8; 4];
+    File::open(path).and_then(|mut f| f.read_exact(&mut magic)).is_ok()
+        && matches!(
+            u32::from_be_bytes(magic),
+            0xfeedface | 0xfeedfacf | 0xcefaedfe | 0xcffaedfe | 0xcafebabe | 0xbebafeca
+        )
 }
 
 fn write_tree<W: Write + Seek>(
@@ -77,6 +95,8 @@ fn write_tree<W: Write + Seek>(
             write_tree(zip, &entry.path(), &format!("{archived}/{name}"))?;
         }
     } else if metadata.is_file() {
+        #[cfg(not(unix))]
+        let mode = if is_macho(local) { 0o755 } else { mode };
         zip.start_file(
             archived,
             SimpleFileOptions::default()
