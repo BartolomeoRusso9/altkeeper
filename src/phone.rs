@@ -33,6 +33,17 @@ use tokio::net::TcpStream;
 
 pub const HOST_NAME: &str = "casa2";
 
+/// `Display` of an isideload `Report` can be empty (the user saw "Installation failed:" with
+/// nothing after it). Fall back to the Debug chain so the real reason reaches the log.
+fn describe_report<E: std::fmt::Display + std::fmt::Debug>(e: &E) -> String {
+    let short = e.to_string();
+    if short.trim().is_empty() {
+        format!("{e:?}")
+    } else {
+        format!("{short} | {e:?}")
+    }
+}
+
 pub fn dbg<E: std::fmt::Debug>(e: E) -> String {
     format!("{e:?}")
 }
@@ -405,7 +416,7 @@ impl PhoneLink {
                 ..
             } => isideload::sideload::install::install_app(provider, app_path, progress)
                 .await
-                .map_err(|e| format!("Installation failed: {e}")),
+                .map_err(|e| format!("Installation failed: {}", describe_report(&e))),
             Self::Rsd {
                 adapter,
                 hs,
@@ -419,7 +430,7 @@ impl PhoneLink {
                 } else {
                     isideload::sideload::install::install_app_rsd(adapter, hs, app_path, progress)
                         .await
-                        .map_err(|e| format!("Installation failed: {e}"))
+                        .map_err(|e| format!("Installation failed: {}", describe_report(&e)))
                 }
             }
         }

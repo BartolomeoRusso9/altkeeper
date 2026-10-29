@@ -1,7 +1,7 @@
 [package]
 default-run = "altkeeper"
 name = "altkeeper"
-version = "0.5.0"
+version = "0.5.1"
 edition = "2021"
 description = "AltServer for iOS 17+ that runs on your home server (Docker): renews and installs sideloaded iPhone apps over Wi-Fi, no computer or VPN"
 license = "MIT"
