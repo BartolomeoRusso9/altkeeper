@@ -6,11 +6,34 @@
 - Automatic renewal can optionally register missing App IDs before downloading their profiles.
   The setting is off by default and the dashboard warns that registrations use the free Apple ID's
   10-per-7-days App ID quota.
+- Built-in local Anisette server on `127.0.0.1:8788`, selectable from the tray and the web page.
+  On Windows and macOS the native Anisette libraries are downloaded automatically when missing;
+  elsewhere they are looked for in `anisette-libraries/`. The web page can test any Anisette URL
+  before saving it.
+- Telegram notifications for failed automatic renewals (bot token and chat ID are saved privately
+  in `state/telegram-bot.json`, with a test button on the dashboard).
+- Autostart switch on the dashboard (Windows and macOS). Autostart now launches the tray with
+  `--minimized`, so no window opens at login.
+- A second launch of the tray app brings the existing window forward (or opens the dashboard)
+  instead of failing because the port is already in use.
+- Remove several profiles or profile backups at once; the dashboard shows the host's LAN address.
+- Automatic renewal can ask for the Apple 2FA code through the web page.
 
 ### Fixed
 - Sign-in no longer fails when Apple rejects the SMS 2FA request with HTTP 403 and an empty
   body: the vendored isideload now logs a warning (without the response payload) and falls
   back to trusted-device 2FA (push + 6-digit code). Other errors are still propagated.
+- Windows: the POSIX shim used by the Anisette libraries now converts paths for `chmod` and `mkdir`,
+  honours `O_TRUNC`, creates files with an explicit mode, and no longer mangles `stat` timestamps.
+- `anisette_server.rs` uses LF line endings and `\x` escapes for the ZIP signatures instead of raw
+  control bytes; `*.rs` is pinned to LF in `.gitattributes`.
+
+### Changed
+- Dashboard redesigned (dark mode, collapsible quick guide); the tray window is larger and
+  centred on the primary screen.
+- When sideloading AltStore itself, `ALTBundleIdentifier` is written to Info.plist, as the official
+  AltServer does, so AltStore can refresh itself.
+- Automatic renewal opens the Apple session in the data directory instead of the current directory.
 
 ## 0.4.0
 

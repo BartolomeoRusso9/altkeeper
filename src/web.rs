@@ -878,7 +878,7 @@ async fn manager_guard(
             req.uri().path(),
             "/apple-touch-icon.png" | "/favicon-32.png"
         );
-    if !public_icon && manager.pin.is_none() && !host_is_local_or_lan(req.headers()) {
+    if !public_icon && manager.pin.is_none() && !host_is_local(req.headers()) {
         return (StatusCode::FORBIDDEN, "host non ammesso").into_response();
     }
     if !public_icon {
@@ -931,31 +931,6 @@ fn host_is_local(headers: &HeaderMap) -> bool {
         host.split(':').next().unwrap_or("")
     };
     matches!(name, "localhost" | "127.0.0.1" | "::1")
-}
-
-fn host_is_local_or_lan(headers: &HeaderMap) -> bool {
-    if host_is_local(headers) {
-        return true;
-    }
-    let Some(host) = headers.get(header::HOST).and_then(|v| v.to_str().ok()) else {
-        return false;
-    };
-    let name = if let Some(rest) = host.strip_prefix('[') {
-        rest.split(']').next().unwrap_or("")
-    } else {
-        host.split(':').next().unwrap_or("")
-    };
-    if name.ends_with(".local") {
-        return true;
-    }
-    if let Ok(ip) = name.parse::<std::net::IpAddr>() {
-        match ip {
-            std::net::IpAddr::V4(v4) => v4.is_loopback() || v4.is_private() || v4.is_link_local(),
-            std::net::IpAddr::V6(v6) => v6.is_loopback() || (v6.segments()[0] & 0xfe00) == 0xfc00,
-        }
-    } else {
-        false
-    }
 }
 
 pub fn discover_lan_ip_for(phone_hint: Option<&str>) -> Option<String> {

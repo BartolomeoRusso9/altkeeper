@@ -175,7 +175,7 @@ fn download_native_libs(libraries: &Path) -> Result<(), String> {
 
     let eocd_pos = tail
         .windows(4)
-        .rposition(|w| w == b"PK")
+        .rposition(|w| w == b"PK\x05\x06")
         .ok_or("EOCD signature not found in APK")?;
     if eocd_pos + 20 > tail.len() {
         return Err("Truncated EOCD record".into());
@@ -200,7 +200,7 @@ fn download_native_libs(libraries: &Path) -> Result<(), String> {
 
     let mut pos = 0usize;
     let mut found = 0usize;
-    while pos + 46 <= cd.len() && &cd[pos..pos + 4] == b"PK" {
+    while pos + 46 <= cd.len() && &cd[pos..pos + 4] == b"PK\x01\x02" {
         let comp_size = u32::from_le_bytes(cd[pos + 20..pos + 24].try_into().unwrap()) as usize;
         let fname_len = u16::from_le_bytes(cd[pos + 28..pos + 30].try_into().unwrap()) as usize;
         let extra_len = u16::from_le_bytes(cd[pos + 30..pos + 32].try_into().unwrap()) as usize;
@@ -236,10 +236,10 @@ fn download_native_libs(libraries: &Path) -> Result<(), String> {
             let mut cd_entry = cd[pos..pos + entry_len].to_vec();
             cd_entry[42..46].copy_from_slice(&0u32.to_le_bytes());
             mini_zip.extend_from_slice(&cd_entry);
-            mini_zip.extend_from_slice(b"PK      ");
+            mini_zip.extend_from_slice(b"PK\x05\x06\x00\x00\x00\x00\x01\x00\x01\x00");
             mini_zip.extend_from_slice(&(entry_len as u32).to_le_bytes());
             mini_zip.extend_from_slice(&(local_record_len as u32).to_le_bytes());
-            mini_zip.extend_from_slice(b"  ");
+            mini_zip.extend_from_slice(b"\x00\x00");
 
             let mut archive = zip::ZipArchive::new(std::io::Cursor::new(mini_zip))
                 .map_err(|e| format!("ZIP parse error for {fname}: {e}"))?;

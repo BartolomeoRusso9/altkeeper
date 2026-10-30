@@ -162,8 +162,6 @@ fn run_key() -> io::Result<RegKey> {
 }
 
 #[cfg(windows)]
-
-#[cfg(windows)]
 pub fn is_autostart_enabled() -> bool {
     autostart_enabled_as(RUN_VALUE)
 }
@@ -195,6 +193,7 @@ pub fn toggle_autostart(_on: bool, _dir: &Path) -> io::Result<()> {
     Err(io::Error::new(io::ErrorKind::Unsupported, "Not supported on this platform"))
 }
 
+#[cfg(windows)]
 pub fn autostart_command(exe: &Path, dir: &Path) -> String {
     format!("\"{}\" tray --dir \"{}\" --minimized", exe.display(), dir.display())
 }
