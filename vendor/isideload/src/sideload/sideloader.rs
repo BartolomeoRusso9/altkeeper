@@ -116,6 +116,15 @@ impl<C: MaxCertsCallback> Sideloader<C> {
         let main_bundle_id = app.main_bundle_id()?;
         let main_app_name = app.main_app_name()?;
         let main_app_id_str = format!("{}.{}", main_bundle_id, team.team_id);
+        // The official AltServer records the original bundle ID in Info.plist;
+        // AltStore reads it back when it refreshes itself. Must be written
+        // before update_bundle_id changes CFBundleIdentifier.
+        if matches!(special, Some(SpecialApp::AltStore)) {
+            app.bundle.app_info.insert(
+                "ALTBundleIdentifier".to_string(),
+                plist::Value::String(main_bundle_id.clone()),
+            );
+        }
         app.update_bundle_id(&main_bundle_id, &main_app_id_str)?;
         let mut app_ids = app
             .register_app_ids(
