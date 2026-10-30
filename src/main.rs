@@ -331,6 +331,7 @@ async fn cmd_renew(
     bundle_filter: Option<&str>,
     installed_only: bool,
     wait_control: Option<&renewal_wait::Control>,
+    tfa: Option<std::sync::Arc<apple::TfaChannel>>,
     say: &mut dyn FnMut(&str),
 ) -> Result<(), String> {
     let _auto_pair_pause = phone::pause_auto_pairing();
@@ -467,8 +468,13 @@ async fn cmd_renew(
     let auto_register = web::load_auto_renew(dir).auto_register_app_ids;
 
     say("Signing in to Apple...");
-    apple::set_interactive(false);
-    let mut sess = apple::open_session(Path::new("."), &acc.apple_id, &acc.password).await?;
+    let mut sess = if let Some(chan) = tfa {
+        say("Awaiting 2FA code if required by Apple (enter on Web UI or your device)...");
+        apple::open_session_web(dir, &acc.apple_id, &acc.password, chan).await?
+    } else {
+        apple::set_interactive(false);
+        apple::open_session(dir, &acc.apple_id, &acc.password).await?
+    };
     let team = apple::pick_team(&mut sess, Some(&team_id), false).await?;
     let (mut ids, mut available_quantity) = apple::app_ids_with_quota(&mut sess, &team).await?;
 
@@ -888,13 +894,14 @@ async fn run() -> Result<(), String> {
                 bundle.as_deref(),
                 installed_only,
                 None,
+                None,
                 &mut |s| println!("{s}"),
             )
             .await
         }
         "serve" => {
             let bind: SocketAddr = opt("--bind")
-                .unwrap_or_else(|| "127.0.0.1:8787".into())
+                .unwrap_or_else(|| "0.0.0.0:8787".into())
                 .parse()
                 .map_err(|e| {
                     crate::tr!(
@@ -965,6 +972,8 @@ async fn run() -> Result<(), String> {
                 )
                 .map(|_| ());
             }
+            #[cfg(any(target_os = "linux", target_os = "macos", windows))]
+            tokio::spawn(anisette_server::serve_default(dir.clone()));
             web::serve(bind, pin, phone, dir).await
         }
         #[cfg(any(windows, target_os = "macos"))]
@@ -992,6 +1001,7 @@ async fn run() -> Result<(), String> {
             std::env::set_current_dir(&dir).map_err(|e| format!("--dir {}: {e}", dir.display()))?;
             let dir = std::env::current_dir().map_err(dbg)?;
             log::init(&dir);
+            let minimized = flag("--minimized") || flag("--silent");
             #[cfg(windows)]
             if !flag("--console") {
                 tray::hide_console();
@@ -1003,8 +1013,20 @@ async fn run() -> Result<(), String> {
                 tray::wait_for_exit(pid);
             }
             let exe = std::env::current_exe().map_err(dbg)?;
-            let bind: SocketAddr = "127.0.0.1:8787".parse().map_err(dbg)?;
+            let bind: SocketAddr = "0.0.0.0:8787".parse().map_err(dbg)?;
             let phone = phone_addr(opt("--phone"))?;
+
+            // If another instance of AltKeeper is already running in the background/tray,
+            // don't fail with a socket port collision: activate its window or open dashboard.
+            if replacing.is_none() {
+                if let Some(_) = tray::http_get("127.0.0.1:8787".parse().unwrap(), "/api/state") {
+                    if !tray::activate_existing_instance() {
+                        tray::open_in_browser("http://127.0.0.1:8787/");
+                    }
+                    return Ok(());
+                }
+            }
+
             let start = || -> Result<(), String> {
                 apple::anisette_choice(Path::new("."))?;
                 altserver::set_profile_dir(dir.clone());
@@ -1013,6 +1035,13 @@ async fn run() -> Result<(), String> {
             };
             if let Err(e) = start() {
                 log::err(&e);
+                #[cfg(windows)]
+                if replacing.is_none() && e.contains("10048") {
+                    if !tray::activate_existing_instance() {
+                        tray::open_in_browser("http://127.0.0.1:8787/");
+                    }
+                    return Ok(());
+                }
                 // La versione nuova non parte: si rimette quella vecchia e si riavvia quella.
                 if replacing.is_some() && update::rollback(&exe) {
                     log::err("[update] the new version did not start, going back to the old one");
@@ -1029,7 +1058,9 @@ async fn run() -> Result<(), String> {
             update::cleanup(&exe);
             let rt = tokio::runtime::Handle::current();
             let web_dir = dir.clone();
+            let ani_dir = dir.clone();
             let start_web = move |proxy: tao::event_loop::EventLoopProxy<tray::UserEvent>| {
+                rt.spawn(anisette_server::serve_default(ani_dir));
                 rt.spawn(async move {
                     if let Err(e) = web::serve(bind, None, phone, web_dir).await {
                         let _ = proxy.send_event(tray::UserEvent::ServerFailed(e));
@@ -1038,12 +1069,12 @@ async fn run() -> Result<(), String> {
             };
             #[cfg(windows)]
             let done: Result<(), String> =
-                tokio::task::block_in_place(|| tray::run(bind, &dir, start_web));
+                tokio::task::block_in_place(|| tray::run(bind, &dir, minimized, start_web));
             // Il ciclo degli eventi passa al thread principale; questo thread tiene vivo il
             // runtime di tokio, su cui girano la pagina web e il resto.
             #[cfg(target_os = "macos")]
             let done: Result<(), String> = {
-                let job: MainJob = Box::new(move || tray::run(bind, &dir, start_web));
+                let job: MainJob = Box::new(move || tray::run(bind, &dir, minimized, start_web));
                 MAIN_JOB
                     .lock()
                     .unwrap_or_else(|e| e.into_inner())

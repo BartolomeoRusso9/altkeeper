@@ -162,6 +162,39 @@ fn run_key() -> io::Result<RegKey> {
 }
 
 #[cfg(windows)]
+
+#[cfg(windows)]
+pub fn is_autostart_enabled() -> bool {
+    autostart_enabled_as(RUN_VALUE)
+}
+
+#[cfg(windows)]
+pub fn toggle_autostart(on: bool, dir: &Path) -> io::Result<()> {
+    let exe = std::env::current_exe()?;
+    set_autostart_as(RUN_VALUE, on, &exe, dir)
+}
+
+#[cfg(target_os = "macos")]
+pub fn is_autostart_enabled() -> bool {
+    autostart_enabled_as(RUN_VALUE)
+}
+
+#[cfg(target_os = "macos")]
+pub fn toggle_autostart(on: bool, dir: &Path) -> io::Result<()> {
+    let exe = std::env::current_exe()?;
+    set_autostart_as(RUN_VALUE, on, &exe, dir)
+}
+
+#[cfg(not(any(windows, target_os = "macos")))]
+pub fn is_autostart_enabled() -> bool {
+    false
+}
+
+#[cfg(not(any(windows, target_os = "macos")))]
+pub fn toggle_autostart(_on: bool, _dir: &Path) -> io::Result<()> {
+    Err(io::Error::new(io::ErrorKind::Unsupported, "Not supported on this platform"))
+}
+
 pub fn autostart_command(exe: &Path, dir: &Path) -> String {
     format!("\"{}\" tray --dir \"{}\"", exe.display(), dir.display())
 }
@@ -378,8 +411,40 @@ fn toast(text: &str) {
 
 /// Apre un indirizzo nel browser predefinito.
 #[cfg(target_os = "macos")]
-fn open_in_browser(url: &str) {
+pub fn open_in_browser(url: &str) {
     let _ = std::process::Command::new("open").arg(url).spawn();
+}
+
+#[cfg(windows)]
+pub fn open_in_browser(url: &str) {
+    let _ = std::process::Command::new("cmd").args(["/C", "start", "", url]).spawn();
+}
+
+#[cfg(not(any(target_os = "macos", windows)))]
+pub fn open_in_browser(_url: &str) {}
+
+#[cfg(windows)]
+pub fn activate_existing_instance() -> bool {
+    use windows_sys::Win32::UI::WindowsAndMessaging::{
+        FindWindowW, SetForegroundWindow, ShowWindow, SW_RESTORE, SW_SHOW,
+    };
+    let wide = |s: &str| s.encode_utf16().chain(Some(0)).collect::<Vec<u16>>();
+    let title = wide("AltKeeper");
+    unsafe {
+        let hwnd = FindWindowW(std::ptr::null(), title.as_ptr());
+        if !hwnd.is_null() {
+            ShowWindow(hwnd, SW_SHOW);
+            ShowWindow(hwnd, SW_RESTORE);
+            SetForegroundWindow(hwnd);
+            return true;
+        }
+    }
+    false
+}
+
+#[cfg(not(windows))]
+pub fn activate_existing_instance() -> bool {
+    false
 }
 
 /// Guarda le righe di log nuove e mostra gli avvisi.
@@ -402,10 +467,15 @@ fn watch_log() {
 }
 
 /// GET minimale verso la pagina locale; `None` se non risponde.
-fn http_get(addr: SocketAddr, path: &str) -> Option<String> {
-    let mut s = TcpStream::connect_timeout(&addr, Duration::from_secs(5)).ok()?;
+pub fn http_get(addr: SocketAddr, path: &str) -> Option<String> {
+    let query_addr = if addr.ip().is_unspecified() {
+        SocketAddr::new(std::net::Ipv4Addr::LOCALHOST.into(), addr.port())
+    } else {
+        addr
+    };
+    let mut s = TcpStream::connect_timeout(&query_addr, Duration::from_secs(5)).ok()?;
     s.set_read_timeout(Some(Duration::from_secs(60))).ok()?;
-    write!(s, "GET {path} HTTP/1.0\r\nHost: {addr}\r\n\r\n").ok()?;
+    write!(s, "GET {path} HTTP/1.0\r\nHost: {query_addr}\r\n\r\n").ok()?;
     let mut body = String::new();
     s.read_to_string(&mut body).ok()?;
     body.split_once("\r\n\r\n").map(|(_, b)| b.to_string())
@@ -448,16 +518,36 @@ fn show(
         window.set_focus();
         return;
     }
-    let window = match WindowBuilder::new()
+    let target_width = 1040.0;
+    let target_height = 840.0;
+    let mut builder = WindowBuilder::new()
         .with_title("AltKeeper")
-        .with_inner_size(tao::dpi::LogicalSize::new(560.0, 860.0))
-        .with_window_icon(tao::window::Icon::from_rgba(LOGO_64.to_vec(), 64, 64).ok())
-        .build(target)
+        .with_inner_size(tao::dpi::LogicalSize::new(target_width, target_height))
+        .with_min_inner_size(tao::dpi::LogicalSize::new(420.0, 560.0))
+        .with_window_icon(tao::window::Icon::from_rgba(LOGO_64.to_vec(), 64, 64).ok());
+
+    if let Some(monitor) = target.primary_monitor() {
+        let screen_size = monitor.size();
+        let screen_pos = monitor.position();
+        let scale = monitor.scale_factor();
+        let win_width_px = (target_width * scale) as i32;
+        let win_height_px = (target_height * scale) as i32;
+
+        let center_x = screen_pos.x + ((screen_size.width as i32 - win_width_px) / 2).max(0);
+        let center_y = screen_pos.y + ((screen_size.height as i32 - win_height_px) / 2).max(0);
+        // Ensure safety margin from the top to prevent appearing under top-docked taskbars
+        let min_y = screen_pos.y + (65.0 * scale) as i32;
+        let safe_y = center_y.max(min_y);
+
+        builder = builder.with_position(tao::dpi::PhysicalPosition::new(center_x, safe_y));
+    }
+
+    let window = match builder.build(target)
     {
         Ok(w) => w,
         Err(e) => return crate::log::err(&format!("[tray] cannot open the window: {e}")),
     };
-    match WebViewBuilder::new().with_url(url).build(&window) {
+    match WebViewBuilder::new().with_url(url).with_hotkeys_zoom(false).build(&window) {
         Ok(webview) => {
             // Su macOS l'app non ha un'icona nel Dock: la finestra va portata davanti a mano.
             window.set_focus();
@@ -534,8 +624,13 @@ fn build_tray(menu: &Menu) -> TrayIcon {
 
 /// Avvia il ciclo degli eventi con l'icona; `start` riceve il proxy per segnalare errori del
 /// server. Non ritorna: "Quit" chiude il processo. Su macOS va chiamata dal thread principale.
-pub fn run(bind: SocketAddr, dir: &Path, start: impl FnOnce(EventLoopProxy<UserEvent>)) -> ! {
-    let url = format!("http://{bind}/");
+pub fn run(bind: SocketAddr, dir: &Path, minimized: bool, start: impl FnOnce(EventLoopProxy<UserEvent>)) -> ! {
+    let client_addr = if bind.ip().is_unspecified() {
+        SocketAddr::new(std::net::Ipv4Addr::LOCALHOST.into(), bind.port())
+    } else {
+        bind
+    };
+    let url = format!("http://{client_addr}/");
     let mut builder = EventLoopBuilder::<UserEvent>::with_user_event();
     // Il ciclo degli eventi gira sul thread `altkeeper-main` (main() sposta tutto lì per avere uno
     // stack più grande), e tao su Windows rifiuta di crearlo fuori dal main thread se non lo si
@@ -580,6 +675,12 @@ pub fn run(bind: SocketAddr, dir: &Path, start: impl FnOnce(EventLoopProxy<UserE
     if let Err(error) = &anisette_choice {
         crate::log::err(&format!("[tray] cannot read anisette server: {error}"));
     }
+    let ani_local = CheckMenuItem::new(
+        "AltKeeper local server (127.0.0.1:8788)",
+        !anisette_locked,
+        anisette_url == crate::apple::LOCAL_ANISETTE_URL,
+        None,
+    );
     let ani_default = CheckMenuItem::new(
         "ani3.stikstore.app (default)",
         !anisette_locked,
@@ -594,7 +695,7 @@ pub fn run(bind: SocketAddr, dir: &Path, start: impl FnOnce(EventLoopProxy<UserE
     );
     let ani_other = MenuItem::new("Other…", !anisette_locked, None);
     let anisette_menu = Submenu::new("Anisette server", true);
-    let _ = anisette_menu.append_items(&[&ani_default, &ani_isideload, &ani_other]);
+    let _ = anisette_menu.append_items(&[&ani_local, &ani_default, &ani_isideload, &ani_other]);
     let check = MenuItem::new("Check for updates", true, None);
     let update_now = MenuItem::new("Up to date", false, None);
     let quit = MenuItem::new("Quit", true, None);
@@ -644,11 +745,21 @@ pub fn run(bind: SocketAddr, dir: &Path, start: impl FnOnce(EventLoopProxy<UserE
                 #[cfg(target_os = "macos")]
                 app_menu.init_for_nsapp();
                 tray = Some(build_tray(&menu));
+                if !minimized {
+                    show(&mut slot, target, &url);
+                }
             }
-            Event::UserEvent(UserEvent::Tray(TrayIconEvent::DoubleClick {
-                button: MouseButton::Left,
-                ..
-            })) => show(&mut slot, target, &url),
+            Event::UserEvent(UserEvent::Tray(
+                TrayIconEvent::Click {
+                    button: MouseButton::Left,
+                    button_state: tray_icon::MouseButtonState::Up,
+                    ..
+                }
+                | TrayIconEvent::DoubleClick {
+                    button: MouseButton::Left,
+                    ..
+                },
+            )) => show(&mut slot, target, &url),
             Event::UserEvent(UserEvent::Menu(e)) => {
                 if e.id == open.id() {
                     show(&mut slot, target, &url);
@@ -670,15 +781,18 @@ pub fn run(bind: SocketAddr, dir: &Path, start: impl FnOnce(EventLoopProxy<UserE
                             let _ = p.send_event(UserEvent::PairingDone(result));
                         });
                     }
-                } else if e.id == ani_default.id() || e.id == ani_isideload.id() {
+                } else if e.id == ani_local.id() || e.id == ani_default.id() || e.id == ani_isideload.id() {
                     let selected = if e.id == ani_default.id() {
                         None
+                    } else if e.id == ani_local.id() {
+                        Some(crate::apple::LOCAL_ANISETTE_URL)
                     } else {
                         Some(crate::apple::ISIDELOAD_ANISETTE_URL)
                     };
                     let selected_url = selected.unwrap_or(crate::apple::DEFAULT_ANISETTE_URL);
                     match crate::apple::save_anisette_choice(&dir, selected) {
                         Ok(_) => {
+                            let _ = ani_local.set_checked(selected_url == crate::apple::LOCAL_ANISETTE_URL);
                             let _ = ani_default.set_checked(selected_url == crate::apple::DEFAULT_ANISETTE_URL);
                             let _ = ani_isideload.set_checked(selected_url == crate::apple::ISIDELOAD_ANISETTE_URL);
                             if let Ok(handle) = tokio::runtime::Handle::try_current() {
