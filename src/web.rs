@@ -591,7 +591,7 @@ async fn auto_renew_loop(app: Arc<App>) {
 /// compreso), così una configurazione sbagliata non lascia annunci Bonjour orfani.
 pub fn check_options(bind: SocketAddr, pin: &Option<String>) -> Result<(), String> {
     match pin {
-        None if !bind.ip().is_loopback() && !bind.ip().is_unspecified() => Err(crate::tr!(
+        None if !bind.ip().is_loopback() => Err(crate::tr!(
             "per ascoltare fuori da questo computer serve un PIN: imposta ALTKEEPER_WEB_PIN (o usa --pin)",
             "listening outside this computer requires a PIN: set ALTKEEPER_WEB_PIN (or use --pin)"
         )
@@ -1090,6 +1090,17 @@ async fn logs(uri: Uri) -> Json<Value> {
     Json(json!({ "seq": seq, "lines": lines }))
 }
 
+
+#[cfg(any(windows, target_os = "macos"))]
+fn is_autostart_active() -> bool {
+    crate::tray::is_autostart_enabled()
+}
+
+#[cfg(not(any(windows, target_os = "macos")))]
+fn is_autostart_active() -> bool {
+    false
+}
+
 async fn state(State(app): State<Arc<App>>) -> Json<Value> {
     expire_pending_ipa(&app);
     let account = apple::read_account(&app.dir);
@@ -1133,7 +1144,7 @@ async fn state(State(app): State<Arc<App>>) -> Json<Value> {
         "device": { "id": app.device_id, "name": app.device_name },
         "autostart": {
             "supported": cfg!(any(windows, target_os = "macos")),
-            "enabled": crate::tray::is_autostart_enabled(),
+            "enabled": is_autostart_active(),
         },
         "auto_pair": {
             "enabled": app.device_id == "default" && phone::auto_pair_configured_in(&app.dir),
@@ -4047,16 +4058,28 @@ async fn update_autostart(
     State(app): State<Arc<App>>,
     Json(payload): Json<AutostartUpdate>,
 ) -> Response {
-    if let Err(e) = crate::tray::toggle_autostart(payload.enabled, &app.dir) {
-        return (
-            StatusCode::INTERNAL_SERVER_ERROR,
-            Json(json!({ "error": e.to_string() })),
-        )
-            .into_response();
+    #[cfg(any(windows, target_os = "macos"))]
+    {
+        if let Err(e) = crate::tray::toggle_autostart(payload.enabled, &app.dir) {
+            return (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                Json(json!({ "error": e.to_string() })),
+            )
+                .into_response();
+        }
+        Json(json!({
+            "supported": true,
+            "enabled": crate::tray::is_autostart_enabled(),
+        }))
+        .into_response()
     }
-    Json(json!({
-        "supported": cfg!(any(windows, target_os = "macos")),
-        "enabled": crate::tray::is_autostart_enabled(),
-    }))
-    .into_response()
+    #[cfg(not(any(windows, target_os = "macos")))]
+    {
+        let _ = (app, payload);
+        (
+            StatusCode::NOT_IMPLEMENTED,
+            Json(json!({ "error": "Autostart is not supported on this platform" })),
+        )
+            .into_response()
+    }
 }

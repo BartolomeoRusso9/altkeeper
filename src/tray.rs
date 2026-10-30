@@ -196,7 +196,7 @@ pub fn toggle_autostart(_on: bool, _dir: &Path) -> io::Result<()> {
 }
 
 pub fn autostart_command(exe: &Path, dir: &Path) -> String {
-    format!("\"{}\" tray --dir \"{}\"", exe.display(), dir.display())
+    format!("\"{}\" tray --dir \"{}\" --minimized", exe.display(), dir.display())
 }
 
 #[cfg(windows)]
@@ -262,6 +262,7 @@ pub fn launch_agent(name: &str, exe: &Path, dir: &Path) -> String {
         arg("tray"),
         arg("--dir"),
         arg(&dir.to_string_lossy()),
+        arg("--minimized"),
     )
 }
 
@@ -749,6 +750,7 @@ pub fn run(bind: SocketAddr, dir: &Path, minimized: bool, start: impl FnOnce(Eve
                     show(&mut slot, target, &url);
                 }
             }
+            #[cfg(windows)]
             Event::UserEvent(UserEvent::Tray(
                 TrayIconEvent::Click {
                     button: MouseButton::Left,
@@ -760,6 +762,11 @@ pub fn run(bind: SocketAddr, dir: &Path, minimized: bool, start: impl FnOnce(Eve
                     ..
                 },
             )) => show(&mut slot, target, &url),
+            #[cfg(not(windows))]
+            Event::UserEvent(UserEvent::Tray(TrayIconEvent::DoubleClick {
+                button: MouseButton::Left,
+                ..
+            })) => show(&mut slot, target, &url),
             Event::UserEvent(UserEvent::Menu(e)) => {
                 if e.id == open.id() {
                     show(&mut slot, target, &url);
@@ -1008,7 +1015,7 @@ mod tests {
         );
         assert_eq!(
             cmd,
-            r#""C:\Alt Keeper\altkeeper.exe" tray --dir "C:\Alt Keeper""#
+            r#""C:\Alt Keeper\altkeeper.exe" tray --dir "C:\Alt Keeper" --minimized"#
         );
     }
 
@@ -1024,7 +1031,8 @@ mod tests {
         assert!(plist.contains(
             "<string>/Applications/Alt &amp; Keeper.app/Contents/MacOS/altkeeper</string>\n    \
              <string>tray</string>\n    <string>--dir</string>\n    \
-             <string>/Users/me/Library/Application Support/AltKeeper</string>"
+             <string>/Users/me/Library/Application Support/AltKeeper</string>\n    \
+             <string>--minimized</string>"
         ));
         assert!(plist.contains("<key>RunAtLoad</key>\n  <true/>"));
         let parsed: plist::Value = plist::from_bytes(plist.as_bytes()).unwrap();

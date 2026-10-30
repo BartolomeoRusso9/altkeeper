@@ -207,10 +207,10 @@ pub unsafe fn strncpy(
 }
 
 #[sysv64]
-pub unsafe fn chmod(path: *const libc::c_char, _mode: libc::c_int) -> libc::c_int {
-    debug!("chmod: Windows translate-call");
+pub unsafe fn chmod(path: *const libc::c_char, mode: libc::c_int) -> libc::c_int {
+    debug!("chmod: Windows translate-call mode 0o{:o}", mode);
     let path = CStr::from_ptr(path).to_windows();
-    libc::chmod(path.as_ptr(), 0o600)
+    libc::chmod(path.as_ptr(), mode)
 }
 
 #[sysv64]
