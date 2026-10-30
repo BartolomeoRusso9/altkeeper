@@ -464,23 +464,67 @@ async fn cmd_renew(
         say("Nothing to renew: skipping Apple sign-in.");
         return Ok(());
     }
+    let auto_register = web::load_auto_renew(dir).auto_register_app_ids;
 
     say("Signing in to Apple...");
     apple::set_interactive(false);
     let mut sess = apple::open_session(Path::new("."), &acc.apple_id, &acc.password).await?;
     let team = apple::pick_team(&mut sess, Some(&team_id), false).await?;
-    let ids = apple::app_ids(&mut sess, &team).await?;
+    let (mut ids, mut available_quantity) = apple::app_ids_with_quota(&mut sess, &team).await?;
 
     let mut done = 0;
     let mut missing_app_ids = Vec::new();
     for (bundle, days) in due {
-        let Some(app) = ids.iter().find(|a| a.identifier == bundle) else {
-            say(&format!(
-                "   {bundle}: no matching App ID on Apple, skipping"
-            ));
-            say(&format!("MISSING_APP_ID {bundle}"));
-            missing_app_ids.push(bundle);
-            continue;
+        let app = match apple::app_id_action(&ids, bundle, available_quantity) {
+            apple::AppIdAction::Present => ids
+                .iter()
+                .find(|app| app.identifier == bundle)
+                .cloned()
+                .ok_or_else(|| "Internal error: App ID disappeared during renewal.".to_string())?,
+            apple::AppIdAction::NoQuota => {
+                say(&crate::tr!(
+                    format!("   {bundle}: nessun App ID e quota Apple esaurita"),
+                    format!("   {bundle}: no App ID and Apple reports no quota left")
+                ));
+                say(&format!("MISSING_APP_ID {bundle}"));
+                missing_app_ids.push(bundle);
+                continue;
+            }
+            apple::AppIdAction::Register if !auto_register => {
+                say(&format!(
+                    "   {bundle}: no matching App ID on Apple, skipping"
+                ));
+                say(&format!("MISSING_APP_ID {bundle}"));
+                missing_app_ids.push(bundle);
+                continue;
+            }
+            apple::AppIdAction::Register if dry_run => {
+                say(&crate::tr!(
+                    format!(
+                        "   {bundle}: nessun App ID su Apple (lo registrerei in un'esecuzione reale, dry run)"
+                    ),
+                    format!(
+                        "   {bundle}: no matching App ID on Apple (would register in a real run, dry run)"
+                    )
+                ));
+                if let Some(quantity) = available_quantity.as_mut() {
+                    *quantity = quantity.saturating_sub(1);
+                }
+                continue;
+            }
+            apple::AppIdAction::Register => {
+                let app =
+                    apple::ensure_app_id(&mut sess, &team, bundle, available_quantity).await?;
+                say(&crate::tr!(
+                    format!("   {bundle}: nessun App ID su Apple: registrato"),
+                    format!("   {bundle}: no matching App ID on Apple: registered")
+                ));
+                ids.push(app.clone());
+                if let Some(quantity) = available_quantity.as_mut() {
+                    *quantity -= 1;
+                }
+                app
+            }
         };
         if dry_run {
             say(&format!(
@@ -491,7 +535,7 @@ async fn cmd_renew(
         say(&format!(
             "   {bundle}: expires in {days} days, downloading a new profile..."
         ));
-        let new = apple::download_profile(&mut sess, &team, app).await?;
+        let new = apple::download_profile(&mut sess, &team, &app).await?;
         say(&crate::tr!(
             format!(
                 "      nuovo profilo valido fino al {}",

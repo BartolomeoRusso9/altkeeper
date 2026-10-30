@@ -283,6 +283,10 @@
         </select>
       </div>
     </div>
+    <label class="check" for="auto-register-app-ids">
+      <input type="checkbox" id="auto-register-app-ids">
+      <span data-i18n="Auto-register missing App IDs (uses the 10/7-day App ID quota)">Auto-register missing App IDs (uses the 10/7-day App ID quota)</span>
+    </label>
     <p class="muted" data-i18n="If a scheduled renewal fails: retry after 30 minutes, up to twice more. Send Discord notification only after the final failure (or an unretryable authentication error).">If a scheduled renewal fails: retry after 30 minutes, up to twice more. Send Discord notification only after the final failure (or an unretryable authentication error).</p>
     <div class="row action-row" style="margin-top:10px">
       <button class="primary" id="auto-enable" type="button" data-i18n="Enable auto-renew">Enable auto-renew</button>
@@ -522,16 +526,18 @@ function installHint(s) {
 function syncAutoRenewInputs(auto) {
   if (autoDraftDirty) {
     // After saving, an earlier state request may still report the old values.
-    // Keep the draft until the server reflects both saved settings.
+    // Keep the draft until the server reflects all saved settings.
     if (!autoSavePending || auto.time !== $("auto-time").value
-        || Number(auto.min_days) !== Number($("auto-days").value)) return;
+        || Number(auto.min_days) !== Number($("auto-days").value)
+        || Boolean(auto.auto_register_app_ids) !== $("auto-register-app-ids").checked) return;
     autoDraftDirty = false;
     autoSavePending = false;
   }
   $("auto-time").value = auto.time || "06:00";
   $("auto-days").value = String(auto.min_days || 3);
+  $("auto-register-app-ids").checked = Boolean(auto.auto_register_app_ids);
 }
-for (const id of ["auto-time", "auto-days"]) {
+for (const id of ["auto-time", "auto-days", "auto-register-app-ids"]) {
   $(id).addEventListener("input", () => { autoDraftDirty = true; autoSavePending = false; });
   $(id).addEventListener("change", () => { autoDraftDirty = true; autoSavePending = false; });
 }
@@ -916,7 +922,8 @@ $("auto-enable").onclick = () => {
   banner("auto-error", "");
   act(async () => {
     await api("/api/auto-renew", {
-      enabled:true, time:$("auto-time").value, min_days:Number($("auto-days").value)
+      enabled:true, time:$("auto-time").value, min_days:Number($("auto-days").value),
+      auto_register_app_ids:$("auto-register-app-ids").checked
     });
     autoSavePending = true;
   }, "auto-error");
@@ -925,7 +932,8 @@ $("auto-disable").onclick = () => {
   banner("auto-error", "");
   act(async () => {
     await api("/api/auto-renew", {
-      enabled:false, time:$("auto-time").value, min_days:Number($("auto-days").value)
+      enabled:false, time:$("auto-time").value, min_days:Number($("auto-days").value),
+      auto_register_app_ids:$("auto-register-app-ids").checked
     });
     autoSavePending = true;
   }, "auto-error");

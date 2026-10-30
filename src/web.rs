@@ -240,7 +240,7 @@ fn now() -> u64 {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
-struct AutoRenewConfig {
+pub(crate) struct AutoRenewConfig {
     enabled: bool,
     /// HH:MM in UTC (no daylight saving), independent of container TZ.
     time: String,
@@ -254,6 +254,8 @@ struct AutoRenewConfig {
     retry_at: Option<u64>,
     #[serde(default)]
     last_error: Option<String>,
+    #[serde(default)]
+    pub(crate) auto_register_app_ids: bool,
 }
 fn default_min_days() -> u8 {
     3
@@ -269,6 +271,7 @@ impl Default for AutoRenewConfig {
             retry_count: 0,
             retry_at: None,
             last_error: None,
+            auto_register_app_ids: false,
         }
     }
 }
@@ -309,7 +312,7 @@ fn next_auto_run(config: &AutoRenewConfig, now_secs: u64) -> Option<u64> {
     Some(scheduled_day * DAY_SECS + target)
 }
 
-fn load_auto_renew(dir: &Path) -> AutoRenewConfig {
+pub(crate) fn load_auto_renew(dir: &Path) -> AutoRenewConfig {
     let raw = match std::fs::read_to_string(dir.join(AUTO_RENEW_CONFIG)) {
         Ok(raw) => raw,
         Err(e) if e.kind() == std::io::ErrorKind::NotFound => return AutoRenewConfig::default(),
@@ -999,6 +1002,7 @@ async fn state(State(app): State<Arc<App>>) -> Json<Value> {
         },
         "auto_renew": {
             "enabled": schedule.enabled,
+            "auto_register_app_ids": schedule.auto_register_app_ids,
             "time": schedule.time,
             "min_days": schedule.min_days,
             "retry_count": schedule.retry_count,
@@ -1379,6 +1383,8 @@ struct AutoRenewReq {
     time: String,
     #[serde(default = "default_min_days")]
     min_days: u8,
+    #[serde(default)]
+    auto_register_app_ids: Option<bool>,
 }
 
 async fn update_auto_renew(
@@ -1416,6 +1422,9 @@ async fn update_auto_renew(
         updated.last_attempt_day = Some(utc_day(now()));
     }
     updated.enabled = req.enabled;
+    if let Some(value) = req.auto_register_app_ids {
+        updated.auto_register_app_ids = value;
+    }
     updated.time = req.time;
     updated.min_days = req.min_days;
     if !req.enabled {
