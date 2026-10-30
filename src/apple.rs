@@ -373,13 +373,62 @@ async fn anisette_for_altstore_once(dir: &Path) -> Result<serde_json::Value, Str
 #[cfg(test)]
 mod tests {
     use super::{
-        anisette_choice, anisette_url, is_max_certs_error, iso8601_utc, max_certs_behavior,
-        needs_reprovision, parse_2fa_input, save_anisette_choice, DEFAULT_ANISETTE_URL,
-        ISIDELOAD_ANISETTE_URL, STATE_DIR,
+        anisette_choice, anisette_url, app_id_action, is_max_certs_error, iso8601_utc,
+        max_certs_behavior, needs_reprovision, parse_2fa_input, save_anisette_choice, AppIdAction,
+        DEFAULT_ANISETTE_URL, ISIDELOAD_ANISETTE_URL, STATE_DIR,
     };
     use isideload::{
-        auth::apple_account::TwoFactorCallbackResponse, sideload::builder::MaxCertsBehavior,
+        auth::apple_account::TwoFactorCallbackResponse, dev::app_ids::AppId,
+        sideload::builder::MaxCertsBehavior,
     };
+
+    fn app_id(identifier: &str) -> AppId {
+        AppId {
+            app_id_id: "app-id".into(),
+            identifier: identifier.into(),
+            name: "Example".into(),
+            features: plist::Dictionary::new(),
+            expiration_date: None,
+        }
+    }
+
+    #[test]
+    fn existing_app_id_is_present_even_without_quota() {
+        let ids = vec![app_id("com.example.app")];
+        assert_eq!(
+            app_id_action(&ids, "com.example.app", Some(0)),
+            AppIdAction::Present
+        );
+    }
+
+    #[test]
+    fn missing_app_id_with_zero_or_negative_quota_is_rejected() {
+        let ids = Vec::new();
+        assert_eq!(
+            app_id_action(&ids, "com.example.app", Some(0)),
+            AppIdAction::NoQuota
+        );
+        assert_eq!(
+            app_id_action(&ids, "com.example.app", Some(-1)),
+            AppIdAction::NoQuota
+        );
+    }
+
+    #[test]
+    fn missing_app_id_with_unknown_quota_can_be_registered() {
+        assert_eq!(
+            app_id_action(&[], "com.example.app", None),
+            AppIdAction::Register
+        );
+    }
+
+    #[test]
+    fn missing_app_id_with_positive_quota_can_be_registered() {
+        assert_eq!(
+            app_id_action(&[], "com.example.app", Some(1)),
+            AppIdAction::Register
+        );
+    }
 
     #[test]
     fn accetta_codici_2fa_e_zero_iniziale() {
@@ -747,9 +796,51 @@ pub async fn app_ids(
     sess: &mut DeveloperSession,
     team: &DeveloperTeam,
 ) -> Result<Vec<AppId>, String> {
+    app_ids_with_quota(sess, team).await.map(|(ids, _)| ids)
+}
+
+pub async fn app_ids_with_quota(
+    sess: &mut DeveloperSession,
+    team: &DeveloperTeam,
+) -> Result<(Vec<AppId>, Option<i64>), String> {
     sess.list_app_ids(team, DeveloperDeviceType::Ios)
         .await
-        .map(|r| r.app_ids)
+        .map(|response| (response.app_ids, response.available_quantity))
+        .map_err(|e| e.to_string())
+}
+
+#[derive(Debug, PartialEq, Eq)]
+pub enum AppIdAction {
+    Present,
+    Register,
+    NoQuota,
+}
+
+pub fn app_id_action(ids: &[AppId], bundle: &str, available_quantity: Option<i64>) -> AppIdAction {
+    if ids.iter().any(|app| app.identifier == bundle) {
+        AppIdAction::Present
+    } else if available_quantity.is_some_and(|quantity| quantity <= 0) {
+        AppIdAction::NoQuota
+    } else {
+        AppIdAction::Register
+    }
+}
+
+pub async fn ensure_app_id(
+    sess: &mut DeveloperSession,
+    team: &DeveloperTeam,
+    bundle: &str,
+    available_quantity: Option<i64>,
+) -> Result<AppId, String> {
+    if available_quantity.is_some_and(|quantity| quantity <= 0) {
+        return Err(crate::tr!(
+            format!("Apple non segnala quota App ID disponibile; impossibile registrare {bundle}"),
+            format!("Apple reports no available App ID quota; cannot register {bundle}")
+        ));
+    }
+    let name = bundle.rsplit('.').next().unwrap_or(bundle);
+    sess.add_app_id(team, name, bundle, DeveloperDeviceType::Ios)
+        .await
         .map_err(|e| e.to_string())
 }
 

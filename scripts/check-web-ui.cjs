@@ -126,7 +126,11 @@ console.log("Localized dashboard JavaScript syntax, actions, labels and layout O
 // must survive polling, and a snapshot started before an action must not paint
 // over the newer state once another refresh has been requested.
 async function checkDashboardState() {
-  const controls = { "auto-time": { value: "" }, "auto-days": { value: "" } };
+  const controls = {
+    "auto-time": { value: "" },
+    "auto-days": { value: "" },
+    "auto-register-app-ids": { value: "", checked: false },
+  };
   for (const control of Object.values(controls)) {
     control.listeners = {};
     control.addEventListener = (event, fn) => { control.listeners[event] = fn; };
@@ -148,7 +152,7 @@ async function checkDashboardState() {
   const source = embedded[1];
   // Run only the draft declaration/helper/listeners: the full browser render
   // needs many unrelated DOM controls.
-  const helper = source.match(/function syncAutoRenewInputs\(auto\) \{[\s\S]*?\r?\n\}\r?\nfor \(const id of \["auto-time", "auto-days"\]\) \{[\s\S]*?\r?\n\}/);
+  const helper = source.match(/function syncAutoRenewInputs\(auto\) \{[\s\S]*?\r?\n\}\r?\nfor \(const id of \["auto-time", "auto-days", "auto-register-app-ids"\]\) \{[\s\S]*?\r?\n\}/);
   assert(helper);
   vm.runInContext('const $ = id => document.getElementById(id); let autoDraftDirty = false, autoSavePending = false;\n' + helper[0], context);
   vm.runInContext('syncAutoRenewInputs({time:"21:17",min_days:3})', context);
@@ -161,7 +165,12 @@ async function checkDashboardState() {
   assert.equal(controls["auto-days"].value, "5");
   vm.runInContext('autoSavePending = true; syncAutoRenewInputs({time:"21:17",min_days:3})', context);
   assert.equal(controls["auto-time"].value, "22:30", "an old response after save must not reset the draft");
-  vm.runInContext('syncAutoRenewInputs({time:"22:30",min_days:5})', context);
+  controls["auto-register-app-ids"].checked = true;
+  controls["auto-register-app-ids"].listeners.change();
+  vm.runInContext('autoSavePending = true', context);
+  vm.runInContext('syncAutoRenewInputs({time:"21:17",min_days:3})', context);
+  assert.equal(controls["auto-register-app-ids"].checked, true, "an old response after save must not reset the checkbox");
+  vm.runInContext('syncAutoRenewInputs({time:"22:30",min_days:5,auto_register_app_ids:true})', context);
   assert.equal(controls["auto-time"].value, "22:30");
   assert.equal(vm.runInContext('autoDraftDirty', context), false, "server confirmation clears the draft");
 

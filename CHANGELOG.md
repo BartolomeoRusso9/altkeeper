@@ -2,6 +2,11 @@
 
 ## Unreleased
 
+### Added
+- Automatic renewal can optionally register missing App IDs before downloading their profiles.
+  The setting is off by default and the dashboard warns that registrations use the free Apple ID's
+  10-per-7-days App ID quota.
+
 ### Fixed
 - Sign-in no longer fails when Apple rejects the SMS 2FA request with HTTP 403 and an empty
   body: the vendored isideload now logs a warning (without the response payload) and falls

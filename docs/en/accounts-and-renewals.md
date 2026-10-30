@@ -51,6 +51,13 @@ fails, AltKeeper logs a warning and falls back to all known profiles for the con
 regardless of expiry, even with `--force --installed-only`. It does not guarantee renewal of only
 installed profiles. Read `altkeeper renew --help` for the complete option list.
 
+### Automatically register missing App IDs
+
+The dashboard option **Auto-register missing App IDs** is off by default. When enabled, renewal
+registers a missing App ID before downloading its profile, consuming the free account's quota of
+10 App IDs per 7 days. If no quota remains, renewal fails explicitly instead of skipping the app;
+dry runs never register.
+
 ## Schedule renewals
 
 Choose one scheduler:

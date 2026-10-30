@@ -49,6 +49,13 @@ Usa `--bundle <bundle-id>` per scegliere un'app. `--force` ignora la normale sog
 Con `--installed-only` puoi richiedere un controllo riuscito delle app installate anche durante un
 rinnovo CLI forzato. Per tutte le opzioni esegui `altkeeper renew --help`.
 
+### Registra automaticamente gli App ID mancanti
+
+L'opzione **Registra automaticamente gli App ID mancanti** della pagina web è disattivata per
+impostazione predefinita. Se la attivi, il rinnovo registra un App ID mancante prima di scaricarne
+il profilo, consumando la quota dell'Apple ID gratuito di 10 App ID ogni 7 giorni. Se la quota è
+esaurita, il rinnovo fallisce esplicitamente invece di saltare l'app; le dry-run non registrano.
+
 ## Pianifica i rinnovi
 
 Scegli un solo sistema di pianificazione:
