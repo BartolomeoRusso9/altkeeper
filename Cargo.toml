@@ -77,6 +77,11 @@ isideload = { path = "vendor/isideload" }
 [patch."https://github.com/SideStore/apple-private-apis.git"]
 omnisette = { path = "vendor/omnisette" }
 
+# android-loader (dipendenza git di omnisette) richiede xmas-elf 0.9, vulnerabile a RUSTSEC-2025-0018.
+# Il fork è identico al commit dfa8650 di upstream (branch bigger_pages) tranne `xmas-elf = "0.10"`.
+[patch."https://github.com/Dadoum/android-loader"]
+android-loader = { git = "https://github.com/BartolomeoRusso9/android-loader", rev = "96ed02b2aee91d7854dcb4b75a17e4288f40ab94" }
+
 [profile.release]
 opt-level = "s"
 lto = true
