@@ -2803,6 +2803,19 @@ fn short_error(err: &str) -> String {
             .take(1200)
             .collect();
     }
+    // iOS reports its limit of three apps per iPhone with a free developer profile as a
+    // multi-line message: the `{( ... )}` block lists the apps using up the slots. Keep it,
+    // otherwise the log stops at `{(` and hides the very apps the user has to delete.
+    if err.contains("maximum number of installed apps using a free developer profile") {
+        let detail = err.split_whitespace().collect::<Vec<_>>().join(" ");
+        let detail: String = detail.chars().take(1000).collect();
+        return format!(
+            "{detail} | iOS allows at most 3 apps signed with a free developer profile on one \
+             iPhone (expired and offloaded apps count too). The limit is on the iPhone, not on \
+             the Apple ID, so another account does not help: delete one of the apps listed \
+             above, then try again."
+        );
+    }
     let one_line = err
         .lines()
         .map(str::trim)
@@ -3163,6 +3176,19 @@ mod tests {
                 .count(),
             1200
         );
+    }
+
+    #[test]
+    fn free_profile_limit_error_keeps_the_list_of_apps() {
+        let raw = "IPA installation failed: Application verification failed: This device has \
+                   reached the maximum number of installed apps using a free developer profile: {(\n    \
+                   \"TEAM.com.example.one\",\n    \"TEAM.com.example.two\",\n    \
+                   \"TEAM.com.example.three\"\n)}";
+        let error = short_error(raw);
+        assert!(!error.contains('\n'));
+        assert!(error.contains("TEAM.com.example.one"));
+        assert!(error.contains("TEAM.com.example.three"));
+        assert!(error.contains("not on the Apple ID"));
     }
 
     #[test]
