@@ -5,41 +5,63 @@
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <meta name="color-scheme" content="light">
 <title>AltKeeper</title>
-<meta name="theme-color" content="#f5f6f8">
+<meta name="theme-color" content="#027480">
 <link rel="apple-touch-icon" sizes="180x180" href="/apple-touch-icon.png">
 <link rel="icon" type="image/png" sizes="32x32" href="/favicon-32.png">
 <style>
   :root {
     color-scheme: light;
-    --bg: #f4f6f8; --card: #fff; --text: #202a36; --muted: #697787; --line: #dce2e8;
-    --accent: #315f91; --accent-hover: #254c76; --accent-text: #fff;
-    --ok: #187558; --ok-bg: #e6f3ed; --soon: #8b671d; --soon-bg: #faf2dd;
-    --urgent: #a84740; --urgent-bg: #f8e9e7; --track: #e9edf1;
-    --surface: #f9fafb; --shadow: 0 12px 32px rgb(34 49 66 / 5%);
+    /* Palette tratta dal logo: teal profondo, onde wifi, alone menta, crema */
+    --brand-1: #027480; --brand-2: #0b888f; --wifi: #3bb8b4; --mint: #95ccc0; --cream: #fdfcf7;
+    --bg: #edf4f3; --card: #fff; --text: #12292d; --muted: #5b7478; --line: #d5e4e2;
+    --accent: #0b7f88; --accent-hover: #076771; --accent-text: #fff; --accent-soft: #e5f3f0;
+    --ok: #0c7a64; --ok-bg: #def2ec; --soon: #8a6414; --soon-bg: #fbf1d9;
+    --urgent: #b04339; --urgent-bg: #fbe8e5; --track: #e0ecea;
+    --surface: #f5faf9; --shadow: 0 1px 2px rgb(7 60 66 / 6%), 0 10px 28px rgb(7 60 66 / 7%);
+    --chevron: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='12' height='8' fill='none' stroke='%230b7f88' stroke-width='2' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpath d='m1 1.5 5 5 5-5'/%3E%3C/svg%3E");
+    --chevron-light: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='12' height='8' fill='none' stroke='%23ffffff' stroke-width='2' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpath d='m1 1.5 5 5 5-5'/%3E%3C/svg%3E");
   }
   * { box-sizing: border-box; }
   body {
-    margin: 0; background: var(--bg); color: var(--text);
-    font: 15px/1.55 ui-sans-serif, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+    margin: 0; color: var(--text);
+    background: linear-gradient(180deg, #d8e9e6 0, var(--bg) 360px) no-repeat, var(--bg);
+    font: 15px/1.55 ui-sans-serif, -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
     -webkit-font-smoothing: antialiased;
   }
   main { max-width: 1120px; margin: 0 auto; padding: 26px 28px 56px; }
+
+  /* Intestazione */
   .topbar {
     display: flex; justify-content: space-between; align-items: center; gap: 24px;
-    padding: 0 0 22px; margin: 0 0 18px; border-bottom: 1px solid var(--line);
+    padding: 22px 26px; margin: 0 0 20px; border-radius: 20px; color: #fff;
+    background:
+      radial-gradient(circle at 94% -30%, rgb(149 204 192 / 42%) 0, transparent 46%),
+      radial-gradient(circle at 80% 140%, rgb(59 184 180 / 45%) 0, transparent 44%),
+      linear-gradient(135deg, var(--brand-1), var(--brand-2) 62%, #139a9c);
+    box-shadow: 0 14px 34px rgb(2 90 100 / 24%);
   }
-  .brand { display: flex; align-items: center; gap: 13px; min-width: 0; }
+  .brand { display: flex; align-items: center; gap: 15px; min-width: 0; }
   .brand-mark {
-    display: block; width: 42px; height: 42px; border-radius: 12px; object-fit: cover;
+    display: block; width: 48px; height: 48px; border-radius: 13px; object-fit: cover;
+    box-shadow: 0 0 0 2px rgb(255 255 255 / 35%), 0 6px 16px rgb(0 40 45 / 30%);
   }
-  h1 { font-size: 1.55rem; line-height: 1.15; letter-spacing: -.045em; margin: 0; font-weight: 720; }
-  .sub { color: var(--muted); margin: 4px 0 0; font-size: .9rem; }
+  h1 { font-size: 1.6rem; line-height: 1.15; letter-spacing: -.04em; margin: 0; font-weight: 720; color: #fff; }
+  .sub { color: rgb(255 255 255 / 82%); margin: 4px 0 0; font-size: .9rem; }
   .device-actions { display: flex; align-items: end; gap: 9px; }
-  .device-actions label { margin: 0 0 5px; font-size: .72rem; color: var(--muted); letter-spacing: .04em; }
-  #device-select { min-width: 190px; }
-  .device-add {
-    background: transparent; color: var(--accent); border-color: #bdcbd9; white-space: nowrap;
+  .device-actions label {
+    margin: 0 0 5px; font-size: .7rem; color: rgb(255 255 255 / 78%); letter-spacing: .09em;
   }
+  #device-select { min-width: 190px; }
+  .topbar select {
+    background-color: rgb(255 255 255 / 13%); background-image: var(--chevron-light);
+    border-color: rgb(255 255 255 / 32%); color: #fff;
+  }
+  .topbar select:focus { border-color: #fff; box-shadow: 0 0 0 3px rgb(255 255 255 / 25%); }
+  .topbar select option { color: var(--text); background: #fff; }
+  .device-add {
+    background: rgb(255 255 255 / 14%); color: #fff; border-color: rgb(255 255 255 / 40%); white-space: nowrap;
+  }
+  .device-add:hover:not(:disabled) { background: rgb(255 255 255 / 25%); border-color: #fff; }
   .device-create {
     display: flex; align-items: end; gap: 12px; padding: 16px 18px; margin: 0 0 16px;
     border: 1px solid var(--line); border-radius: 14px; background: var(--card); box-shadow: var(--shadow);
@@ -48,11 +70,20 @@
   .device-create label { margin-top: 0; }
   .device-create input { max-width: 360px; }
   #pairing { margin: 0 0 14px; }
+
+  /* Card */
   .card {
     background: var(--card); border: 1px solid var(--line); border-radius: 16px;
-    padding: 22px 24px; margin: 0 0 14px; box-shadow: var(--shadow);
+    padding: 22px 24px; margin: 0 0 16px; box-shadow: var(--shadow);
   }
-  .card h2 { font-size: 1.08rem; letter-spacing: -.018em; margin: 0 0 12px; font-weight: 680; }
+  .card h2 {
+    display: flex; align-items: center; gap: 10px;
+    font-size: 1.08rem; letter-spacing: -.018em; margin: 0 0 12px; font-weight: 680;
+  }
+  .card h2::before {
+    content: ""; flex: none; width: 4px; height: 18px; border-radius: 3px;
+    background: linear-gradient(180deg, var(--wifi), var(--brand-1));
+  }
   .row { display: flex; align-items: center; gap: 12px; flex-wrap: wrap; }
   .item-head { display: flex; align-items: center; gap: 12px; flex-wrap: nowrap; }
   .item-head .item-info { align-self: center; }
@@ -77,75 +108,122 @@
   .app-name { overflow-wrap: anywhere; }
   .item-info { flex: 1 1 0; min-width: 0; overflow-wrap: anywhere; }
   .item-head button { white-space: nowrap; }
-  .nested { padding: 12px 14px; border-radius: 10px; background: var(--surface); margin-top: 10px; }
+  .nested {
+    padding: 12px 14px; border-radius: 10px; background: var(--surface);
+    border: 1px solid var(--line); margin-top: 10px;
+  }
   .nested > div + div { border-top: 1px solid var(--line); padding-top: 8px; margin-top: 8px; }
   .mini { font-size: .82rem; padding: 7px 10px; }
-  select, input[type=time] { font: inherit; min-height: 42px; padding: 9px 12px; border: 1px solid var(--line);
-    border-radius: 9px; background: var(--surface); color: var(--text); }
-  .grow { flex: 1 1 auto; }
-  .pill {
-    display: inline-block; padding: 4px 10px; border-radius: 7px; font-weight: 650;
-    font-size: .82rem; background: var(--track); color: var(--muted);
+
+  /* Campi */
+  select, input[type=time] {
+    font: inherit; min-height: 42px; padding: 9px 12px; border: 1px solid var(--line);
+    border-radius: 9px; background-color: var(--surface); color: var(--text);
   }
+  select {
+    -webkit-appearance: none; appearance: none; padding-right: 34px; cursor: pointer;
+    background-image: var(--chevron); background-repeat: no-repeat; background-position: right 12px center;
+  }
+  input[type=text], input[type=password], input[type=email], input[type=tel], input[type=url], textarea {
+    width: 100%; font: inherit; padding: 10px 12px; border-radius: 9px; min-height: 42px;
+    border: 1px solid var(--line); background: var(--surface); color: var(--text);
+    transition: border-color .18s ease, box-shadow .18s ease, background-color .18s ease;
+  }
+  textarea { max-width: 100%; resize: vertical; }
+  input[type=file] {
+    width: 100%; font: inherit; font-size: .88rem; padding: 10px; color: var(--muted);
+    border: 1.5px dashed #9cc5c0; border-radius: 10px; background: var(--surface); cursor: pointer;
+  }
+  input[type=file]::file-selector-button {
+    font: inherit; font-weight: 620; margin-right: 12px; padding: 7px 13px; cursor: pointer;
+    border: 1px solid #b6d6d2; border-radius: 8px; background: var(--accent-soft); color: var(--accent-hover);
+  }
+  input[type=file]::file-selector-button:hover { background: #d3ebe6; }
+  input[type=checkbox] { accent-color: var(--accent); }
+  input:focus, select:focus, textarea:focus {
+    outline: none; border-color: var(--accent); background-color: #fff;
+    box-shadow: 0 0 0 3px rgb(11 136 143 / 20%);
+  }
+  input.code { font-size: 1.4rem; letter-spacing: .3em; text-align: center; max-width: 12ch; }
+  .grow { flex: 1 1 auto; }
+  details > summary {
+    cursor: pointer; font-weight: 620; color: var(--accent); padding: 4px 0; border-radius: 6px;
+  }
+  details > summary:hover { color: var(--accent-hover); }
+  label { display: block; font-weight: 620; margin: 12px 0 5px; font-size: .88rem; }
+  label.check { font-weight: 400; display: flex; gap: 8px; align-items: flex-start; margin: 8px 0; }
+
+  /* Stati */
+  .pill {
+    display: inline-flex; align-items: center; gap: 7px; padding: 4px 11px; border-radius: 999px;
+    font-weight: 650; font-size: .82rem; background: var(--track); color: var(--muted);
+  }
+  .pill::before { content: ""; width: 7px; height: 7px; border-radius: 50%; background: currentColor; }
   .pill.ok { background: var(--ok-bg); color: var(--ok); }
   .pill.bad { background: var(--urgent-bg); color: var(--urgent); }
   .muted { color: var(--muted); font-size: .88rem; }
   .banner {
     border-radius: 10px; padding: 11px 14px; margin: 10px 0 0; background: var(--soon-bg);
-    color: var(--soon); font-size: .9rem;
+    color: var(--soon); font-size: .9rem; border-left: 3px solid currentColor;
   }
   .banner.bad { background: var(--urgent-bg); color: var(--urgent); }
   .banner.good { background: var(--ok-bg); color: var(--ok); }
   ul.plain { list-style: none; margin: 0; padding: 0; }
   ul.plain li { padding: 14px 0; border-top: 1px solid var(--line); }
   ul.plain li:first-child { border-top: 0; padding-top: 0; }
-  .app-name { font-weight: 600; word-break: break-all; }
-  .bar { height: 5px; border-radius: 6px; background: var(--track); overflow: hidden; margin-top: 8px; }
-  .bar > span { display: block; height: 100%; border-radius: 6px; background: var(--ok); }
-  li.soon .bar > span { background: var(--soon); }
-  li.urgent .bar > span { background: var(--urgent); }
-  li.soon .when { color: var(--soon); } li.urgent .when { color: var(--urgent); }
+  .app-name { font-weight: 620; word-break: break-all; }
+  .bar { height: 6px; border-radius: 6px; background: var(--track); overflow: hidden; margin-top: 9px; }
+  .bar > span { display: block; height: 100%; border-radius: 6px; background: linear-gradient(90deg, var(--wifi), var(--brand-2)); }
+  li.soon .bar > span { background: linear-gradient(90deg, #e8b94a, var(--soon)); }
+  li.urgent .bar > span { background: linear-gradient(90deg, #e98a7f, var(--urgent)); }
+  li.soon .when { color: var(--soon); font-weight: 600; } li.urgent .when { color: var(--urgent); font-weight: 600; }
+  .quotas-row { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; }
+  .quota-badge {
+    display: inline-flex; align-items: center; padding: 4px 10px;
+    border-radius: 999px; font-size: .8rem; font-weight: 620;
+    background: var(--accent-soft); color: var(--accent-hover); border: 1px solid #c4e1dc;
+  }
+  .quota-badge.near-limit { background: var(--soon-bg); color: var(--soon); border-color: var(--soon); }
+  .quota-badge.at-limit { background: var(--urgent-bg); color: var(--urgent); border-color: var(--urgent); }
+
+  /* Pulsanti */
   button {
     display: inline-flex; align-items: center; justify-content: center; text-align: center;
     min-height: 42px; line-height: 1.25; font: inherit; font-size: .9rem; font-weight: 620;
     border-radius: 9px; padding: 9px 13px; cursor: pointer;
-    border: 1px solid var(--line); background: var(--card); color: var(--text);
-    transition: background-color .18s ease, border-color .18s ease, color .18s ease, transform .18s ease;
+    border: 1px solid #c3d9d6; background: var(--card); color: var(--accent-hover);
+    transition: background-color .18s ease, border-color .18s ease, color .18s ease, transform .18s ease, box-shadow .18s ease;
   }
-  button:hover:not(:disabled) { background: var(--surface); border-color: #bac6d1; }
+  button:hover:not(:disabled) { background: var(--accent-soft); border-color: #8fc2bd; }
   button:active:not(:disabled) { transform: translateY(1px); }
-  button.primary { background: var(--accent); color: var(--accent-text); border-color: var(--accent); }
-  button.primary:hover:not(:disabled) { background: var(--accent-hover); border-color: var(--accent-hover); }
-  button:disabled { opacity: .5; cursor: not-allowed; }
-  :focus-visible { outline: 3px solid rgb(49 95 145 / 28%); outline-offset: 2px; }
-  label { display: block; font-weight: 620; margin: 12px 0 5px; font-size: .88rem; }
-  label.check { font-weight: 400; display: flex; gap: 8px; align-items: flex-start; margin: 8px 0; }
-  input[type=text], input[type=password], input[type=email], input[type=tel] {
-    width: 100%; font: inherit; padding: 10px 12px; border-radius: 9px; min-height: 42px;
-    border: 1px solid var(--line); background: var(--surface); color: var(--text);
+  button.primary {
+    background: linear-gradient(180deg, #0b8a93, #087680); color: var(--accent-text); border-color: #076a74;
+    box-shadow: 0 1px 2px rgb(5 70 76 / 28%), inset 0 1px 0 rgb(255 255 255 / 18%);
   }
-  input.code { font-size: 1.4rem; letter-spacing: .3em; text-align: center; max-width: 12ch; }
+  button.primary:hover:not(:disabled) {
+    background: linear-gradient(180deg, #0a7d86, #06646d); border-color: #055860;
+    box-shadow: 0 4px 12px rgb(5 90 98 / 30%), inset 0 1px 0 rgb(255 255 255 / 14%);
+  }
+  button:disabled { opacity: .5; cursor: not-allowed; }
+  :focus-visible { outline: 3px solid rgb(11 136 143 / 35%); outline-offset: 2px; }
+
+  /* Log */
   pre.log {
-    background: var(--surface); border: 1px solid var(--line); border-radius: 10px; padding: 12px;
-    font: 13px/1.4 ui-monospace, SFMono-Regular, Menlo, monospace; overflow-x: auto;
+    background: #0f2a2e; color: #cfe8e3; border: 1px solid #1b4147; border-radius: 10px; padding: 14px;
+    font: 13px/1.5 ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; overflow-x: auto;
     max-height: 240px; overflow-y: auto; margin: 10px 0 0; white-space: pre-wrap; word-break: break-word;
   }
-  .hist .ico { width: 1.4em; display: inline-block; }
+  .hist .ico { width: 1.4em; display: inline-block; font-weight: 700; }
   pre.logs { max-height: 60vh; white-space: pre-wrap; overflow-wrap: anywhere; }
-  .quotas-row { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; }
-  .quota-badge {
-    display: inline-flex; align-items: center; padding: 4px 9px;
-    border-radius: 7px; font-size: .8rem; font-weight: 620;
-    background: var(--track); color: var(--muted); border: 1px solid var(--line);
-  }
-  .quota-badge.near-limit { background: var(--soon-bg); color: var(--soon); border-color: var(--soon); }
-  .quota-badge.at-limit { background: var(--urgent-bg); color: var(--urgent); border-color: var(--urgent); }
   [hidden] { display: none !important; }
-  .divider { height: 1px; background: var(--line); margin: 20px 0; }
-  footer { color: var(--muted); font-size: .82rem; text-align: left; margin-top: 22px; }
+  .divider { height: 1px; background: var(--line); margin: 22px 0; }
+  footer {
+    color: var(--muted); font-size: .82rem; text-align: center;
+    margin-top: 28px; padding-top: 18px; border-top: 1px solid var(--line);
+  }
   @media(max-width:680px) {
     main { padding: 18px 14px 36px; }
-    .topbar { align-items: flex-start; flex-direction: column; gap: 16px; }
+    .topbar { align-items: flex-start; flex-direction: column; gap: 16px; padding: 18px 16px; border-radius: 16px; }
     .device-actions { width: 100%; align-items: end; }
     #device-select { flex: 1; min-width: 0; }
     .device-create { align-items: stretch; flex-direction: column; }
@@ -209,7 +287,7 @@
     <details style="margin-top:12px">
       <summary data-i18n="Connection addresses">Connection addresses</summary>
       <label for="phone-addresses" data-i18n="Saved iPhone addresses (optional)">Saved iPhone addresses (optional)</label>
-      <textarea id="phone-addresses" rows="2" spellcheck="false" autocapitalize="off" autocomplete="off" placeholder="10.7.0.2:49152" style="width:100%;max-width:100%;box-sizing:border-box;font:inherit;padding:10px;border:1px solid var(--line);border-radius:8px;background:var(--bg);color:var(--text)"></textarea>
+      <textarea id="phone-addresses" rows="2" spellcheck="false" autocapitalize="off" autocomplete="off" placeholder="10.7.0.2:49152"></textarea>
       <p class="muted" data-i18n="Save up to two IP:port addresses, one per line, such as your home and VPN addresses.">Save up to two IP:port addresses, one per line, such as your home and VPN addresses.</p>
       <div class="row action-row">
         <button id="phone-addresses-save" type="button" data-i18n="Save addresses">Save addresses</button>
@@ -283,6 +361,10 @@
         </select>
       </div>
     </div>
+    <label class="check" for="auto-register-app-ids">
+      <input type="checkbox" id="auto-register-app-ids">
+      <span data-i18n="Auto-register missing App IDs (uses the 10/7-day App ID quota)">Auto-register missing App IDs (uses the 10/7-day App ID quota)</span>
+    </label>
     <p class="muted" data-i18n="If a scheduled renewal fails: retry after 30 minutes, up to twice more. Send Discord notification only after the final failure (or an unretryable authentication error).">If a scheduled renewal fails: retry after 30 minutes, up to twice more. Send Discord notification only after the final failure (or an unretryable authentication error).</p>
     <div class="row action-row" style="margin-top:10px">
       <button class="primary" id="auto-enable" type="button" data-i18n="Enable auto-renew">Enable auto-renew</button>
@@ -307,6 +389,11 @@
     <div class="divider"></div>
     <h2 data-i18n="Anisette server">Anisette server</h2>
     <p class="muted" data-i18n="Choose the server used for Apple authentication and AltStore.">Choose the server used for Apple authentication and AltStore.</p>
+    <div class="banner" id="anisette-locked" role="note" hidden>
+      This server is set by the <code>ALTKEEPER_ANISETTE_URL</code> environment variable, so it cannot be
+      changed here. Remove the variable (also <code>ALTREFRESH_ANISETTE_URL</code>) and restart AltKeeper
+      to choose a different server. You can still test the current one.
+    </div>
     <div class="row">
       <select id="anisette-server" aria-label="Anisette server">
         <option value="https://ani3.stikstore.app">ani3.stikstore.app (default)</option>
@@ -522,16 +609,18 @@ function installHint(s) {
 function syncAutoRenewInputs(auto) {
   if (autoDraftDirty) {
     // After saving, an earlier state request may still report the old values.
-    // Keep the draft until the server reflects both saved settings.
+    // Keep the draft until the server reflects all saved settings.
     if (!autoSavePending || auto.time !== $("auto-time").value
-        || Number(auto.min_days) !== Number($("auto-days").value)) return;
+        || Number(auto.min_days) !== Number($("auto-days").value)
+        || Boolean(auto.auto_register_app_ids) !== $("auto-register-app-ids").checked) return;
     autoDraftDirty = false;
     autoSavePending = false;
   }
   $("auto-time").value = auto.time || "06:00";
   $("auto-days").value = String(auto.min_days || 3);
+  $("auto-register-app-ids").checked = Boolean(auto.auto_register_app_ids);
 }
-for (const id of ["auto-time", "auto-days"]) {
+for (const id of ["auto-time", "auto-days", "auto-register-app-ids"]) {
   $(id).addEventListener("input", () => { autoDraftDirty = true; autoSavePending = false; });
   $(id).addEventListener("change", () => { autoDraftDirty = true; autoSavePending = false; });
 }
@@ -592,9 +681,12 @@ function render(s) {
   $("anisette-source").textContent = anisette.error
     ? anisette.error
     : "Using " + (anisette.url || "unknown") + " (" + (anisette.source || "unknown") + ").";
-  for (const id of ["anisette-server", "anisette-custom", "anisette-save", "anisette-clear", "anisette-test"]) {
-    $(id).disabled = !!s.busy || !!anisette.locked || (id === "anisette-test" && anisetteTestRunning);
+  show("anisette-locked", !!anisette.locked);
+  for (const id of ["anisette-server", "anisette-custom", "anisette-save", "anisette-clear"]) {
+    $(id).disabled = !!s.busy || !!anisette.locked;
   }
+  // Testing is read-only, so it stays available while the server is locked by the environment.
+  $("anisette-test").disabled = !!s.busy || anisetteTestRunning;
   $("anisette-custom").disabled = !!s.busy || !!anisette.locked || select.value !== "custom";
 
   // iPhone
@@ -916,7 +1008,8 @@ $("auto-enable").onclick = () => {
   banner("auto-error", "");
   act(async () => {
     await api("/api/auto-renew", {
-      enabled:true, time:$("auto-time").value, min_days:Number($("auto-days").value)
+      enabled:true, time:$("auto-time").value, min_days:Number($("auto-days").value),
+      auto_register_app_ids:$("auto-register-app-ids").checked
     });
     autoSavePending = true;
   }, "auto-error");
@@ -925,7 +1018,8 @@ $("auto-disable").onclick = () => {
   banner("auto-error", "");
   act(async () => {
     await api("/api/auto-renew", {
-      enabled:false, time:$("auto-time").value, min_days:Number($("auto-days").value)
+      enabled:false, time:$("auto-time").value, min_days:Number($("auto-days").value),
+      auto_register_app_ids:$("auto-register-app-ids").checked
     });
     autoSavePending = true;
   }, "auto-error");
