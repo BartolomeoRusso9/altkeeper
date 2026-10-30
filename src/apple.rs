@@ -118,6 +118,7 @@ impl TfaChannel {
 
 pub const DEFAULT_ANISETTE_URL: &str = "https://ani3.stikstore.app";
 pub const ISIDELOAD_ANISETTE_URL: &str = "https://ani.jkcoxson.com";
+pub const LOCAL_ANISETTE_URL: &str = "http://127.0.0.1:8788";
 const ANISETTE_URL_FILE: &str = "anisette-url";
 const ANISETTE_EFFECTIVE_URL_FILE: &str = "anisette-effective-url";
 
@@ -317,6 +318,62 @@ fn retire_anisette_state(dir: &Path) -> Result<bool, String> {
 /// Se il server dice "reprovision required" (-45061) l'identità salvata viene messa da parte
 /// e si riprova una volta sola con una nuova, invece di restare bloccati finché qualcuno
 /// non cancella `state/anisette_state` a mano.
+pub async fn test_anisette_url(
+    dir: &Path,
+    custom_url: Option<&str>,
+) -> Result<serde_json::Value, String> {
+    let choice = anisette_choice(dir)?;
+    let target_url = match custom_url.map(str::trim).filter(|s| !s.is_empty()) {
+        Some(raw) => anisette_url(Some(raw))?.ok_or("Anisette URL cannot be empty.")?,
+        None => choice.url.clone(),
+    };
+    if target_url == choice.url {
+        return anisette_for_altstore(dir).await;
+    }
+    use isideload::{anisette::AnisetteDataGenerator, auth::grandslam::GrandSlam};
+    let temp_state = dir.join(STATE_DIR).join("anisette-test");
+    let _ = std::fs::remove_dir_all(&temp_state);
+    std::fs::create_dir_all(&temp_state).map_err(dbg)?;
+    crate::fsperm::restrict_dir(&temp_state).map_err(dbg)?;
+    let mut provider = RemoteV3AnisetteProvider::default().map_err(|e| e.to_string())?;
+    provider = provider.set_url(&target_url);
+    let provider = provider
+        .set_storage(Box::new(FsStorage::new(temp_state.clone())))
+        .set_serial_number("2".to_string());
+    let mut generator = AnisetteDataGenerator::new(Arc::new(tokio::sync::RwLock::new(provider)));
+    let info = generator
+        .get_client_info()
+        .await
+        .map_err(|e| e.to_string())?;
+    let gs = Arc::new(
+        GrandSlam::new(info.clone(), false, None)
+            .await
+            .map_err(|e| e.to_string())?,
+    );
+    let data = generator
+        .get_anisette_data(gs)
+        .await
+        .map_err(|e| e.to_string());
+    let _ = std::fs::remove_dir_all(&temp_state);
+    let data = data?;
+    let now = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| d.as_secs())
+        .unwrap_or(0);
+    Ok(serde_json::json!({
+        "machineID": data.machine_id(),
+        "oneTimePassword": data.one_time_password(),
+        "localUserID": data.local_user_id(),
+        "routingInfo": data.routing_info.clone(),
+        "deviceUniqueIdentifier": data.device_unique_identifier(),
+        "deviceSerialNumber": "2",
+        "deviceDescription": info.client_info,
+        "date": iso8601_utc(now),
+        "locale": "en_US",
+        "timeZone": "GMT",
+    }))
+}
+
 pub async fn anisette_for_altstore(dir: &Path) -> Result<serde_json::Value, String> {
     match anisette_for_altstore_once(dir).await {
         Err(e) if needs_reprovision(&e) => {

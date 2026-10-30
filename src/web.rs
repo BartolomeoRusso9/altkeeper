@@ -36,6 +36,7 @@ const FAVICON_32: &[u8] = include_bytes!("web/favicon-32.png");
 const RENEW_LOG: &str = "renew.log";
 const AUTO_RENEW_CONFIG: &str = "state/auto-renew.json";
 const DISCORD_WEBHOOK_FILE: &str = "state/discord-webhook";
+const TELEGRAM_CONFIG_FILE: &str = "state/telegram-bot.json";
 const AUTO_PAIR_OFF_FILE: &str = "state/auto-pair-off";
 const APP_STATUS_FILE: &str = "state/app-renew-status.json";
 const RETRY_SECONDS: u64 = 30 * 60;
@@ -446,6 +447,88 @@ fn send_discord_message(dir: &Path, message: &str) -> Result<(), String> {
     }
 }
 
+#[derive(Serialize, Deserialize, Clone, Default)]
+struct TelegramConfig {
+    bot_token: String,
+    chat_id: String,
+}
+
+fn validate_telegram_token(token: &str) -> bool {
+    let Some((bot_id, secret)) = token.split_once(':') else { return false };
+    bot_id.len() >= 5 && bot_id.len() <= 20 && secret.len() >= 20 && secret.len() <= 120
+        && bot_id.bytes().all(|b| b.is_ascii_digit())
+        && secret.bytes().all(|b| b.is_ascii_alphanumeric() || b == b'-' || b == b'_')
+}
+
+fn validate_telegram_chat_id(chat_id: &str) -> bool {
+    if chat_id.is_empty() || chat_id.len() > 64 { return false; }
+    if let Some(rest) = chat_id.strip_prefix('-') {
+        !rest.is_empty() && rest.bytes().all(|b| b.is_ascii_digit())
+    } else if let Some(rest) = chat_id.strip_prefix('@') {
+        rest.len() >= 4 && rest.bytes().all(|b| b.is_ascii_alphanumeric() || b == b'_')
+    } else {
+        chat_id.bytes().all(|b| b.is_ascii_digit())
+    }
+}
+
+fn load_telegram_config(dir: &Path) -> Option<TelegramConfig> {
+    let raw = std::fs::read_to_string(dir.join(TELEGRAM_CONFIG_FILE)).ok()?;
+    let cfg: TelegramConfig = serde_json::from_str(&raw).ok()?;
+    if validate_telegram_token(cfg.bot_token.trim()) && validate_telegram_chat_id(cfg.chat_id.trim()) {
+        Some(TelegramConfig {
+            bot_token: cfg.bot_token.trim().to_string(),
+            chat_id: cfg.chat_id.trim().to_string(),
+        })
+    } else {
+        None
+    }
+}
+
+fn telegram_configured(dir: &Path) -> bool {
+    load_telegram_config(dir).is_some()
+}
+
+fn send_telegram_failure(dir: &Path, error: &str) -> Result<(), String> {
+    let message = format!(
+        "⚠️ AltKeeper: automatic renewal failed after retries.\n{}",
+        error.chars().take(240).collect::<String>()
+    );
+    send_telegram_message(dir, &message)
+}
+
+fn send_telegram_message(dir: &Path, message: &str) -> Result<(), String> {
+    use std::io::Write;
+    let Some(cfg) = load_telegram_config(dir) else {
+        return Err("Telegram bot is not configured".into());
+    };
+    let url = format!("https://api.telegram.org/bot{}/sendMessage", cfg.bot_token);
+    let body = json!({
+        "chat_id": cfg.chat_id,
+        "text": message,
+    }).to_string();
+    let mut child = std::process::Command::new("curl")
+        .args([
+            "--fail", "--silent", "--show-error", "--max-time", "12",
+            "--request", "POST", "--header", "Content-Type: application/json",
+            "--data-raw", &body, "--config", "-",
+        ])
+        .stdin(std::process::Stdio::piped())
+        .stdout(std::process::Stdio::null())
+        .stderr(std::process::Stdio::piped())
+        .spawn()
+        .map_err(crate::phone::dbg)?;
+    if let Some(mut stdin) = child.stdin.take() {
+        stdin.write_all(format!("url = \"{url}\"\n").as_bytes()).map_err(crate::phone::dbg)?;
+    }
+    let output = child.wait_with_output().map_err(crate::phone::dbg)?;
+    if output.status.success() {
+        Ok(())
+    } else {
+        Err("Telegram rejected message. Check Bot Token, Chat ID, and make sure you sent /start to the bot.".into())
+    }
+}
+
+
 async fn auto_renew_loop(app: Arc<App>) {
     loop {
         let now_secs = now();
@@ -638,16 +721,20 @@ fn profile_router(app: Arc<App>) -> Router {
         .route("/api/jit/enable", post(enable_jit))
         .route("/api/phone-addresses", post(update_phone_addresses))
         .route("/api/auto-pair", post(update_auto_pair))
+        .route("/api/autostart", post(update_autostart))
         .route("/api/renew", post(renew))
         .route("/api/renew/cancel-wait", post(cancel_renew_wait))
         .route("/api/pair-usb", post(pair_usb))
         .route("/api/auto-renew", post(update_auto_renew))
         .route("/api/discord", post(update_discord))
         .route("/api/discord/test", post(test_discord))
+        .route("/api/telegram", post(update_telegram))
+        .route("/api/telegram/test", post(test_telegram))
         .route("/api/anisette", post(update_anisette))
         .route("/api/anisette/test", post(test_anisette))
         .route("/api/profile/remove", post(remove_profile))
         .route("/api/profile/restore", post(restore_profile))
+        .route("/api/profile/backup/remove", post(remove_backup))
         .route(
             "/api/install",
             post(install).layer(DefaultBodyLimit::max(MAX_IPA_BYTES + 1024 * 1024)),
@@ -791,7 +878,7 @@ async fn manager_guard(
             req.uri().path(),
             "/apple-touch-icon.png" | "/favicon-32.png"
         );
-    if !public_icon && manager.pin.is_none() && !host_is_local(req.headers()) {
+    if !public_icon && manager.pin.is_none() && !host_is_local_or_lan(req.headers()) {
         return (StatusCode::FORBIDDEN, "host non ammesso").into_response();
     }
     if !public_icon {
@@ -844,6 +931,56 @@ fn host_is_local(headers: &HeaderMap) -> bool {
         host.split(':').next().unwrap_or("")
     };
     matches!(name, "localhost" | "127.0.0.1" | "::1")
+}
+
+fn host_is_local_or_lan(headers: &HeaderMap) -> bool {
+    if host_is_local(headers) {
+        return true;
+    }
+    let Some(host) = headers.get(header::HOST).and_then(|v| v.to_str().ok()) else {
+        return false;
+    };
+    let name = if let Some(rest) = host.strip_prefix('[') {
+        rest.split(']').next().unwrap_or("")
+    } else {
+        host.split(':').next().unwrap_or("")
+    };
+    if name.ends_with(".local") {
+        return true;
+    }
+    if let Ok(ip) = name.parse::<std::net::IpAddr>() {
+        match ip {
+            std::net::IpAddr::V4(v4) => v4.is_loopback() || v4.is_private() || v4.is_link_local(),
+            std::net::IpAddr::V6(v6) => v6.is_loopback() || (v6.segments()[0] & 0xfe00) == 0xfc00,
+        }
+    } else {
+        false
+    }
+}
+
+pub fn discover_lan_ip_for(phone_hint: Option<&str>) -> Option<String> {
+    let mut probes: Vec<String> = Vec::new();
+    if let Some(h) = phone_hint {
+        let host = h.split(':').next().unwrap_or(h).trim();
+        if !host.is_empty() && host != "127.0.0.1" && host != "localhost" {
+            probes.push(format!("{host}:80"));
+        }
+    }
+    probes.push("192.168.1.1:80".to_string());
+    probes.push("10.255.255.255:1".to_string());
+    for target in probes {
+        if let Ok(s) = std::net::UdpSocket::bind("0.0.0.0:0") {
+            if s.connect(&target).is_ok() {
+                if let Ok(addr) = s.local_addr() {
+                    let ip = addr.ip();
+                    if !ip.is_loopback() && !ip.is_unspecified() {
+                        return Some(ip.to_string());
+                    }
+                }
+            }
+        }
+    }
+    None
 }
 
 fn basic_password_ok(headers: &HeaderMap, pin: &str) -> bool {
@@ -953,6 +1090,17 @@ async fn logs(uri: Uri) -> Json<Value> {
     Json(json!({ "seq": seq, "lines": lines }))
 }
 
+
+#[cfg(any(windows, target_os = "macos"))]
+fn is_autostart_active() -> bool {
+    crate::tray::is_autostart_enabled()
+}
+
+#[cfg(not(any(windows, target_os = "macos")))]
+fn is_autostart_active() -> bool {
+    false
+}
+
 async fn state(State(app): State<Arc<App>>) -> Json<Value> {
     expire_pending_ipa(&app);
     let account = apple::read_account(&app.dir);
@@ -994,6 +1142,10 @@ async fn state(State(app): State<Arc<App>>) -> Json<Value> {
         "busy": app.busy.load(Ordering::SeqCst) || ANY_PROFILE_BUSY.load(Ordering::SeqCst),
         "pairing": pairing,
         "device": { "id": app.device_id, "name": app.device_name },
+        "autostart": {
+            "supported": cfg!(any(windows, target_os = "macos")),
+            "enabled": is_autostart_active(),
+        },
         "auto_pair": {
             "enabled": app.device_id == "default" && phone::auto_pair_configured_in(&app.dir),
             "locked": app.device_id != "default"
@@ -1009,6 +1161,8 @@ async fn state(State(app): State<Arc<App>>) -> Json<Value> {
             "retry_at": schedule.retry_at,
             "last_error": schedule.last_error,
             "discord_configured": discord_configured(&app.dir),
+            "telegram_configured": telegram_configured(&app.dir),
+            "telegram_chat_id": load_telegram_config(&app.dir).map(|c| c.chat_id),
             "time_zone": "UTC",
             "next_run": next_scheduled,
         },
@@ -1077,6 +1231,7 @@ async fn state(State(app): State<Arc<App>>) -> Json<Value> {
         "history": history,
         "backups": account.as_ref().and_then(|a| a.team_id.as_deref())
             .map(|team| backup_views(&app.dir, team)).unwrap_or_default(),
+        "lan_ip": discover_lan_ip_for(g.snapshot.address.as_deref()),
         "app_status": std::fs::read_to_string(app.dir.join(APP_STATUS_FILE)).ok()
             .and_then(|s| serde_json::from_str::<Value>(&s).ok())
             .unwrap_or(json!({})),
@@ -1364,11 +1519,21 @@ async fn update_anisette(
     )
 }
 
-async fn test_anisette(State(app): State<Arc<App>>) -> (StatusCode, Json<Value>) {
+#[derive(Deserialize, Default)]
+struct TestAnisetteReq {
+    #[serde(default)]
+    url: Option<String>,
+}
+
+async fn test_anisette(
+    State(app): State<Arc<App>>,
+    body: axum::body::Bytes,
+) -> (StatusCode, Json<Value>) {
+    let req: TestAnisetteReq = serde_json::from_slice(&body).unwrap_or_default();
     let Some(_guard) = try_busy(&app) else {
         return json_err(StatusCode::CONFLICT, BUSY_MSG);
     };
-    match apple::anisette_for_altstore(&app.dir).await {
+    match apple::test_anisette_url(&app.dir, req.url.as_deref()).await {
         Ok(_) => json_ok(),
         Err(error) => json_err(
             StatusCode::BAD_GATEWAY,
@@ -1545,6 +1710,112 @@ async fn test_discord(State(app): State<Arc<App>>) -> (StatusCode, Json<Value>) 
 }
 
 #[derive(Deserialize)]
+struct TelegramReq {
+    #[serde(default)]
+    bot_token: Option<String>,
+    #[serde(default)]
+    chat_id: Option<String>,
+    #[serde(default)]
+    clear: bool,
+}
+
+async fn update_telegram(
+    State(app): State<Arc<App>>,
+    Json(req): Json<TelegramReq>,
+) -> (StatusCode, Json<Value>) {
+    if req.clear {
+        match std::fs::remove_file(app.dir.join(TELEGRAM_CONFIG_FILE)) {
+            Ok(()) => return json_ok(),
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => return json_ok(),
+            Err(_) => return json_err(StatusCode::INTERNAL_SERVER_ERROR, "Could not clear Telegram config"),
+        }
+    }
+    let token = req.bot_token.unwrap_or_default().trim().to_string();
+    let chat_id = req.chat_id.unwrap_or_default().trim().to_string();
+    if !validate_telegram_token(&token) {
+        return json_err(StatusCode::BAD_REQUEST, "Enter a valid Telegram Bot Token (e.g. 123456789:AAF...).");
+    }
+    if !validate_telegram_chat_id(&chat_id) {
+        return json_err(StatusCode::BAD_REQUEST, "Enter a valid Telegram Chat ID (e.g. 987654321 or -100...).");
+    }
+    let data = match serde_json::to_vec_pretty(&TelegramConfig { bot_token: token, chat_id }) {
+        Ok(d) => d,
+        Err(_) => return json_err(StatusCode::INTERNAL_SERVER_ERROR, "Could not serialize Telegram config"),
+    };
+    let state_dir = app.dir.join("state");
+    if std::fs::create_dir_all(&state_dir).is_err()
+        || crate::fsperm::restrict_dir(&state_dir).is_err()
+        || crate::fsperm::write_private(&app.dir.join(TELEGRAM_CONFIG_FILE), &data).is_err()
+    {
+        return json_err(StatusCode::INTERNAL_SERVER_ERROR, "Could not save Telegram config");
+    }
+    json_ok()
+}
+
+async fn test_telegram(State(app): State<Arc<App>>) -> (StatusCode, Json<Value>) {
+    if !telegram_configured(&app.dir) {
+        return json_err(StatusCode::BAD_REQUEST, "Configure and save your Telegram Bot Token and Chat ID first.");
+    }
+    let dir = app.dir.clone();
+    let sent = tokio::task::spawn_blocking(move || {
+        send_telegram_message(
+            &dir,
+            "✅ AltKeeper test notification: Your Telegram bot is connected and working! No renewal was performed."
+        )
+    }).await;
+    match sent {
+        Ok(Ok(())) => json_ok(),
+        Ok(Err(e)) => json_err(StatusCode::BAD_GATEWAY, &e),
+        _ => json_err(StatusCode::BAD_GATEWAY, "Telegram test delivery failed."),
+    }
+}
+
+#[derive(Deserialize)]
+struct RemoveBackupReq {
+    #[serde(default)]
+    uuid: Option<String>,
+    #[serde(default)]
+    uuids: Vec<String>,
+}
+
+async fn remove_backup(
+    State(app): State<Arc<App>>,
+    Json(req): Json<RemoveBackupReq>,
+) -> (StatusCode, Json<Value>) {
+    if app.busy.load(Ordering::SeqCst) || ANY_PROFILE_BUSY.load(Ordering::SeqCst) {
+        return json_err(StatusCode::CONFLICT, BUSY_MSG);
+    }
+    let team = apple::read_account(&app.dir).and_then(|a| a.team_id);
+    let Some(team) = team else {
+        return json_err(StatusCode::BAD_REQUEST, "Sign in before managing profile backups.");
+    };
+    let mut targets = req.uuids;
+    if targets.is_empty() {
+        if let Some(u) = req.uuid {
+            targets.push(u);
+        }
+    }
+    targets.retain(|u| !u.trim().is_empty());
+    if targets.is_empty() {
+        return json_err(StatusCode::BAD_REQUEST, "No backup specified for removal.");
+    }
+    let existing = backup_views(&app.dir, &team);
+    for u in &targets {
+        if !existing.iter().any(|p| p["uuid"].as_str().is_some_and(|id| id.eq_ignore_ascii_case(u))) {
+            return json_err(StatusCode::NOT_FOUND, "Profile backup was not found.");
+        }
+    }
+    for u in &targets {
+        if u.len() <= 64 && u.bytes().all(|b| b.is_ascii_hexdigit() || b == b'-') {
+            let path = app.dir.join(crate::SAVED_DIR).join(format!("{u}.mobileprovision"));
+            let _ = std::fs::remove_file(&path);
+            crate::log::line(&format!("[backup] Deleted saved profile backup {u}."));
+        }
+    }
+    json_ok()
+}
+
+#[derive(Deserialize)]
 struct RestoreReq {
     uuid: String,
 }
@@ -1693,24 +1964,40 @@ async fn renew(
 
 #[derive(Deserialize)]
 struct RemoveProfileReq {
-    uuid: String,
+    #[serde(default)]
+    uuid: Option<String>,
+    #[serde(default)]
+    uuids: Vec<String>,
 }
 
 async fn remove_profile(
     State(app): State<Arc<App>>,
     Json(req): Json<RemoveProfileReq>,
 ) -> (StatusCode, Json<Value>) {
-    if !app
-        .lock()
-        .snapshot
-        .profiles
-        .iter()
-        .any(|p| p.uuid.eq_ignore_ascii_case(&req.uuid))
+    let mut targets = req.uuids;
+    if targets.is_empty() {
+        if let Some(u) = req.uuid {
+            targets.push(u);
+        }
+    }
+    let mut seen = std::collections::HashSet::new();
+    targets.retain(|u| {
+        let trimmed = u.trim();
+        !trimmed.is_empty() && seen.insert(trimmed.to_ascii_lowercase())
+    });
+    if targets.is_empty() {
+        return json_err(StatusCode::BAD_REQUEST, "No profiles specified for removal.");
+    }
     {
-        return json_err(
-            StatusCode::NOT_FOUND,
-            "Profile is not in your team's current list. Check again.",
-        );
+        let profiles = &app.lock().snapshot.profiles;
+        for u in &targets {
+            if !profiles.iter().any(|p| p.uuid.eq_ignore_ascii_case(u)) {
+                return json_err(
+                    StatusCode::NOT_FOUND,
+                    "Profile is not in your team's current list. Check again.",
+                );
+            }
+        }
     }
     let Some(guard) = try_busy(&app) else {
         return json_err(StatusCode::CONFLICT, BUSY_MSG);
@@ -1720,11 +2007,11 @@ async fn remove_profile(
         g.job = JobView {
             kind: "remove_profile".into(),
             running: true,
-            lines: Vec::new(),
+            lines: vec![format!("Connecting to the iPhone to back up and remove {} profile(s)…", targets.len())],
             ok: None,
         };
     }
-    spawn_job(guard, move |app| run_remove_profile(app, req.uuid));
+    spawn_job(guard, move |app| run_remove_profiles(app, targets));
     json_ok()
 }
 
@@ -2291,6 +2578,7 @@ async fn run_renew(
         bundle.as_deref(),
         installed_only,
         Some(&app.renewal_wait),
+        Some(app.tfa.clone()),
         &mut say,
     )
     .await;
@@ -2348,6 +2636,13 @@ async fn run_renew(
             match send_discord_failure(&app.dir, err) {
                 Ok(()) => app.push_line("Discord failure notification sent."),
                 Err(e) => app.push_line(&format!("Discord notification failed: {e}")),
+            }
+        }
+        if notify && telegram_configured(&app.dir) {
+            let err = error.as_deref().unwrap_or("Unknown renewal error");
+            match send_telegram_failure(&app.dir, err) {
+                Ok(()) => app.push_line("Telegram failure notification sent."),
+                Err(e) => app.push_line(&format!("Telegram notification failed: {e}")),
             }
         }
     }
@@ -2421,26 +2716,31 @@ fn save_app_renew_status(app: &App, lines: &[String], selected: Option<&str>) {
     }
 }
 
-async fn run_remove_profile(app: Arc<App>, uuid: String) {
+async fn run_remove_profiles(app: Arc<App>, uuids: Vec<String>) {
+    let count = uuids.len();
     let result: Result<(), String> = async {
         let team = apple::read_account(&app.dir)
             .and_then(|a| a.team_id)
             .ok_or("Sign in to select a team before removing profiles.")?;
         let (_, mut link) =
             phone::connect_auto_in(&app.dir, app.phone, PAIRING_FILE, |_: &str| {}).await?;
-        let p = crate::remove_profile_with_backup(&app.dir, &mut link, &uuid, Some(&team)).await?;
-        app.push_line(&format!(
-            "Removed profile for {} [{}]. Backup saved in {}.",
-            p.bundle_id.as_deref().unwrap_or("?"),
-            p.uuid,
-            crate::SAVED_DIR
-        ));
+        for (i, uuid) in uuids.iter().enumerate() {
+            let p = crate::remove_profile_with_backup(&app.dir, &mut link, uuid, Some(&team)).await?;
+            let line = format!(
+                "[{}/{}] Removed profile for {} [{}]. Backup saved in {}.",
+                i + 1, count, p.bundle_id.as_deref().unwrap_or("?"), p.uuid, crate::SAVED_DIR
+            );
+            crate::log::line(&format!("[profile] {line}"));
+            app.push_line(&line);
+        }
         Ok(())
     }
     .await;
     let ok = result.is_ok();
     if let Err(e) = result {
-        app.push_line(&format!("Error: {}", short_error(&e)));
+        let msg = short_error(&e);
+        crate::log::err(&format!("[profile] Removal failed: {msg}"));
+        app.push_line(&format!("Error: {msg}"));
     }
     {
         let mut g = app.lock();
@@ -2802,6 +3102,34 @@ fn short_error(err: &str) -> String {
             .chars()
             .take(1200)
             .collect();
+    }
+    if let Some(detail) = trimmed
+        .strip_prefix("login Apple ID non riuscito:")
+        .or_else(|| trimmed.strip_prefix("Apple ID sign-in failed:"))
+    {
+        let e = err.to_lowercase();
+        if e.contains("-20101") || e.contains("entered incorrectly") {
+            return "Incorrect Apple ID or password.".into();
+        }
+        if e.contains("429") || e.contains("too many requests") {
+            return "Apple is rate-limiting requests. Wait a while, then try once.".into();
+        }
+        if e.contains("aborted") || e.contains("abort") {
+            return "Sign-in canceled: the code did not arrive in time.".into();
+        }
+        if let Some(last_bullet) = err
+            .lines()
+            .filter(|l| l.contains('●'))
+            .last()
+            .map(|l| l.trim().trim_start_matches('●').trim())
+            .filter(|l| !l.is_empty())
+        {
+            return format!("Apple ID sign-in failed: {last_bullet}");
+        }
+        let clean = detail.split_whitespace().collect::<Vec<_>>().join(" ");
+        if !clean.is_empty() {
+            return format!("Apple ID sign-in failed: {clean}");
+        }
     }
     // iOS reports its limit of three apps per iPhone with a free developer profile as a
     // multi-line message: the `{( ... )}` block lists the apps using up the slots. Keep it,
@@ -3717,5 +4045,41 @@ esito: 0
         assert_eq!(parse_history(log, 1).len(), 1);
         assert!(parse_history("", 5).is_empty());
         assert!(parse_history("righe senza intestazione\n", 5).is_empty());
+    }
+}
+
+
+#[derive(Deserialize)]
+struct AutostartUpdate {
+    enabled: bool,
+}
+
+async fn update_autostart(
+    State(app): State<Arc<App>>,
+    Json(payload): Json<AutostartUpdate>,
+) -> Response {
+    #[cfg(any(windows, target_os = "macos"))]
+    {
+        if let Err(e) = crate::tray::toggle_autostart(payload.enabled, &app.dir) {
+            return (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                Json(json!({ "error": e.to_string() })),
+            )
+                .into_response();
+        }
+        Json(json!({
+            "supported": true,
+            "enabled": crate::tray::is_autostart_enabled(),
+        }))
+        .into_response()
+    }
+    #[cfg(not(any(windows, target_os = "macos")))]
+    {
+        let _ = (app, payload);
+        (
+            StatusCode::NOT_IMPLEMENTED,
+            Json(json!({ "error": "Autostart is not supported on this platform" })),
+        )
+            .into_response()
     }
 }

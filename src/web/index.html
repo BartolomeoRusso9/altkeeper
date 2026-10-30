@@ -5,238 +5,896 @@
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <meta name="color-scheme" content="light">
 <title>AltKeeper</title>
-<meta name="theme-color" content="#027480">
+<meta name="theme-color" content="#f5f6f8">
 <link rel="apple-touch-icon" sizes="180x180" href="/apple-touch-icon.png">
 <link rel="icon" type="image/png" sizes="32x32" href="/favicon-32.png">
 <style>
   :root {
-    color-scheme: light;
-    /* Palette tratta dal logo: teal profondo, onde wifi, alone menta, crema */
-    --brand-1: #027480; --brand-2: #0b888f; --wifi: #3bb8b4; --mint: #95ccc0; --cream: #fdfcf7;
-    --bg: #edf4f3; --card: #fff; --text: #12292d; --muted: #5b7478; --line: #d5e4e2;
-    --accent: #0b7f88; --accent-hover: #076771; --accent-text: #fff; --accent-soft: #e5f3f0;
-    --ok: #0c7a64; --ok-bg: #def2ec; --soon: #8a6414; --soon-bg: #fbf1d9;
-    --urgent: #b04339; --urgent-bg: #fbe8e5; --track: #e0ecea;
-    --surface: #f5faf9; --shadow: 0 1px 2px rgb(7 60 66 / 6%), 0 10px 28px rgb(7 60 66 / 7%);
-    --chevron: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='12' height='8' fill='none' stroke='%230b7f88' stroke-width='2' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpath d='m1 1.5 5 5 5-5'/%3E%3C/svg%3E");
-    --chevron-light: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='12' height='8' fill='none' stroke='%23ffffff' stroke-width='2' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpath d='m1 1.5 5 5 5-5'/%3E%3C/svg%3E");
+    --bg: #edf4f4;
+    --bg-pattern: radial-gradient(circle at 15% 0%, rgba(1, 120, 132, 0.10) 0%, transparent 50%),
+                  radial-gradient(circle at 85% 10%, rgba(43, 179, 173, 0.10) 0%, transparent 45%);
+    --card: #ffffff;
+    --card-alt: #f4f9f9;
+    --text: #0c1f22;
+    --muted: #4b676b;
+    --line: #cfe0e1;
+    --accent: #017884;
+    --accent-mid: #149694;
+    --accent-soft: #86c5bc;
+    --accent-cream: #fcfbf5;
+    --accent-gradient: linear-gradient(135deg, #016974 0%, #017884 48%, #189894 100%);
+    --accent-glow: rgba(1, 120, 132, 0.22);
+    --accent-text: #fcfbf5;
+    --ok: #0d8267;
+    --ok-bg: #dff5ee;
+    --soon: #9a6500;
+    --soon-bg: #fff2cf;
+    --urgent: #b9251a;
+    --urgent-bg: #fde6e3;
+    --track: #dce9ea;
+    --surface: #f4f9f9;
+    --card-shadow: 0 8px 24px -4px rgba(1, 92, 104, 0.08), 0 2px 6px -1px rgba(1, 92, 104, 0.04);
+  }
+  @media (prefers-color-scheme: dark) {
+    :root {
+      --bg: #071114;
+      --bg-pattern: radial-gradient(circle at 18% 0%, rgba(1, 120, 132, 0.22) 0%, transparent 52%),
+                    radial-gradient(circle at 82% 8%, rgba(43, 179, 173, 0.14) 0%, transparent 48%);
+      --card: #0d1b20;
+      --card-alt: #112329;
+      --text: #fcfbf5;
+      --muted: #8ab0b4;
+      --line: #1b353c;
+      --accent: #2bb3ad;
+      --accent-mid: #189894;
+      --accent-soft: #86c5bc;
+      --accent-cream: #fcfbf5;
+      --accent-gradient: linear-gradient(135deg, #017482 0%, #0e8e95 52%, #24aca6 100%);
+      --accent-glow: rgba(43, 179, 173, 0.28);
+      --accent-text: #fcfbf5;
+      --ok: #34d399;
+      --ok-bg: #0d2e24;
+      --soon: #fbbf24;
+      --soon-bg: #332609;
+      --urgent: #f87171;
+      --urgent-bg: #3b1515;
+      --track: #162b31;
+      --surface: #112329;
+      --card-shadow: 0 12px 32px -6px rgba(0, 0, 0, 0.55), 0 0 0 1px rgba(134, 197, 188, 0.08);
+    }
   }
   * { box-sizing: border-box; }
+  html, body {
+    margin: 0; padding: 0; width: 100%; max-width: 100%;
+    overflow-x: hidden;
+    -webkit-text-size-adjust: 100%;
+    text-size-adjust: 100%;
+  }
   body {
-    margin: 0; color: var(--text);
-    background: linear-gradient(180deg, #d8e9e6 0, var(--bg) 360px) no-repeat, var(--bg);
-    font: 15px/1.55 ui-sans-serif, -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+    background-color: var(--bg);
+    background-image: var(--bg-pattern);
+    background-attachment: fixed;
+    color: var(--text);
+    font: 15px/1.48 system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
     -webkit-font-smoothing: antialiased;
   }
-  main { max-width: 1120px; margin: 0 auto; padding: 26px 28px 56px; }
+  main {
+    max-width: 1140px; width: 100%; margin: 0 auto; padding: 18px 18px 44px;
+  }
 
-  /* Intestazione */
+  /* Creative Topbar Hero */
   .topbar {
-    display: flex; justify-content: space-between; align-items: center; gap: 24px;
-    padding: 22px 26px; margin: 0 0 20px; border-radius: 20px; color: #fff;
-    background:
-      radial-gradient(circle at 94% -30%, rgb(149 204 192 / 42%) 0, transparent 46%),
-      radial-gradient(circle at 80% 140%, rgb(59 184 180 / 45%) 0, transparent 44%),
-      linear-gradient(135deg, var(--brand-1), var(--brand-2) 62%, #139a9c);
-    box-shadow: 0 14px 34px rgb(2 90 100 / 24%);
+    position: relative;
+    overflow: hidden;
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    flex-wrap: wrap;
+    gap: 16px;
+    margin: 0 0 20px;
+    padding: 20px 24px;
+    border-radius: 22px;
+    background: linear-gradient(135deg, #015864 0%, #017482 48%, #159491 100%);
+    color: #fcfbf5;
+    box-shadow: 0 14px 32px -6px rgba(1, 116, 130, 0.38), inset 0 1px 0 rgba(252, 251, 245, 0.22);
+    border: 1px solid rgba(134, 197, 188, 0.28);
   }
-  .brand { display: flex; align-items: center; gap: 15px; min-width: 0; }
+  .topbar::before {
+    content: "";
+    position: absolute;
+    right: -36px;
+    top: -54px;
+    width: 240px;
+    height: 240px;
+    border-radius: 54px;
+    background: rgba(134, 197, 188, 0.14);
+    transform: rotate(45deg);
+    pointer-events: none;
+  }
+  .topbar::after {
+    content: "";
+    position: absolute;
+    right: 12px;
+    top: -22px;
+    width: 150px;
+    height: 150px;
+    border-radius: 38px;
+    background: rgba(252, 251, 245, 0.08);
+    transform: rotate(45deg);
+    pointer-events: none;
+  }
+  .brand {
+    position: relative;
+    z-index: 1;
+    display: flex;
+    align-items: center;
+    gap: 15px;
+    min-width: 0;
+  }
   .brand-mark {
-    display: block; width: 48px; height: 48px; border-radius: 13px; object-fit: cover;
-    box-shadow: 0 0 0 2px rgb(255 255 255 / 35%), 0 6px 16px rgb(0 40 45 / 30%);
+    display: block; width: 48px; height: 48px; border-radius: 14px; object-fit: cover;
+    box-shadow: 0 4px 14px rgba(0, 0, 0, 0.24); flex-shrink: 0;
+    border: 2px solid rgba(252, 251, 245, 0.24);
   }
-  h1 { font-size: 1.6rem; line-height: 1.15; letter-spacing: -.04em; margin: 0; font-weight: 720; color: #fff; }
-  .sub { color: rgb(255 255 255 / 82%); margin: 4px 0 0; font-size: .9rem; }
-  .device-actions { display: flex; align-items: end; gap: 9px; }
+  .topbar h1 {
+    font-size: 1.55rem;
+    font-weight: 800;
+    letter-spacing: -0.02em;
+    margin: 0;
+    color: #fcfbf5;
+  }
+  .topbar .sub {
+    margin: 4px 0 0;
+    color: rgba(252, 251, 245, 0.86);
+    font-size: 0.88rem;
+  }
+  .qr-btn {
+    position: relative;
+    z-index: 1;
+    display: inline-flex;
+    align-items: center;
+    gap: 8px;
+    border-radius: 13px;
+    font-weight: 700;
+    font-size: 0.88rem;
+    padding: 9px 15px;
+    background: rgba(252, 251, 245, 0.16);
+    border: 1px solid rgba(252, 251, 245, 0.35);
+    color: #fcfbf5;
+    backdrop-filter: blur(10px);
+    -webkit-backdrop-filter: blur(10px);
+    cursor: pointer;
+    transition: transform .15s ease, background .15s ease, box-shadow .15s ease;
+  }
+  .qr-btn:hover {
+    background: rgba(252, 251, 245, 0.26);
+    border-color: #fcfbf5;
+    transform: translateY(-1px);
+    box-shadow: 0 6px 18px rgba(0, 0, 0, 0.22);
+  }
+  .device-actions {
+    display: inline-flex; align-items: center; gap: 8px;
+    background: rgba(252, 251, 245, 0.14); border: 1px solid rgba(252, 251, 245, 0.28);
+    border-radius: 13px; padding: 5px 12px;
+  }
   .device-actions label {
-    margin: 0 0 5px; font-size: .7rem; color: rgb(255 255 255 / 78%); letter-spacing: .09em;
+    margin: 0; font-size: 0.65rem; font-weight: 800; letter-spacing: 0.05em; color: rgba(252, 251, 245, 0.82);
+    display: block;
   }
-  #device-select { min-width: 190px; }
-  .topbar select {
-    background-color: rgb(255 255 255 / 13%); background-image: var(--chevron-light);
-    border-color: rgb(255 255 255 / 32%); color: #fff;
+  .device-actions select {
+    background: transparent; border: 0; color: #fcfbf5; font-weight: 700; font-size: 0.88rem;
+    padding: 0; cursor: pointer; outline: none;
   }
-  .topbar select:focus { border-color: #fff; box-shadow: 0 0 0 3px rgb(255 255 255 / 25%); }
-  .topbar select option { color: var(--text); background: #fff; }
-  .device-add {
-    background: rgb(255 255 255 / 14%); color: #fff; border-color: rgb(255 255 255 / 40%); white-space: nowrap;
+  .device-actions select option {
+    background: #0d1b20; color: #fcfbf5;
   }
-  .device-add:hover:not(:disabled) { background: rgb(255 255 255 / 25%); border-color: #fff; }
-  .device-create {
-    display: flex; align-items: end; gap: 12px; padding: 16px 18px; margin: 0 0 16px;
-    border: 1px solid var(--line); border-radius: 14px; background: var(--card); box-shadow: var(--shadow);
-  }
-  .device-create .grow { min-width: 180px; }
-  .device-create label { margin-top: 0; }
-  .device-create input { max-width: 360px; }
-  #pairing { margin: 0 0 14px; }
 
-  /* Card */
+  /* Responsive 2-column Bento Grid */
+  .dashboard-grid {
+    display: grid;
+    grid-template-columns: minmax(0, 1fr);
+    gap: 18px;
+    width: 100%;
+  }
+  @media (min-width: 900px) {
+    .dashboard-grid {
+      grid-template-columns: minmax(0, 1.15fr) minmax(0, 0.85fr);
+      align-items: start;
+      gap: 20px;
+    }
+  }
+  .col-main, .col-side, .card, .nested, .item-head, .item-info, pre.log, pre.logs {
+    min-width: 0;
+    max-width: 100%;
+  }
+  #logs {
+    grid-column: 1 / -1;
+  }
+
+  /* Cards */
   .card {
-    background: var(--card); border: 1px solid var(--line); border-radius: 16px;
-    padding: 22px 24px; margin: 0 0 16px; box-shadow: var(--shadow);
+    position: relative;
+    background: var(--card);
+    border: 1px solid var(--line);
+    border-radius: 18px;
+    padding: 18px 20px;
+    margin: 0 0 16px;
+    box-shadow: var(--card-shadow);
+    transition: border-color .18s ease, box-shadow .18s ease;
+  }
+  .card:last-child { margin-bottom: 0; }
+  .card:hover {
+    border-color: rgba(24, 152, 148, 0.38);
+    box-shadow: 0 10px 26px -4px rgba(1, 92, 104, 0.10);
   }
   .card h2 {
-    display: flex; align-items: center; gap: 10px;
-    font-size: 1.08rem; letter-spacing: -.018em; margin: 0 0 12px; font-weight: 680;
+    font-size: 1.08rem;
+    font-weight: 750;
+    margin: 0 0 12px;
+    display: flex;
+    align-items: center;
+    gap: 9px;
+    color: var(--text);
   }
   .card h2::before {
-    content: ""; flex: none; width: 4px; height: 18px; border-radius: 3px;
-    background: linear-gradient(180deg, var(--wifi), var(--brand-1));
+    content: "";
+    display: inline-block;
+    width: 4px;
+    height: 18px;
+    border-radius: 999px;
+    background: var(--accent-gradient);
+    flex-shrink: 0;
   }
-  .row { display: flex; align-items: center; gap: 12px; flex-wrap: wrap; }
-  .item-head { display: flex; align-items: center; gap: 12px; flex-wrap: nowrap; }
+
+  .divider { height: 1px; background: var(--line); margin: 16px 0; }
+  .row { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; }
+  .item-head { display: flex; align-items: center; gap: 10px; flex-wrap: nowrap; }
   .item-head .item-info { align-self: center; }
+
+  /* Responsive Action Rows */
   .action-row { justify-content: flex-start; align-items: stretch; flex-wrap: nowrap; }
-  .action-row { gap: 6px; }
   .action-row > button {
-    flex: 1 1 0; min-width: 0; max-width: 184px; min-height: 42px;
-    padding: 8px 12px; text-align: center; white-space: normal;
+    flex: 1 1 0; min-width: 0; max-width: 184px; min-height: 48px;
+    padding: 6px 10px; text-align: center; white-space: normal;
     word-break: keep-all; overflow-wrap: anywhere;
   }
-  .jit-actions select { flex: 1 1 190px; min-width: 0; }
-  #btn-check, #btn-change, #btn-install, #btn-login, #btn-code, #btn-resend { min-width: 150px; }
+  #btn-install, #btn-login, #btn-code, #btn-resend {
+    width: 184px; min-height: 48px; padding: 6px 12px;
+  }
+  #btn-check, #btn-change {
+    width: auto; min-height: 40px; padding: 7px 14px;
+  }
   #code-form .row { justify-content: flex-start; flex-wrap: nowrap; gap: 8px; }
-  .item-head button { width: 108px; flex: 0 0 108px; }
-  .ext-option { display: flex; align-items: center; gap: 10px; padding: 10px 3px;
-    border-bottom: 1px solid var(--line); font-weight: 400; }
-  .ext-option input { width: 18px; height: 18px; }
+  #code-form .row > button { flex: 1 1 0; width: auto; min-width: 0; max-width: 184px; }
+
+  .item-head button { width: 102px; flex: 0 0 102px; white-space: nowrap; }
+  .ext-option { display: flex; align-items: center; gap: 10px; padding: 10px 3px; border-bottom: 1px solid var(--line); font-weight: 400; }
+  .ext-option input { width: 18px; height: 18px; accent-color: var(--accent); }
   .ext-option span { min-width: 0; overflow-wrap: anywhere; }
   .ext-option small { display: block; color: var(--muted); font-size: .76rem; }
   #extension-choice h3 { font-size: 1rem; margin: 0 0 8px; }
 
-  .app-name { overflow-wrap: anywhere; }
+  .app-name { font-weight: 650; word-break: break-all; overflow-wrap: anywhere; }
   .item-info { flex: 1 1 0; min-width: 0; overflow-wrap: anywhere; }
-  .item-head button { white-space: nowrap; }
   .nested {
-    padding: 12px 14px; border-radius: 10px; background: var(--surface);
+    padding: 12px 14px; border-radius: 13px; background: var(--card-alt);
     border: 1px solid var(--line); margin-top: 10px;
   }
   .nested > div + div { border-top: 1px solid var(--line); padding-top: 8px; margin-top: 8px; }
-  .mini { font-size: .82rem; padding: 7px 10px; }
-
-  /* Campi */
+  .mini { font-size: .82rem; padding: 7px 10px; min-height: 36px; }
   select, input[type=time] {
-    font: inherit; min-height: 42px; padding: 9px 12px; border: 1px solid var(--line);
-    border-radius: 9px; background-color: var(--surface); color: var(--text);
+    font: inherit; font-size: 15px; padding: 9px 12px; border: 1px solid var(--line);
+    border-radius: 11px; background: var(--card-alt); color: var(--text);
   }
-  select {
-    -webkit-appearance: none; appearance: none; padding-right: 34px; cursor: pointer;
-    background-image: var(--chevron); background-repeat: no-repeat; background-position: right 12px center;
-  }
-  input[type=text], input[type=password], input[type=email], input[type=tel], input[type=url], textarea {
-    width: 100%; font: inherit; padding: 10px 12px; border-radius: 9px; min-height: 42px;
-    border: 1px solid var(--line); background: var(--surface); color: var(--text);
-    transition: border-color .18s ease, box-shadow .18s ease, background-color .18s ease;
-  }
-  textarea { max-width: 100%; resize: vertical; }
-  input[type=file] {
-    width: 100%; font: inherit; font-size: .88rem; padding: 10px; color: var(--muted);
-    border: 1.5px dashed #9cc5c0; border-radius: 10px; background: var(--surface); cursor: pointer;
-  }
-  input[type=file]::file-selector-button {
-    font: inherit; font-weight: 620; margin-right: 12px; padding: 7px 13px; cursor: pointer;
-    border: 1px solid #b6d6d2; border-radius: 8px; background: var(--accent-soft); color: var(--accent-hover);
-  }
-  input[type=file]::file-selector-button:hover { background: #d3ebe6; }
-  input[type=checkbox] { accent-color: var(--accent); }
-  input:focus, select:focus, textarea:focus {
-    outline: none; border-color: var(--accent); background-color: #fff;
-    box-shadow: 0 0 0 3px rgb(11 136 143 / 20%);
-  }
-  input.code { font-size: 1.4rem; letter-spacing: .3em; text-align: center; max-width: 12ch; }
-  .grow { flex: 1 1 auto; }
-  details > summary {
-    cursor: pointer; font-weight: 620; color: var(--accent); padding: 4px 0; border-radius: 6px;
-  }
-  details > summary:hover { color: var(--accent-hover); }
-  label { display: block; font-weight: 620; margin: 12px 0 5px; font-size: .88rem; }
-  label.check { font-weight: 400; display: flex; gap: 8px; align-items: flex-start; margin: 8px 0; }
 
-  /* Stati */
-  .pill {
-    display: inline-flex; align-items: center; gap: 7px; padding: 4px 11px; border-radius: 999px;
-    font-weight: 650; font-size: .82rem; background: var(--track); color: var(--muted);
+  @media (max-width: 420px) {
+    main { padding: 12px 12px 36px; }
+    .topbar { padding: 16px; border-radius: 18px; }
+    .item-head { gap: 6px; }
+    .item-head button { width: 90px; flex-basis: 90px; padding: 8px 3px; font-size: .77rem; white-space: normal; }
+    .action-row { gap: 6px; }
+    .action-row > button {
+      flex: 1 1 0; width: auto; min-width: 0; max-width: 184px;
+      padding: 8px 4px; font-size: .8rem; line-height: 1.25;
+    }
+    #code-form .row > button { padding: 8px 5px; font-size: .85rem; }
+    #btn-check, #btn-change, #btn-install, #btn-login { max-width: 100%; }
   }
-  .pill::before { content: ""; width: 7px; height: 7px; border-radius: 50%; background: currentColor; }
-  .pill.ok { background: var(--ok-bg); color: var(--ok); }
-  .pill.bad { background: var(--urgent-bg); color: var(--urgent); }
+
+  .grow { flex: 1 1 auto; min-width: 0; }
+  .pill {
+    display: inline-flex; align-items: center; gap: 6px;
+    padding: 4px 12px; border-radius: 999px; font-weight: 650;
+    font-size: .84rem; background: var(--track); color: var(--muted);
+    border: 1px solid var(--line);
+  }
+  .pill.ok { background: var(--ok-bg); color: var(--ok); border-color: rgba(13, 130, 103, 0.25); }
+  .pill.bad { background: var(--urgent-bg); color: var(--urgent); border-color: rgba(185, 37, 26, 0.25); }
   .muted { color: var(--muted); font-size: .88rem; }
   .banner {
-    border-radius: 10px; padding: 11px 14px; margin: 10px 0 0; background: var(--soon-bg);
-    color: var(--soon); font-size: .9rem; border-left: 3px solid currentColor;
+    border-radius: 12px; padding: 10px 13px; margin: 10px 0 0; background: var(--soon-bg);
+    color: var(--soon); font-size: .90rem;
   }
   .banner.bad { background: var(--urgent-bg); color: var(--urgent); }
   .banner.good { background: var(--ok-bg); color: var(--ok); }
+
   ul.plain { list-style: none; margin: 0; padding: 0; }
-  ul.plain li { padding: 14px 0; border-top: 1px solid var(--line); }
+  ul.plain li { padding: 12px 0; border-top: 1px solid var(--line); }
   ul.plain li:first-child { border-top: 0; padding-top: 0; }
-  .app-name { font-weight: 620; word-break: break-all; }
-  .bar { height: 6px; border-radius: 6px; background: var(--track); overflow: hidden; margin-top: 9px; }
-  .bar > span { display: block; height: 100%; border-radius: 6px; background: linear-gradient(90deg, var(--wifi), var(--brand-2)); }
-  li.soon .bar > span { background: linear-gradient(90deg, #e8b94a, var(--soon)); }
-  li.urgent .bar > span { background: linear-gradient(90deg, #e98a7f, var(--urgent)); }
-  li.soon .when { color: var(--soon); font-weight: 600; } li.urgent .when { color: var(--urgent); font-weight: 600; }
+
+  /* App Cards */
+  #apps > li {
+    background: var(--card-alt);
+    border: 1px solid var(--line);
+    border-radius: 14px;
+    padding: 13px 14px;
+    margin-bottom: 10px;
+    transition: border-color .15s ease;
+  }
+  #apps > li:last-child { margin-bottom: 0; }
+  #apps > li:hover { border-color: var(--accent); }
+
+  .bar { height: 8px; border-radius: 999px; background: var(--track); overflow: hidden; margin-top: 9px; }
+  .bar > span {
+    display: block; height: 100%; border-radius: 999px;
+    background: linear-gradient(90deg, #017884 0%, #2bb3ad 100%);
+    transition: width .3s ease;
+  }
+  li.soon .bar > span { background: var(--soon); }
+  li.urgent .bar > span { background: var(--urgent); }
+  li.soon .when { color: var(--soon); font-weight: 600; }
+  li.urgent .when { color: var(--urgent); font-weight: 600; }
+
+  button {
+    display: inline-flex; align-items: center; justify-content: center; text-align: center;
+    min-height: 42px; line-height: 1.25; font: inherit; font-weight: 650; border-radius: 12px;
+    padding: 9px 14px; cursor: pointer;
+    border: 1px solid var(--line); background: var(--card-alt); color: var(--text);
+    transition: border-color .15s ease, background .15s ease, transform .12s ease, box-shadow .15s ease;
+  }
+  button:hover:not(:disabled) {
+    border-color: var(--accent);
+    background: var(--card);
+  }
+  button.primary {
+    background: var(--accent-gradient);
+    color: var(--accent-text);
+    border: 1px solid rgba(134, 197, 188, 0.28);
+    box-shadow: 0 4px 12px var(--accent-glow);
+  }
+  button.primary:hover:not(:disabled) {
+    filter: brightness(1.06);
+    transform: translateY(-1px);
+    box-shadow: 0 6px 16px var(--accent-glow);
+  }
+  button.primary:active:not(:disabled) { transform: translateY(0); }
+  button:disabled { opacity: .45; cursor: not-allowed; box-shadow: none; }
+
+  label { display: block; font-weight: 600; margin: 10px 0 4px; font-size: .90rem; }
+  label.check { font-weight: 400; display: flex; gap: 8px; align-items: flex-start; margin: 8px 0; }
+  input[type=text], input[type=password], input[type=email], input[type=tel], input[type=url] {
+    width: 100%; font: inherit; font-size: 15px; padding: 10px 13px; border-radius: 11px;
+    border: 1px solid var(--line); background: var(--card-alt); color: var(--text);
+    transition: border-color .15s ease, box-shadow .15s ease;
+  }
+  input[type=file] {
+    width: 100%; font-size: .88rem; padding: 8px; border-radius: 11px;
+    border: 1px dashed var(--line); background: var(--card-alt); color: var(--text);
+  }
+  input:focus, select:focus {
+    outline: none;
+    border-color: var(--accent);
+    box-shadow: 0 0 0 3px var(--accent-glow);
+  }
+  input.code { font-size: 1.4rem; letter-spacing: .3em; text-align: center; max-width: 12ch; }
+
+  pre.log {
+    background: var(--card-alt); border: 1px solid var(--line); border-radius: 12px; padding: 12px;
+    font: 12px/1.45 ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+    overflow-x: auto; max-height: 240px; overflow-y: auto; margin: 10px 0 0;
+    white-space: pre-wrap; word-break: break-word;
+  }
+  .hist .ico { width: 1.4em; display: inline-block; font-weight: 700; }
+  pre.logs {
+    max-height: 320px;
+    white-space: pre-wrap; overflow-wrap: anywhere;
+  }
+
   .quotas-row { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; }
   .quota-badge {
-    display: inline-flex; align-items: center; padding: 4px 10px;
-    border-radius: 999px; font-size: .8rem; font-weight: 620;
-    background: var(--accent-soft); color: var(--accent-hover); border: 1px solid #c4e1dc;
+    display: inline-flex; align-items: center; padding: 3px 10px;
+    border-radius: 999px; font-size: .78rem; font-weight: 650;
+    background: var(--card-alt); color: var(--accent); border: 1px solid var(--line);
   }
   .quota-badge.near-limit { background: var(--soon-bg); color: var(--soon); border-color: var(--soon); }
   .quota-badge.at-limit { background: var(--urgent-bg); color: var(--urgent); border-color: var(--urgent); }
 
-  /* Pulsanti */
-  button {
-    display: inline-flex; align-items: center; justify-content: center; text-align: center;
-    min-height: 42px; line-height: 1.25; font: inherit; font-size: .9rem; font-weight: 620;
-    border-radius: 9px; padding: 9px 13px; cursor: pointer;
-    border: 1px solid #c3d9d6; background: var(--card); color: var(--accent-hover);
-    transition: background-color .18s ease, border-color .18s ease, color .18s ease, transform .18s ease, box-shadow .18s ease;
+  /* Modals (QR & Setup Guides) */
+  .modal-overlay {
+    position: fixed; inset: 0; background: rgba(4, 14, 17, 0.76);
+    backdrop-filter: blur(10px); -webkit-backdrop-filter: blur(10px);
+    display: flex; align-items: center; justify-content: center; z-index: 9999; padding: 16px;
   }
-  button:hover:not(:disabled) { background: var(--accent-soft); border-color: #8fc2bd; }
-  button:active:not(:disabled) { transform: translateY(1px); }
-  button.primary {
-    background: linear-gradient(180deg, #0b8a93, #087680); color: var(--accent-text); border-color: #076a74;
-    box-shadow: 0 1px 2px rgb(5 70 76 / 28%), inset 0 1px 0 rgb(255 255 255 / 18%);
+  .modal-box {
+    background: var(--card); border: 1px solid var(--line); border-radius: 24px;
+    padding: 0; max-width: 430px; width: 100%; overflow: hidden;
+    box-shadow: 0 28px 60px rgba(0,0,0,0.52), 0 0 0 1px rgba(134, 197, 188, 0.24);
   }
-  button.primary:hover:not(:disabled) {
-    background: linear-gradient(180deg, #0a7d86, #06646d); border-color: #055860;
-    box-shadow: 0 4px 12px rgb(5 90 98 / 30%), inset 0 1px 0 rgb(255 255 255 / 14%);
+  .modal-box.wide { max-width: 520px; max-height: 90vh; display: flex; flex-direction: column; }
+  .modal-hero {
+    position: relative; overflow: hidden;
+    padding: 18px 22px;
+    background: linear-gradient(135deg, #015864 0%, #017482 52%, #189894 100%);
+    color: #fcfbf5;
+    display: flex; justify-content: space-between; align-items: center; gap: 12px;
   }
-  button:disabled { opacity: .5; cursor: not-allowed; }
-  :focus-visible { outline: 3px solid rgb(11 136 143 / 35%); outline-offset: 2px; }
+  .modal-hero h3 { margin: 0; font-size: 1.08rem; font-weight: 750; color: #fcfbf5; display: flex; align-items: center; gap: 9px; }
+  .modal-hero p { margin: 3px 0 0; font-size: 0.82rem; color: rgba(252, 251, 245, 0.84); }
+  .modal-close-btn {
+    width: 34px; height: 34px; min-height: 34px; border-radius: 10px; padding: 0;
+    background: rgba(252, 251, 245, 0.16); border: 1px solid rgba(252, 251, 245, 0.28);
+    color: #fcfbf5; font-size: 1rem; flex-shrink: 0;
+  }
+  .modal-close-btn:hover:not(:disabled) { background: rgba(252, 251, 245, 0.28); border-color: #fcfbf5; }
+  .modal-body { padding: 20px 22px 22px; overflow-y: auto; }
+  .qr-status-bar {
+    display: flex; align-items: center; justify-content: space-between; gap: 8px;
+    padding: 8px 12px; border-radius: 12px; background: var(--surface); border: 1px solid var(--line);
+    margin-bottom: 16px; font-size: 0.83rem;
+  }
+  .qr-dot {
+    width: 9px; height: 9px; border-radius: 999px; background: var(--ok);
+    box-shadow: 0 0 0 3px var(--ok-bg); display: inline-block; margin-right: 6px;
+  }
+  .qr-stage {
+    position: relative; width: 224px; height: 224px; margin: 0 auto 16px;
+    padding: 16px; border-radius: 22px; background: #ffffff;
+    box-shadow: 0 12px 30px rgba(1, 116, 130, 0.16), inset 0 0 0 1px rgba(1, 120, 132, 0.14);
+    display: flex; align-items: center; justify-content: center;
+  }
+  .qr-stage svg { width: 100%; height: 100%; display: block; border-radius: 8px; }
+  .qr-corner {
+    position: absolute; width: 22px; height: 22px; border-color: #017884; border-style: solid; pointer-events: none;
+  }
+  .qr-corner.tl { top: 7px; left: 7px; border-width: 3px 0 0 3px; border-top-left-radius: 10px; }
+  .qr-corner.tr { top: 7px; right: 7px; border-width: 3px 3px 0 0; border-top-right-radius: 10px; }
+  .qr-corner.bl { bottom: 7px; left: 7px; border-width: 0 0 3px 3px; border-bottom-left-radius: 10px; }
+  .qr-corner.br { bottom: 7px; right: 7px; border-width: 0 3px 3px 0; border-bottom-right-radius: 10px; }
+  .qr-steps {
+    display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 8px; margin-bottom: 14px;
+  }
+  .qr-step {
+    background: var(--surface); border: 1px solid var(--line); border-radius: 11px;
+    padding: 8px 6px; text-align: center; font-size: 0.76rem; line-height: 1.3; color: var(--muted);
+  }
+  .qr-step strong { display: block; color: var(--text); font-size: 0.8rem; margin-bottom: 2px; }
+  .qr-url-box {
+    display: flex; align-items: center; gap: 8px; background: var(--surface);
+    border: 1px solid var(--line); border-radius: 13px; padding: 5px 6px 5px 12px;
+  }
+  .qr-url-box input {
+    border: 0 !important; background: transparent !important; padding: 4px 0 !important;
+    font: 600 0.9rem ui-monospace, SFMono-Regular, Menlo, Consolas, monospace !important;
+    color: var(--accent) !important; box-shadow: none !important;
+  }
 
-  /* Log */
-  pre.log {
-    background: #0f2a2e; color: #cfe8e3; border: 1px solid #1b4147; border-radius: 10px; padding: 14px;
-    font: 13px/1.5 ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; overflow-x: auto;
-    max-height: 240px; overflow-y: auto; margin: 10px 0 0; white-space: pre-wrap; word-break: break-word;
+  /* Setup Guides */
+  .guide-step {
+    background: var(--surface); border: 1px solid var(--line); border-radius: 14px;
+    padding: 12px 14px; margin-bottom: 10px;
   }
-  .hist .ico { width: 1.4em; display: inline-block; font-weight: 700; }
-  pre.logs { max-height: 60vh; white-space: pre-wrap; overflow-wrap: anywhere; }
+  .guide-step:last-child { margin-bottom: 0; }
+  .guide-step-head {
+    display: flex; align-items: center; justify-content: space-between; gap: 8px;
+    font-weight: 700; font-size: 0.93rem; margin-bottom: 6px; color: var(--text);
+  }
+  .guide-num {
+    display: inline-flex; align-items: center; justify-content: center;
+    width: 24px; height: 24px; border-radius: 999px; background: var(--accent-gradient);
+    color: #fcfbf5; font-size: 0.78rem; font-weight: 800; margin-right: 7px; flex-shrink: 0;
+  }
+  .guide-step p { margin: 4px 0; font-size: 0.85rem; color: var(--muted); line-height: 1.45; }
+  .guide-chip {
+    display: inline-flex; align-items: center; gap: 5px; padding: 2px 8px;
+    border-radius: 7px; background: var(--card); border: 1px solid var(--line);
+    font: 600 0.8rem ui-monospace, SFMono-Regular, Consolas, monospace; color: var(--accent);
+    cursor: pointer;
+  }
+  .guide-chip:hover { border-color: var(--accent); }
+  .help-btn {
+    display: inline-flex; align-items: center; gap: 5px;
+    padding: 4px 10px; min-height: 30px; border-radius: 999px;
+    font-size: 0.78rem; font-weight: 700;
+    background: var(--surface); color: var(--accent); border: 1px solid var(--line);
+  }
+
+  /* Multi-View Switcher */
+  .apps-toolbar {
+    display: flex; align-items: center; justify-content: space-between; gap: 10px;
+    flex-wrap: wrap; margin-bottom: 12px;
+  }
+  .apps-toolbar-right { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
+  .view-switcher {
+    display: inline-flex; align-items: center; gap: 2px;
+    padding: 3px; border-radius: 11px; background: var(--surface); border: 1px solid var(--line);
+  }
+  .view-btn {
+    min-height: 28px; padding: 4px 9px; border-radius: 8px; border: 0;
+    background: transparent; color: var(--muted); font-size: 0.76rem; font-weight: 700;
+    display: inline-flex; align-items: center; gap: 4px; cursor: pointer;
+  }
+  .view-btn:hover:not(:disabled) { background: transparent; color: var(--text); }
+  .view-btn.active {
+    background: var(--accent-gradient); color: #fcfbf5;
+    box-shadow: 0 2px 6px var(--accent-glow);
+  }
+  .app-bundle-sub {
+    font: 500 0.76rem ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+    color: var(--muted); opacity: 0.85; overflow-wrap: anywhere;
+  }
+
+  /* Grid Mode for #apps */
+  #apps.view-grid {
+    display: grid;
+    grid-template-columns: repeat(auto-fill, minmax(230px, 1fr));
+    gap: 12px;
+  }
+  #apps.view-grid > li {
+    margin-bottom: 0; padding: 14px; display: flex; flex-direction: column; justify-content: space-between;
+    background: var(--surface); border: 1px solid var(--line); border-radius: 14px;
+  }
+  #apps.view-grid .item-head {
+    flex-direction: column; align-items: stretch; gap: 10px;
+  }
+  #apps.view-grid .app-card-top {
+    display: flex; align-items: center; gap: 11px; min-width: 0;
+  }
+  #apps.view-grid .app-card-actions {
+    display: flex; gap: 6px; width: 100%;
+  }
+  #apps.view-grid .app-card-actions button {
+    flex: 1 1 0; width: auto; min-height: 34px; font-size: 0.79rem;
+  }
+
+  /* Compact Mode for #apps */
+  #apps.view-compact > li {
+    padding: 8px 12px; margin-bottom: 6px; border-radius: 11px;
+  }
+  #apps.view-compact .bar, #apps.view-compact .app-bundle-sub, #apps.view-compact .app-last-renew {
+    display: none;
+  }
+
+  .profile-check { width: 18px; height: 18px; cursor: pointer; margin-right: 4px; accent-color: var(--accent); flex-shrink: 0; }
+  .bulk-bar {
+    display: flex; justify-content: space-between; align-items: center;
+    margin: 10px 0 12px; padding: 8px 12px; border-radius: 10px;
+    background: var(--surface); border: 1px solid var(--line);
+  }
+
   [hidden] { display: none !important; }
-  .divider { height: 1px; background: var(--line); margin: 22px 0; }
-  footer {
-    color: var(--muted); font-size: .82rem; text-align: center;
-    margin-top: 28px; padding-top: 18px; border-top: 1px solid var(--line);
+  footer { color: var(--muted); font-size: .85rem; text-align: center; margin-top: 24px; }
+
+  /* File input button polish */
+  input[type=file] {
+    width: 100%; font-size: .86rem; padding: 8px 10px; border-radius: 12px;
+    border: 1px dashed var(--accent); background: var(--card-alt); color: var(--text);
+    cursor: pointer;
   }
-  @media(max-width:680px) {
-    main { padding: 18px 14px 36px; }
-    .topbar { align-items: flex-start; flex-direction: column; gap: 16px; padding: 18px 16px; border-radius: 16px; }
-    .device-actions { width: 100%; align-items: end; }
-    #device-select { flex: 1; min-width: 0; }
-    .device-create { align-items: stretch; flex-direction: column; }
-    .device-create .grow { min-width: 0; }
-    .card { padding: 18px 16px; }
-    .item-head { gap: 8px; }
-    .item-head button { width: 92px; flex-basis: 92px; white-space: normal; }
+  input[type=file]::file-selector-button {
+    font: inherit; font-size: .82rem; font-weight: 700;
+    padding: 7px 14px; margin-right: 12px; border-radius: 9px;
+    border: 1px solid rgba(134, 197, 188, 0.35);
+    background: var(--accent-gradient); color: var(--accent-text);
+    cursor: pointer; transition: filter .15s ease;
   }
+  input[type=file]::file-selector-button:hover {
+    filter: brightness(1.08);
+  }
+  select {
+    width: 100%;
+    cursor: pointer;
+  }
+  .device-actions select {
+    width: auto;
+  }
+  .device-add {
+    min-height: 32px; padding: 5px 11px; border-radius: 9px;
+    font-size: .78rem; font-weight: 700;
+    background: rgba(252, 251, 245, 0.18); color: #fcfbf5;
+    border: 1px solid rgba(252, 251, 245, 0.32);
+  }
+  .device-add:hover:not(:disabled) {
+    background: rgba(252, 251, 245, 0.28); border-color: #fcfbf5; color: #fcfbf5;
+  }
+  .device-create {
+    display: flex; align-items: flex-end; gap: 10px; flex-wrap: wrap;
+    background: var(--card); border: 1px solid var(--line); border-radius: 16px;
+    padding: 14px 18px; margin-bottom: 18px; box-shadow: var(--card-shadow);
+  }
+
+  /* Live Status Pill in Topbar */
+  .live-pill {
+    position: relative; z-index: 1;
+    display: inline-flex; align-items: center; gap: 8px;
+    padding: 8px 14px; border-radius: 999px;
+    background: rgba(13, 46, 36, 0.55);
+    color: #6ee7b7;
+    border: 1px solid rgba(52, 211, 153, 0.42);
+    font-size: .8rem; font-weight: 700;
+    backdrop-filter: blur(8px);
+  }
+  .live-pulse {
+    width: 8px; height: 8px; border-radius: 50%;
+    background: #34d399;
+    box-shadow: 0 0 0 3px rgba(52, 211, 153, 0.28);
+    animation: pulse-dot 2s infinite;
+  }
+  @keyframes pulse-dot {
+    0%, 100% { box-shadow: 0 0 0 3px rgba(52, 211, 153, 0.28); }
+    50% { box-shadow: 0 0 0 6px rgba(52, 211, 153, 0.08); }
+  }
+
+  /* Story Banner: How Local Wi-Fi Auto-Renewal Works */
+  .story-card {
+    background: var(--card);
+    border: 1px solid var(--line);
+    border-radius: 18px;
+    padding: 18px 20px;
+    margin-bottom: 18px;
+    box-shadow: var(--card-shadow);
+  }
+  .story-head {
+    display: flex; align-items: center; justify-content: space-between; gap: 12px; flex-wrap: wrap;
+    margin-bottom: 14px;
+  }
+  .story-title {
+    font-size: .98rem; font-weight: 800; color: var(--text);
+    display: inline-flex; align-items: center; gap: 8px;
+  }
+  .story-badge {
+    font-size: .72rem; font-weight: 800; text-transform: uppercase; letter-spacing: .05em;
+    padding: 5px 12px; border-radius: 999px;
+    background: var(--ok-bg); color: var(--ok);
+    border: 1px solid rgba(52, 211, 153, 0.28);
+  }
+  .story-steps {
+    display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 12px;
+  }
+  @media (max-width: 880px) {
+    .story-steps { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+  }
+  @media (max-width: 520px) {
+    .story-steps { grid-template-columns: 1fr; }
+  }
+  .story-step {
+    background: var(--card-alt);
+    border: 1px solid var(--line);
+    border-radius: 14px;
+    padding: 12px 14px;
+  }
+  .story-step-top {
+    display: flex; align-items: center; gap: 8px; margin-bottom: 6px;
+    font-weight: 750; font-size: .85rem; color: var(--text);
+  }
+  .story-step-num {
+    width: 22px; height: 22px; border-radius: 7px;
+    background: var(--accent-gradient); color: #fcfbf5;
+    display: inline-flex; align-items: center; justify-content: center;
+    font-size: .75rem; font-weight: 800; flex-shrink: 0;
+  }
+  .story-step p {
+    margin: 0; font-size: .79rem; color: var(--muted); line-height: 1.45;
+  }
+
+  /* Inline Explanation Box */
+  .why-box {
+    margin: 8px 0 12px;
+    padding: 10px 13px;
+    border-radius: 12px;
+    background: var(--card-alt);
+    border: 1px solid var(--line);
+    border-left: 3px solid var(--accent);
+    font-size: .81rem;
+    color: var(--muted);
+    line-height: 1.45;
+  }
+  .why-box strong { color: var(--text); }
+
+  /* Concept Explainer Button (!) */
+  .concept-btn {
+    display: inline-flex !important;
+    align-items: center !important;
+    justify-content: center !important;
+    width: 21px !important;
+    height: 21px !important;
+    min-width: 21px !important;
+    min-height: 21px !important;
+    max-width: 21px !important;
+    max-height: 21px !important;
+    aspect-ratio: 1 / 1 !important;
+    border-radius: 50% !important;
+    font-size: 11.5px !important;
+    font-weight: 800 !important;
+    line-height: 1 !important;
+    font-family: system-ui, -apple-system, sans-serif !important;
+    padding: 0 !important;
+    margin-left: 6px !important;
+    flex-shrink: 0 !important;
+    align-self: center !important;
+    background: rgba(43, 179, 173, 0.16) !important;
+    color: var(--accent) !important;
+    border: 1.5px solid var(--accent) !important;
+    cursor: pointer !important;
+    transition: transform .15s ease, background .15s ease, color .15s ease, box-shadow .15s ease !important;
+  }
+  .concept-btn:hover {
+    background: var(--accent) !important;
+    color: #ffffff !important;
+    transform: scale(1.14) !important;
+    box-shadow: 0 0 0 3px var(--accent-glow) !important;
+  }
+
+  /* Concept Modal Content */
+  .concept-meta {
+    display: flex; align-items: center; gap: 8px; margin-bottom: 4px;
+  }
+  .concept-tag {
+    font-size: 0.68rem; font-weight: 800; letter-spacing: 0.06em;
+    text-transform: uppercase; padding: 3px 8px; border-radius: 6px;
+    background: rgba(252, 251, 245, 0.18); color: #fcfbf5;
+  }
+  .concept-content ul {
+    margin: 8px 0 14px; padding-left: 20px;
+    font-size: 0.86rem; color: var(--muted); line-height: 1.55;
+  }
+  .concept-content li { margin-bottom: 8px; }
+  .concept-content li strong { color: var(--text); }
+  .concept-takeaway {
+    padding: 12px 14px; border-radius: 11px;
+    background: var(--card-alt); border: 1px solid var(--line);
+    border-left: 3px solid var(--accent);
+    font-size: 0.83rem; color: var(--text); line-height: 1.45;
+  }
+
+  /* Category Filter Navigation Bar */
+  .category-nav {
+    display: flex; align-items: center; gap: 8px; overflow-x: auto;
+    padding: 7px; margin-bottom: 22px;
+    background: var(--card); border: 1px solid var(--line);
+    border-radius: 16px; box-shadow: var(--card-shadow);
+    scrollbar-width: none; -webkit-overflow-scrolling: touch;
+  }
+  .category-nav::-webkit-scrollbar { display: none; }
+  .category-tab {
+    display: inline-flex; align-items: center; gap: 8px;
+    min-height: 38px; padding: 8px 15px; border-radius: 11px;
+    font-weight: 700; font-size: 0.85rem;
+    color: var(--muted); background: transparent;
+    border: 1px solid transparent; cursor: pointer;
+    white-space: nowrap; transition: all 0.15s ease;
+  }
+  .category-tab:hover:not(:disabled) {
+    color: var(--text); background: var(--card-alt); border-color: var(--line);
+  }
+  .category-tab.active {
+    color: var(--accent-text); background: var(--accent-gradient);
+    border-color: rgba(134, 197, 188, 0.35);
+    box-shadow: 0 4px 12px var(--accent-glow);
+  }
+  .tab-badge {
+    padding: 2px 7px; border-radius: 999px;
+    font-size: 0.72rem; font-weight: 800;
+    background: rgba(255, 255, 255, 0.22); color: currentColor;
+  }
+  .category-tab:not(.active) .tab-badge {
+    background: var(--track); color: var(--text);
+  }
+
+  /* Categorized Section Layout */
+  .dashboard-categories {
+    display: flex; flex-direction: column; gap: 26px; width: 100%;
+  }
+  .category-group {
+    display: flex; flex-direction: column; gap: 14px; width: 100%;
+  }
+  .dashboard-categories[data-filter="apps"] .category-group:not([data-group="apps"]),
+  .dashboard-categories[data-filter="tools"] .category-group:not([data-group="tools"]),
+  .dashboard-categories[data-filter="settings"] .category-group:not([data-group="settings"]),
+  .dashboard-categories[data-filter="logs"] .category-group:not([data-group="logs"]) {
+    display: none !important;
+  }
+  .cat-header {
+    display: flex; align-items: center; justify-content: space-between; gap: 12px; flex-wrap: wrap;
+    padding: 4px 4px 8px; border-bottom: 1px solid var(--line);
+  }
+  .cat-header-left {
+    display: flex; align-items: center; gap: 10px;
+  }
+  .cat-icon {
+    width: 32px; height: 32px; border-radius: 10px;
+    background: var(--card-alt); border: 1px solid var(--line);
+    color: var(--accent);
+    display: inline-flex; align-items: center; justify-content: center;
+    flex-shrink: 0;
+  }
+  .cat-title {
+    margin: 0; font-size: 1.05rem; font-weight: 800; color: var(--text);
+  }
+  .cat-sub {
+    margin: 1px 0 0; font-size: 0.8rem; color: var(--muted);
+  }
+  .cat-grid {
+    display: grid; grid-template-columns: minmax(0, 1fr); gap: 18px; width: 100%;
+  }
+  @media (min-width: 900px) {
+    .cat-grid {
+      grid-template-columns: minmax(0, 1fr) minmax(0, 1fr);
+      align-items: start;
+      gap: 20px;
+    }
+    .cat-grid.apps-layout {
+      grid-template-columns: minmax(0, 1.12fr) minmax(0, 0.88fr);
+    }
+  }
+  .cat-stack {
+    display: flex; flex-direction: column; gap: 18px; min-width: 0; max-width: 100%;
+  }
+  .cat-grid > .card, .cat-stack > .card {
+    margin: 0;
+  }
+  .jit-actions {
+    display: flex; align-items: stretch; gap: 8px; flex-wrap: wrap; margin-top: 10px;
+  }
+  .jit-actions > select {
+    flex: 1 1 200px; min-width: 0;
+  }
+
+
+  /* Modern Toggle Switch */
+  .switch-container {
+    display: flex; align-items: center; justify-content: space-between; gap: 14px;
+    padding: 12px 14px; border-radius: 12px; background: rgba(255, 255, 255, 0.03);
+    border: 1px solid var(--line); margin-top: 10px;
+  }
+  .switch-label {
+    display: flex; flex-direction: column; gap: 2px;
+  }
+  .switch-title {
+    font-size: .88rem; font-weight: 700; color: var(--text);
+  }
+  .switch-desc {
+    font-size: .76rem; color: var(--muted);
+  }
+  .toggle-switch {
+    position: relative; display: inline-block; width: 44px; height: 24px; flex-shrink: 0;
+  }
+  .toggle-switch input {
+    opacity: 0; width: 0; height: 0; position: absolute;
+  }
+  .toggle-slider {
+    position: absolute; cursor: pointer; top: 0; left: 0; right: 0; bottom: 0;
+    background-color: rgba(255, 255, 255, 0.16);
+    transition: .25s ease; border-radius: 24px;
+    border: 1px solid rgba(255, 255, 255, 0.12);
+  }
+  .toggle-slider:before {
+    position: absolute; content: ""; height: 16px; width: 16px; left: 3px; bottom: 3px;
+    background-color: #fff; transition: .25s ease; border-radius: 50%;
+  }
+  .toggle-switch input:checked + .toggle-slider {
+    background-color: var(--accent);
+    border-color: var(--accent);
+  }
+  .toggle-switch input:checked + .toggle-slider:before {
+    transform: translateX(20px);
+  }
+
 </style>
 </head>
 <body>
 <main>
-  <header class="topbar">
+
+<header class="topbar">
     <div class="brand">
       <img class="brand-mark" src="/apple-touch-icon.png" alt="" aria-hidden="true">
       <div>
@@ -244,12 +902,16 @@
         <p class="sub" data-i18n="Keeps your iPhone apps alive by renewing their profiles.">Keeps your iPhone apps alive by renewing their profiles.</p>
       </div>
     </div>
-    <div class="device-actions">
-      <div>
-        <label for="device-select">MANAGED DEVICE</label>
-        <select id="device-select" aria-label="Managed device"></select>
+    <div style="display:flex; align-items:center; gap:12px; flex-wrap:wrap;">
+      <span class="live-pill" title="Local background renewal server is active"><span class="live-pulse"></span> Local Wi-Fi Server Active</span>
+      <button id="btn-phone-connect" type="button" class="qr-btn" title="Connect from iPhone">
+        <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="3" y="3" width="7" height="7" rx="1"/><rect x="14" y="3" width="7" height="7" rx="1"/><rect x="3" y="14" width="7" height="7" rx="1"/><path d="M14 14h3v3h-3zM18 18h3v3h-3zM14 19h2M19 14v2"/></svg>
+        <span data-i18n="Phone Access (QR)">Phone Access (QR)</span>
+      </button>
+      <div class="device-actions" style="display:flex; align-items:center; gap:6px;">
+        <select id="device-select" aria-label="Managed device" style="min-height:36px; padding:6px 12px; font-weight:600; border-radius:10px;"></select>
+        <button class="device-add" id="device-add-toggle" type="button" title="Add another device" style="min-height:36px; width:36px; padding:0; display:flex; align-items:center; justify-content:center; border-radius:10px; font-size:1.1rem; font-weight:700;">+</button>
       </div>
-      <button class="device-add" id="device-add-toggle" type="button">Add device</button>
     </div>
   </header>
   <form class="device-create" id="device-create" hidden>
@@ -262,271 +924,700 @@
     <div class="banner bad" id="device-error" hidden></div>
   </form>
 
+  <!-- Dedicated Global Apple 2FA Modal -->
+  <div id="tfa-modal" class="modal-overlay" hidden>
+    <div class="modal-box" style="max-width: 440px;">
+      <div class="modal-hero" style="background: linear-gradient(135deg, #015864 0%, #017482 52%, #189894 100%);">
+        <div>
+          <div class="concept-meta">
+            <span class="concept-tag" style="background: rgba(255,255,255,0.22); color: #fff;">AUTHENTICATION</span>
+          </div>
+          <h3 style="margin: 4px 0 0; display:flex; align-items:center; gap:8px;">
+            <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="11" width="18" height="11" rx="2" ry="2"/><path d="M7 11V7a5 5 0 0 1 10 0v4"/></svg>
+            <span data-i18n="Two-Factor Authentication">Apple Two-Factor Authentication</span>
+          </h3>
+          <p style="margin: 4px 0 0; font-size: 0.83rem;" data-i18n="Apple sent a 6-digit code to your trusted iPhone or iPad.">Apple sent a 6-digit code to your trusted iPhone or iPad.</p>
+        </div>
+      </div>
+      <div class="modal-body" style="padding: 22px;">
+        <form id="tfa-modal-form" autocomplete="off">
+          <div class="banner bad" id="tfa-modal-error" hidden style="margin-bottom: 14px;"></div>
+          <div style="text-align: center; margin-bottom: 16px;">
+            <label for="tfa-modal-code" style="display:block; font-size: 0.88rem; font-weight: 650; margin-bottom: 10px; color: var(--text);" data-i18n="Enter 6-digit Verification Code">
+              Enter 6-digit Verification Code
+            </label>
+            <input id="tfa-modal-code" class="code" type="text" inputmode="numeric" pattern="[0-9]*" maxlength="6" autocomplete="one-time-code" placeholder="------" style="font-size: 2.1rem; letter-spacing: 0.35em; text-align: center; height: 56px; max-width: 260px; margin: 0 auto; display: block; font-weight: 700; border: 2px solid var(--accent); border-radius: 12px; background: var(--surface); color: var(--text);">
+          </div>
+          <div class="row" style="gap: 10px; margin-top: 18px; display: flex;">
+            <button class="primary" id="btn-tfa-modal-submit" type="submit" style="flex: 2; height: 44px; font-size: 0.95rem; font-weight: 700;" data-i18n="Submit Code">Submit Code</button>
+            <button type="button" id="btn-tfa-modal-resend" style="flex: 1; height: 44px;" data-i18n="Resend">Resend</button>
+          </div>
+        </form>
+      </div>
+    </div>
+  </div>
+
+  <div id="qr-modal" class="modal-overlay" hidden>
+    <div class="modal-box">
+      <div class="modal-hero">
+        <div>
+          <h3 data-i18n="Open on your iPhone">
+            <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><rect x="5" y="2" width="14" height="20" rx="3"/><line x1="12" y1="18" x2="12.01" y2="18"/></svg>
+            <span>iPhone Remote Control</span>
+          </h3>
+          <p data-i18n="Scan with your iPhone Camera to open AltKeeper in Safari over your home Wi-Fi.">Control renewals &amp; install IPAs directly from your iPhone</p>
+        </div>
+        <button type="button" id="qr-close" class="modal-close-btn" title="Close">✕</button>
+      </div>
+      <div class="modal-body">
+        <div class="qr-status-bar">
+          <span><span class="qr-dot"></span><strong>Home Wi-Fi Server</strong></span>
+          <span class="muted" id="qr-net-badge" style="font-family:ui-monospace,monospace; font-size:.8rem;">LAN :8787</span>
+        </div>
+        <div class="qr-stage">
+          <span class="qr-corner tl"></span><span class="qr-corner tr"></span>
+          <span class="qr-corner bl"></span><span class="qr-corner br"></span>
+          <div id="qr-svg-container" style="width:100%; height:100%; display:flex; align-items:center; justify-content:center;"></div>
+        </div>
+        <div class="qr-steps">
+          <div class="qr-step"><strong>1. Wi-Fi</strong>Connect iPhone to same Wi-Fi</div>
+          <div class="qr-step"><strong>2. Camera</strong>Point iPhone Camera at QR</div>
+          <div class="qr-step"><strong>3. Safari</strong>Renew or install apps remotely</div>
+        </div>
+        <div class="qr-url-box">
+          <input type="text" id="qr-url-input" readonly>
+          <button type="button" id="btn-copy-qr-url" class="primary mini" style="width:auto; padding:7px 14px; border-radius:9px;" data-i18n="Copy">Copy</button>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <div id="discord-guide-modal" class="modal-overlay" hidden>
+    <div class="modal-box wide">
+      <div class="modal-hero">
+        <div>
+          <h3>
+            <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.1" stroke-linecap="round" stroke-linejoin="round"><path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z"/></svg>
+            <span>How to Connect Discord Webhook</span>
+          </h3>
+          <p>Receive instant alerts in your Discord server if auto-renewal fails</p>
+        </div>
+        <button type="button" id="discord-guide-close" class="modal-close-btn" title="Close">✕</button>
+      </div>
+      <div class="modal-body">
+        <div class="guide-step">
+          <div class="guide-step-head">
+            <span><span class="guide-num">1</span>Open Channel Settings in Discord</span>
+          </div>
+          <p>Open your Discord server, hover over the text channel where you want to receive alerts, and click the <strong>Edit Channel (⚙️)</strong> gear icon.</p>
+        </div>
+        <div class="guide-step">
+          <div class="guide-step-head">
+            <span><span class="guide-num">2</span>Create a Webhook &amp; Copy URL</span>
+          </div>
+          <p>1. Select <strong>Integrations</strong> from the left sidebar, then click <strong>Webhooks</strong>.</p>
+          <p>2. Click <strong>New Webhook</strong>, name it <code>AltKeeper</code>, and click <strong>Copy Webhook URL</strong>.</p>
+          <p>3. The URL looks like: <code>https://discord.com/api/webhooks/123456.../abcdef...</code></p>
+        </div>
+        <div class="guide-step">
+          <div class="guide-step-head">
+            <span><span class="guide-num">3</span>Save &amp; Test in AltKeeper</span>
+          </div>
+          <p>Paste the copied URL into the <strong>Discord failure notifications</strong> field, click <strong>Save webhook</strong>, and then click <strong>Send test notification</strong> to verify delivery.</p>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <div id="tg-guide-modal" class="modal-overlay" hidden>
+    <div class="modal-box wide">
+      <div class="modal-hero">
+        <div>
+          <h3>
+            <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.1" stroke-linecap="round" stroke-linejoin="round"><path d="M22 2L11 13"/><path d="M22 2L15 22L11 13L2 9L22 2Z"/></svg>
+            <span>How to Connect a Telegram Bot</span>
+          </h3>
+          <p>Get your Bot Token and Chat ID in under a minute</p>
+        </div>
+        <button type="button" id="tg-guide-close" class="modal-close-btn" title="Close">✕</button>
+      </div>
+      <div class="modal-body">
+        <div class="guide-step">
+          <div class="guide-step-head">
+            <span><span class="guide-num">1</span>Create a Bot &amp; Get Your Bot Token</span>
+            <button type="button" class="guide-chip" data-copy="@BotFather">Copy @BotFather</button>
+          </div>
+          <p>1. Open Telegram and search for the official verified bot <code>@BotFather</code>.</p>
+          <p>2. Send the command <code>/newbot</code>, choose a display name (e.g. <code>AltKeeper</code>), and pick a username ending in <code>bot</code>.</p>
+          <p>3. BotFather will reply with your <strong>HTTP API Token</strong> (looks like <code>1234567890:AAFxyz...</code>). Copy and paste it into the <strong>Bot Token</strong> field.</p>
+        </div>
+        <div class="guide-step">
+          <div class="guide-step-head">
+            <span><span class="guide-num">2</span>Activate Your New Bot (Required)</span>
+          </div>
+          <p>Click the link to your newly created bot inside BotFather's message and press <strong>Start</strong> (<code>/start</code>) so the bot is allowed to send you messages.</p>
+        </div>
+        <div class="guide-step">
+          <div class="guide-step-head">
+            <span><span class="guide-num">3</span>Find Your Chat ID</span>
+            <button type="button" class="guide-chip" data-copy="@userinfobot">Copy @userinfobot</button>
+          </div>
+          <p>1. Search for <code>@userinfobot</code> (or <code>@GetMyId_bot</code>) on Telegram and press <strong>Start</strong>.</p>
+          <p>2. It will immediately reply with your numeric <strong>Id</strong> (e.g. <code>987654321</code>).</p>
+          <p>3. Paste that number into the <strong>Chat ID</strong> field, click <strong>Save bot</strong>, and click <strong>Send test</strong>!</p>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <div id="concept-modal" class="modal-overlay" hidden>
+    <div class="modal-box wide">
+      <div class="modal-hero">
+        <div>
+          <div class="concept-meta">
+            <span class="concept-tag" id="concept-tag">EXPLAINER</span>
+          </div>
+          <h3 id="concept-title" style="margin: 4px 0 0;">Concept Explainer</h3>
+        </div>
+        <button type="button" id="concept-close" class="modal-close-btn" title="Close">✕</button>
+      </div>
+      <div class="modal-body">
+        <p id="concept-lead" style="font-size: .92rem; font-weight: 650; color: var(--text); line-height: 1.5; margin: 0 0 12px;"></p>
+        <div id="concept-body" class="concept-content"></div>
+        <div class="concept-takeaway" id="concept-takeaway"></div>
+        <div class="row" style="margin-top: 18px; justify-content: flex-end;">
+          <button type="button" id="concept-ok-btn" class="primary" style="min-width: 110px;">Got it</button>
+        </div>
+      </div>
+    </div>
+  </div>
+
   <div id="pairing">
-  <div class="banner bad" id="no-pairing" hidden>
-    <span data-i18n="iPhone pairing is missing">iPhone pairing is missing</span> (<code>rp-pairing.plist</code>). <span data-i18n="Pair it over USB.">Pair it over USB.</span>
-    <button id="btn-pair-usb-banner" type="button" data-i18n="Pair iPhone over USB">Pair iPhone over USB</button>
+    <div class="banner bad" id="no-pairing" hidden>
+      <span data-i18n="iPhone pairing is missing">iPhone pairing is missing</span> (<code>rp-pairing.plist</code>). <span data-i18n="Pair it over USB.">Pair it over USB.</span>
+      <button id="btn-pair-usb-banner" type="button" data-i18n="Pair iPhone over USB">Pair iPhone over USB</button>
+    </div>
   </div>
+
+  <details class="story-card compact-story" aria-label="How Local Wi-Fi Auto-Renewal Works">
+    <summary class="story-head" style="cursor: pointer; user-select: none; margin-bottom: 0;">
+      <div class="story-title">
+        <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="var(--accent)" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z"/><path d="m9 12 2 2 4-4"/></svg>
+        <span>How Wi-Fi Auto-Renewal Works</span>
+        <span class="story-badge" style="font-size:0.68rem; padding:3px 9px; margin-left:6px;">Zero Cables</span>
+      </div>
+      <span class="muted" style="font-size: 0.78rem;">Show 4-step guide ▾</span>
+    </summary>
+    <div class="story-steps" style="margin-top: 14px;">
+      <div class="story-step">
+        <div class="story-step-top"><span class="story-step-num">1</span> Pair Once via USB</div>
+        <p>Plug iPhone into this PC once and click <strong>Pair over USB</strong>.</p>
+      </div>
+      <div class="story-step">
+        <div class="story-step-top"><span class="story-step-num">2</span> Sign In to Apple ID</div>
+        <p>Saving your Apple ID allows this PC to request fresh 7-day certificates.</p>
+      </div>
+      <div class="story-step">
+        <div class="story-step-top"><span class="story-step-num">3</span> Automatic Wi-Fi Sync</div>
+        <p>When on the same home Wi-Fi, AltKeeper silently renews expiring apps.</p>
+      </div>
+      <div class="story-step">
+        <div class="story-step-top"><span class="story-step-num">4</span> Phone Remote &amp; Alerts</div>
+        <p>Scan <strong>QR</strong> to trigger renewals, or connect Telegram/Discord.</p>
+      </div>
+    </div>
+  </details>
+
+  <nav class="category-nav" role="tablist" aria-label="Dashboard Categories">
+    <button type="button" class="category-tab" data-tab="all" role="tab" aria-selected="false">
+      <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="3" width="7" height="7"/><rect x="14" y="3" width="7" height="7"/><rect x="14" y="14" width="7" height="7"/><rect x="3" y="14" width="7" height="7"/></svg>
+      <span>All Categories</span>
+    </button>
+    <button type="button" class="category-tab active" data-tab="apps" role="tab" aria-selected="true">
+      <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><rect x="5" y="2" width="14" height="20" rx="3"/><line x1="12" y1="18" x2="12.01" y2="18"/></svg>
+      <span>Apps &amp; Profiles</span>
+      <span class="tab-badge" id="tab-apps-count">0</span>
+    </button>
+    <button type="button" class="category-tab" data-tab="tools" role="tab" aria-selected="false">
+      <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 16V8a2 2 0 0 0-1-1.73l-7-4a2 2 0 0 0-2 0l-7 4A2 2 0 0 0 3 8v8a2 2 0 0 0 1 1.73l7 4a2 2 0 0 0 2 0l7-4A2 2 0 0 0 21 16z"/><polyline points="3.27 6.96 12 12.01 20.73 6.96"/><line x1="12" y1="22.08" x2="12" y2="12"/></svg>
+      <span>Sideload &amp; JIT</span>
+    </button>
+    <button type="button" class="category-tab" data-tab="settings" role="tab" aria-selected="false">
+      <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 0 1 0 2.83 2 2 0 0 1-2.83 0l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-2 2 2 2 0 0 1-2-2v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 0 1-2.83 0 2 2 0 0 1 0-2.83l.06-.06a1.65 1.65 0 0 0 .33-1.82 1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1-2-2 2 2 0 0 1 2-2h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 0 1 0-2.83 2 2 0 0 1 2.83 0l.06.06a1.65 1.65 0 0 0 1.82.33H9a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 2-2 2 2 0 0 1 2 2v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 0 1 2.83 0 2 2 0 0 1 0 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82V9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 2 2 2 2 0 0 1-2 2h-.09a1.65 1.65 0 0 0-1.51 1z"/></svg>
+      <span>Settings &amp; Alerts</span>
+    </button>
+    <button type="button" class="category-tab" data-tab="logs" role="tab" aria-selected="false">
+      <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><polyline points="4 17 10 11 4 5"/><line x1="12" y1="19" x2="20" y2="19"/></svg>
+      <span>Activity &amp; Logs</span>
+    </button>
+  </nav>
+
+  <div class="dashboard-categories" id="dashboard-categories" data-filter="apps">
+
+    <!-- CATEGORY 1: APPS, RENEWALS & PROFILES -->
+    <div class="category-group" data-group="apps">
+      <div class="cat-header">
+        <div class="cat-header-left">
+          <span class="cat-icon">
+            <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><rect x="5" y="2" width="14" height="20" rx="3"/><line x1="12" y1="18" x2="12.01" y2="18"/></svg>
+          </span>
+          <div>
+            <h2 class="cat-title">Apps, Renewals &amp; Profiles</h2>
+            <p class="cat-sub">Check iPhone Wi-Fi connection, renew sideloaded apps, and clean up old provisioning profiles.</p>
+          </div>
+        </div>
+      </div>
+
+      <div class="cat-grid apps-layout">
+        <div class="cat-stack">
+          <section class="card">
+            <div class="apps-toolbar">
+              <h2 data-i18n="Your apps" style="margin:0">Your apps <button type="button" class="concept-btn" data-concept="quotas" title="Explain Apple ID quotas and 7-day limits">!</button></h2>
+              <div class="apps-toolbar-right">
+                <div class="quotas-row" id="quotas-row" hidden>
+                  <span class="quota-badge" id="quota-apps"></span>
+                  <span class="quota-badge" id="quota-appids"></span>
+                </div>
+                <div class="view-switcher" id="apps-view-switcher" role="group" aria-label="View mode">
+                  <button type="button" class="view-btn" data-view="list" title="Detailed List View">☰ List</button>
+                  <button type="button" class="view-btn" data-view="grid" title="Grid Cards View">⊞ Grid</button>
+                  <button type="button" class="view-btn" data-view="compact" title="Compact View">≡ Compact</button>
+                </div>
+              </div>
+            </div>
+            <p class="muted" id="apps-empty" hidden></p>
+            <ul class="plain" id="apps"></ul>
+            <div class="row action-row" style="margin-top:14px">
+              <button class="primary" id="btn-due" type="button" data-i18n="Renew expiring apps">Renew expiring apps</button>
+              <button id="btn-all" type="button" data-i18n="Renew all now">Renew all now</button>
+              <button id="btn-preview" type="button" data-i18n="Preview renewals">Preview renewals</button>
+            </div>
+            <p class="muted" id="renew-hint" style="margin:8px 0 0"></p>
+            <div class="nested" id="renew-preview" hidden></div>
+            <div id="app-job-slot">
+              <div id="job" hidden>
+                <div class="banner" id="job-status"></div>
+                <button id="btn-cancel-wait" type="button" data-i18n="Cancel waiting" hidden>Cancel waiting</button>
+                <pre class="log" id="job-log"></pre>
+              </div>
+            </div>
+          </section>
+        </div>
+
+        <div class="cat-stack">
+          <section class="card" aria-live="polite">
+            <h2 data-i18n="iPhone">iPhone <button type="button" class="concept-btn" data-concept="pairing" title="Explain USB pairing and Wi-Fi sync">!</button></h2>
+            <div class="row">
+              <span class="pill" id="phone-pill" data-i18n="Checking…">Checking…</span>
+              <span class="muted grow" id="phone-addr"></span>
+              <button id="btn-check" type="button" data-i18n="Check again">Check again</button>
+            </div>
+            <div class="banner bad" id="phone-error" hidden></div>
+            <div class="row action-row" style="margin-top:10px">
+              <button id="btn-pair-usb" type="button" data-i18n="Pair iPhone over USB">Pair iPhone over USB</button>
+            </div>
+            <label class="check" for="auto-pair-enabled">
+              <input id="auto-pair-enabled" type="checkbox">
+              <span data-i18n="Pair automatically when a new iPhone connects over USB">Pair automatically when a new iPhone connects over USB</span>
+            </label>
+            <details style="margin-top:12px">
+              <summary data-i18n="Connection addresses" style="cursor:pointer; font-weight:650; color:var(--accent);">Connection addresses</summary>
+              <label for="phone-addresses" data-i18n="Saved iPhone addresses (optional)">Saved iPhone addresses (optional)</label>
+              <textarea id="phone-addresses" rows="2" spellcheck="false" autocapitalize="off" autocomplete="off" placeholder="10.7.0.2:49152" style="width:100%;max-width:100%;box-sizing:border-box;font:inherit;padding:10px;border:1px solid var(--line);border-radius:11px;background:var(--card-alt);color:var(--text)"></textarea>
+              <p class="muted" data-i18n="Save up to two IP:port addresses, one per line, such as your home and VPN addresses.">Save up to two IP:port addresses, one per line, such as your home and VPN addresses.</p>
+              <div class="row action-row">
+                <button id="phone-addresses-save" type="button" data-i18n="Save addresses">Save addresses</button>
+              </div>
+              <div class="banner good" id="phone-addresses-message" role="status" aria-live="polite" hidden></div>
+              <div class="banner bad" id="phone-addresses-error" hidden></div>
+            </details>
+          </section>
+
+          <section class="card" id="profiles-card">
+            <div class="row" style="justify-content:space-between; align-items:center;">
+              <h2 data-i18n="Provisioning profiles on iPhone" style="margin:0">Provisioning profiles on iPhone <button type="button" class="concept-btn" data-concept="profiles" title="Explain provisioning profiles and safe backups">!</button></h2>
+              <button id="btn-bulk-delete" type="button" class="mini" style="color:var(--urgent); border-color:var(--urgent); width:auto; padding:6px 12px;" disabled>
+                <span data-i18n="Delete Selected">Delete Selected</span>&nbsp;(<span id="bulk-delete-count">0</span>)
+              </button>
+            </div>
+            <p class="muted" data-i18n="Old profiles may remain after renewal. Deleting a profile still needed by an installed app can stop it opening. A verified server-side backup is saved before removal.">Old profiles may remain after renewal. Deleting a profile still needed by an installed app can stop it opening. A verified server-side backup is saved before removal.</p>
+            <div id="bulk-select-bar" class="bulk-bar" hidden>
+              <label class="check" style="margin:0; font-weight:600; cursor:pointer; align-items:center;">
+                <input type="checkbox" id="cb-select-all-profiles" class="profile-check"> <span data-i18n="Select all profiles">Select all profiles</span>
+              </label>
+              <button type="button" id="btn-select-expired" class="mini" style="width:auto; padding:4px 10px; min-height:30px; font-size:.78rem;" data-i18n="Select expired">Select expired</button>
+            </div>
+            <p class="muted" id="profiles-empty" hidden></p>
+            <ul class="plain" id="profiles"></ul>
+          </section>
+
+          <section class="card">
+            <div class="row" style="justify-content:space-between; align-items:center;">
+              <h2 data-i18n="Saved profile backups" style="margin:0">Saved profile backups</h2>
+              <button id="btn-clear-backups" type="button" class="mini" style="color:var(--urgent); border-color:var(--urgent); width:auto; padding:6px 12px;" hidden data-i18n="Delete all backups">Delete all backups</button>
+            </div>
+            <p class="muted" data-i18n="Restore a backed-up profile by UUID. Restoring does not extend its original expiry date. The backup is retained.">Restore a backed-up profile by UUID. Restoring does not extend its original expiry date. The backup is retained.</p>
+            <p class="muted" id="backups-empty"></p>
+            <ul class="plain" id="backups"></ul>
+          </section>
+        </div>
+      </div>
+    </div>
+
+    <!-- CATEGORY 2: SIDELOAD & JIT TOOLS -->
+    <div class="category-group" data-group="tools">
+      <div class="cat-header">
+        <div class="cat-header-left">
+          <span class="cat-icon">
+            <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 16V8a2 2 0 0 0-1-1.73l-7-4a2 2 0 0 0-2 0l-7 4A2 2 0 0 0 3 8v8a2 2 0 0 0 1 1.73l7 4a2 2 0 0 0 2 0l7-4A2 2 0 0 0 21 16z"/><polyline points="3.27 6.96 12 12.01 20.73 6.96"/><line x1="12" y1="22.08" x2="12" y2="12"/></svg>
+          </span>
+          <div>
+            <h2 class="cat-title">Sideload IPA &amp; JIT Tools</h2>
+            <p class="cat-sub">Install new IPA files over Wi-Fi or enable Just-in-Time (JIT) hardware acceleration for running apps.</p>
+          </div>
+        </div>
+      </div>
+
+      <div class="cat-grid">
+        <section class="card">
+          <h2 data-i18n="Install an app from this PC">Install an app from this PC <button type="button" class="concept-btn" data-concept="extensions" title="Explain app extensions and custom bundle IDs">!</button></h2>
+          <p class="muted" data-i18n="Choose an IPA. AltKeeper signs it with the configured Apple ID and installs it over Wi-Fi. The Apple ID password must be saved on the server.">Choose an IPA. AltKeeper signs it with the configured Apple ID and installs it over Wi-Fi. The Apple ID password must be saved on the server.</p>
+          <form id="install-form">
+            <label for="ipa-file" data-i18n="IPA file">IPA file</label>
+            <input id="ipa-file" type="file" accept=".ipa,application/octet-stream">
+            <label for="install-display-name" data-i18n="New app name (optional)">New app name (optional)</label>
+            <input id="install-display-name" type="text" maxlength="40" autocomplete="off" placeholder="e.g. YouTube Clone">
+            <label for="install-bundle-id" data-i18n="New Bundle ID (optional)">New Bundle ID (optional)</label>
+            <input id="install-bundle-id" type="text" maxlength="160" autocapitalize="off" spellcheck="false" autocomplete="off" placeholder="e.g. com.example.youtubeclone">
+            <label class="check" for="install-enable-jit">
+              <input id="install-enable-jit" type="checkbox">
+              <span data-i18n="Enable JIT after installation (requires a mounted Developer Disk Image)">Enable JIT after installation (requires a mounted Developer Disk Image)</span>
+            </label>
+            <p class="muted" data-i18n="These settings are for new installations only. Existing apps and automatic renewal are never modified. A new Bundle ID allows a separate copy; the Apple team suffix is added automatically.">These settings are for new installations only. Existing apps and automatic renewal are never modified. A new Bundle ID allows a separate copy; the Apple team suffix is added automatically.</p>
+            <div class="row" style="margin-top:10px">
+              <button class="primary" id="btn-install" type="submit" data-i18n="Sign and install">Sign and install</button>
+              <span class="muted" id="install-hint"></span>
+            </div>
+          </form>
+          <div class="nested" id="extension-choice" hidden>
+            <h3 data-i18n="Confirm new installation">Confirm new installation</h3>
+            <p class="muted" id="install-original" aria-live="polite"></p>
+            <div id="extension-options">
+              <p class="muted" data-i18n="Unchecked extensions are removed before signing. Some apps require extensions to function. All are selected by default.">Unchecked extensions are removed before signing. Some apps require extensions to function. All are selected by default.</p>
+              <div id="extension-list"></div>
+              <p class="muted" id="extension-summary" aria-live="polite"></p>
+              <p class="muted" data-i18n="App ID count is an upper bound; already-registered IDs may be reused. Live Apple quota is not checked here.">App ID count is an upper bound; already-registered IDs may be reused. Live Apple quota is not checked here.</p>
+            </div>
+            <div class="row action-row" style="margin-top:12px">
+              <button type="button" id="ext-all" data-i18n="Select all">Select all</button>
+              <button type="button" id="ext-none" data-i18n="Select none">Select none</button>
+              <button type="button" class="primary" id="ext-confirm" data-i18n="Sign and install selected">Sign and install selected</button>
+            </div>
+          </div>
+          <div class="banner bad" id="install-error" hidden></div>
+          <div id="install-job-slot"></div>
+        </section>
+
+        <section class="card">
+          <h2 data-i18n="Just-in-time (JIT)">Just-in-time (JIT) <button type="button" class="concept-btn" data-concept="jit" title="Explain Just-in-time compilation">!</button></h2>
+          <p class="muted" data-i18n="Enable JIT for an app that is already running on the iPhone. A compatible Developer Disk Image must be mounted and Developer Mode enabled.">
+            Enable JIT for an app that is already running on the iPhone. A compatible Developer Disk Image must be mounted and Developer Mode enabled.
+          </p>
+          <div class="why-box"><strong>How to use:</strong> Open the target app on your iPhone first, click <strong>Load running apps</strong>, pick it from the list, and press <strong>Enable JIT</strong>.</div>
+          <div class="row jit-actions">
+            <select id="jit-app-select" aria-label="Running app" disabled>
+              <option value="">Load running apps first</option>
+            </select>
+            <button id="jit-refresh" type="button" data-i18n="Load running apps">Load running apps</button>
+            <button class="primary" id="jit-enable" type="button" data-i18n="Enable JIT" disabled>Enable JIT</button>
+          </div>
+          <p class="muted" id="jit-hint" aria-live="polite"></p>
+          <div class="banner bad" id="jit-error" hidden></div>
+          <div id="jit-job-slot"></div>
+        </section>
+      </div>
+    </div>
+
+    <!-- CATEGORY 3: SETTINGS, AUTOMATION & ALERTS -->
+    <div class="category-group" data-group="settings">
+      <div class="cat-header">
+        <div class="cat-header-left">
+          <span class="cat-icon">
+            <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 0 1 0 2.83 2 2 0 0 1-2.83 0l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-2 2 2 2 0 0 1-2-2v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 0 1-2.83 0 2 2 0 0 1 0-2.83l.06-.06a1.65 1.65 0 0 0 .33-1.82 1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1-2-2 2 2 0 0 1 2-2h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 0 1 0-2.83 2 2 0 0 1 2.83 0l.06.06a1.65 1.65 0 0 0 1.82.33H9a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 2-2 2 2 0 0 1 2 2v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 0 1 2.83 0 2 2 0 0 1 0 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82V9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 2 2 2 2 0 0 1-2 2h-.09a1.65 1.65 0 0 0-1.51 1z"/></svg>
+          </span>
+          <div>
+            <h2 class="cat-title">Account, Automation &amp; Alerts</h2>
+            <p class="cat-sub">Manage your Apple ID signing account, daily renewal schedule, Discord/Telegram notifications, and Anisette server.</p>
+          </div>
+        </div>
+      </div>
+
+      <div class="cat-grid">
+        <div class="cat-stack">
+          <section class="card">
+            <h2>Apple ID <button type="button" class="concept-btn" data-concept="appleid" title="Explain Apple ID signing and security">!</button></h2>
+            <div id="account-info" hidden>
+              <div class="row">
+                <span class="grow"><strong id="acc-id"></strong><br><span class="muted" id="acc-pw"></span></span>
+                <button id="btn-change" type="button" data-i18n="Change account">Change account</button>
+              </div>
+            </div>
+            <form id="login-form" autocomplete="off" hidden>
+              <label for="apple-id" data-i18n="Apple ID (email)">Apple ID (email)</label>
+              <input id="apple-id" type="email" autocomplete="username" inputmode="email" autocapitalize="off" spellcheck="false">
+              <label for="apple-pw" data-i18n="Password">Password</label>
+              <input id="apple-pw" type="password" autocomplete="current-password" autocapitalize="off" spellcheck="false">
+              <label class="check"><input type="checkbox" id="show-pw"> <span data-i18n="Show password">Show password</span></label>
+              <label class="check"><input type="checkbox" id="save-pw" checked>
+                <span><span data-i18n="Save the password on this server for automatic renewals">Save the password on this server for automatic renewals</span>
+                <span class="muted" data-i18n="It is stored as plain text in a private server file.">It is stored as plain text in a private server file.</span></span></label>
+              <button class="primary" id="btn-login" type="submit" data-i18n="Sign in">Sign in</button>
+              <p class="muted" data-i18n="Try only once at a time: repeated failures may cause Apple to block sign-ins temporarily.">Try only once at a time: repeated failures may cause Apple to block sign-ins temporarily.</p>
+            </form>
+            <form id="code-form" autocomplete="off" hidden>
+              <div class="banner good">Apple sent a 6-digit code to your devices.</div>
+              <div class="banner bad" id="code-error" hidden></div>
+              <label for="code" data-i18n="Code">Code</label>
+              <input id="code" class="code" type="text" inputmode="numeric" pattern="[0-9]*" maxlength="6" autocomplete="one-time-code">
+              <div class="row" style="margin-top:10px">
+                <button class="primary" id="btn-code" type="submit" data-i18n="Submit code">Submit code</button>
+                <button id="btn-resend" type="button" data-i18n="Resend code">Resend code</button>
+              </div>
+            </form>
+            <div class="banner" id="login-msg" hidden></div>
+          </section>
+
+                    <section class="card" id="card-autostart">
+            <h2>Start with Windows</h2>
+            <div class="switch-container">
+              <div class="switch-label">
+                <span class="switch-title">Launch silently in background tray on Windows startup</span>
+                <span class="switch-desc">Starts AltKeeper in the system tray when you log in to Windows, without opening the window.</span>
+              </div>
+              <label class="toggle-switch">
+                <input type="checkbox" id="autostart-toggle">
+                <span class="toggle-slider"></span>
+              </label>
+            </div>
+            <div class="banner bad" id="autostart-error" hidden style="margin-top:10px;"></div>
+          </section>
+
+          <section class="card">
+            <h2 data-i18n="Automatic renewal">Automatic renewal <button type="button" class="concept-btn" data-concept="local-server" title="Explain how scheduled background renewal works">!</button></h2>
+            <p class="muted" data-i18n="Runs once daily while this server is online. Renews expiring installed apps. If installed-app lookup fails, it falls back to all saved-team profiles. Default is OFF.">Runs once daily while this server is online. Renews expiring installed apps. If installed-app lookup fails, it falls back to all saved-team profiles. Default is OFF.</p>
+            <div class="row">
+              <span class="pill" id="auto-pill" data-i18n="OFF">OFF</span>
+              <span class="muted grow" id="auto-next" data-i18n="Automatic renewal disabled">Automatic renewal disabled</span>
+            </div>
+            <div class="row" style="gap:14px; margin-top:6px;">
+              <div style="flex:1 1 140px;">
+                <label for="auto-time" data-i18n="Daily time (UTC)">Daily time (UTC)</label>
+                <input type="time" id="auto-time" value="06:00" style="width:100%;">
+              </div>
+              <div style="flex:1 1 160px;">
+                <label for="auto-days" data-i18n="Renew when days remaining">Renew when days remaining</label>
+                <select id="auto-days">
+                  <option value="1" data-i18n="1 day">1 day</option><option value="2" data-i18n="2 days">2 days</option>
+                  <option value="3" selected data-i18n="3 days">3 days</option><option value="4" data-i18n="4 days">4 days</option>
+                  <option value="5" data-i18n="5 days">5 days</option><option value="6" data-i18n="6 days">6 days</option>
+                </select>
+              </div>
+            </div>
+            <label class="check" for="auto-register-app-ids" style="display:flex; align-items:center; gap:8px; margin-top:10px; font-weight:500;">
+              <input type="checkbox" id="auto-register-app-ids">
+              <span data-i18n="Auto-register missing App IDs (uses the 10/7-day App ID quota)">Auto-register missing App IDs (uses the 10/7-day App ID quota)</span>
+            </label>
+            <p class="muted" data-i18n="If a scheduled renewal fails: retry after 30 minutes, up to twice more. Send Discord notification only after the final failure (or an unretryable authentication error).">If a scheduled renewal fails: retry after 30 minutes, up to twice more. Send Discord notification only after the final failure (or an unretryable authentication error).</p>
+            <div class="row action-row" style="margin-top:10px">
+              <button class="primary" id="auto-enable" type="button" data-i18n="Enable auto-renew">Enable auto-renew</button>
+              <button id="auto-disable" type="button" hidden data-i18n="Turn off">Turn off</button>
+            </div>
+            <div class="banner bad" id="auto-error" hidden></div>
+          </section>
+        </div>
+
+        <div class="cat-stack">
+          <section class="card">
+            <h2>Failure notifications</h2>
+            <p class="muted">Receive instant alerts on Discord or Telegram if automatic background renewal fails.</p>
+            <div class="row" style="justify-content:space-between; align-items:center; margin-bottom:4px; margin-top:8px;">
+              <label for="discord-webhook" style="margin:0" data-i18n="Discord failure notifications">Discord failure notifications</label>
+              <button type="button" id="btn-discord-guide" class="help-btn" title="How to create a Discord Webhook">
+                <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.3" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="10"/><path d="M9.09 9a3 3 0 0 1 5.83 1c0 2-3 3-3 3"/><line x1="12" y1="17" x2="12.01" y2="17"/></svg>
+                <span data-i18n="How to connect?">How to connect?</span>
+              </button>
+            </div>
+            <div class="row" style="margin-bottom:8px;">
+              <span class="pill" id="discord-pill" data-i18n="Not configured">Not configured</span>
+              <span class="muted" data-i18n="Only sent when automatic renewal fails after retries.">Only sent when automatic renewal fails after retries.</span>
+            </div>
+            <input type="password" id="discord-webhook" placeholder="https://discord.com/api/webhooks/..." autocomplete="off">
+            <div class="row action-row" style="margin-top:10px">
+              <button id="discord-save" type="button" data-i18n="Save webhook">Save webhook</button>
+              <button id="discord-clear" type="button" data-i18n="Clear webhook">Clear webhook</button>
+              <button id="discord-test" type="button" data-i18n="Send test notification">Send test notification</button>
+            </div>
+            <div class="banner bad" id="discord-error" hidden></div>
+            <div class="banner" id="discord-test-result" role="status" aria-live="polite" hidden></div>
+            <div class="divider"></div>
+            <div class="row" style="justify-content:space-between; align-items:center; margin-bottom:4px;">
+              <label for="telegram-token" style="margin:0" data-i18n="Telegram Bot notifications">Telegram Bot notifications</label>
+              <button type="button" id="btn-tg-guide" class="help-btn" title="How to get Telegram Bot Token and Chat ID">
+                <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.3" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="10"/><path d="M9.09 9a3 3 0 0 1 5.83 1c0 2-3 3-3 3"/><line x1="12" y1="17" x2="12.01" y2="17"/></svg>
+                <span data-i18n="How to connect?">How to connect?</span>
+              </button>
+            </div>
+            <div class="row" style="margin-bottom:8px;">
+              <span class="pill" id="telegram-pill" data-i18n="Not configured">Not configured</span>
+              <span class="muted" id="telegram-chat-label" data-i18n="Alerts you on Telegram if automatic renewal fails.">Alerts you on Telegram if automatic renewal fails.</span>
+            </div>
+            <div class="row" style="gap:8px; flex-wrap:wrap;">
+              <div style="flex: 1.4 1 180px; min-width:0;">
+                <input type="password" id="telegram-token" placeholder="Bot Token (123456:AAF...)" autocomplete="off">
+              </div>
+              <div style="flex: 1 1 130px; min-width:0;">
+                <input type="text" id="telegram-chat-id" placeholder="Chat ID (e.g. 987654321)" autocomplete="off">
+              </div>
+            </div>
+            <div class="row action-row" style="margin-top:10px">
+              <button id="telegram-save" type="button" data-i18n="Save bot">Save bot</button>
+              <button id="telegram-clear" type="button" data-i18n="Clear bot">Clear bot</button>
+              <button id="telegram-test" type="button" data-i18n="Send test">Send test</button>
+            </div>
+            <div class="banner bad" id="telegram-error" hidden></div>
+            <div class="banner" id="telegram-test-result" role="status" aria-live="polite" hidden></div>
+          </section>
+
+          <section class="card">
+            <div id="anisette">
+              <h2 data-i18n="Anisette server">Anisette server <button type="button" class="concept-btn" data-concept="anisette" title="Explain Anisette authentication server">!</button></h2>
+              <div class="why-box"><strong>What is Anisette?</strong> Apple requires security tokens generated by a real Mac or iCloud setup before allowing sideload sign-ins. Keep the default server unless it goes offline.</div>
+              <p class="muted" data-i18n="Choose the server used for Apple authentication and AltStore.">Choose the server used for Apple authentication and AltStore.</p>
+              <div class="banner" id="anisette-locked" role="note" hidden>
+                This server is set by the <code>ALTKEEPER_ANISETTE_URL</code> environment variable, so it cannot be
+                changed here. Remove the variable (also <code>ALTREFRESH_ANISETTE_URL</code>) and restart AltKeeper
+                to choose a different server. You can still test the current one.
+              </div>
+              <div class="row">
+                <select id="anisette-server" aria-label="Anisette server">
+                  <option value="https://ani3.stikstore.app">ani3.stikstore.app (default)</option>
+                  <option value="https://ani.jkcoxson.com">isideload public server</option>
+                  <option value="http://127.0.0.1:8788">AltKeeper local server (127.0.0.1:8788)</option>
+                  <option value="custom">Custom URL</option>
+                </select>
+              </div>
+              <label for="anisette-custom" data-i18n="Custom anisette URL">Custom anisette URL</label>
+              <input type="url" id="anisette-custom" placeholder="http://192.168.1.50:8788">
+              <div class="row action-row" style="margin-top:10px">
+                <button id="anisette-save" type="button" data-i18n="Save server">Save server</button>
+                <button id="anisette-clear" type="button" data-i18n="Restore default">Restore default</button>
+                <button id="anisette-test" type="button" data-i18n="Test server">Test server</button>
+              </div>
+              <div class="muted" id="anisette-source" style="margin-top:8px;"></div>
+              <div class="banner bad" id="anisette-error" hidden></div>
+              <div class="banner" id="anisette-test-result" role="status" aria-live="polite" hidden></div>
+            </div>
+          </section>
+        </div>
+      </div>
+    </div>
+
+    <!-- CATEGORY 4: ACTIVITY & LOGS -->
+    <div class="category-group" data-group="logs">
+      <div class="cat-header">
+        <div class="cat-header-left">
+          <span class="cat-icon">
+            <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><polyline points="4 17 10 11 4 5"/><line x1="12" y1="19" x2="20" y2="19"/></svg>
+          </span>
+          <div>
+            <h2 class="cat-title">Activity &amp; Live Server Logs</h2>
+            <p class="cat-sub">Review past renewal attempts and inspect real-time server events.</p>
+          </div>
+        </div>
+      </div>
+
+      <div class="cat-grid">
+        <section class="card hist">
+          <h2 data-i18n="Recent renewals">Recent renewals</h2>
+          <p class="muted" id="hist-empty" data-i18n="Nothing yet. Automatic renewal runs every evening when configured on the server.">Nothing yet. Automatic renewal runs every evening when configured on the server.</p>
+          <ul class="plain" id="hist"></ul>
+        </section>
+
+        <section class="card" id="logs">
+          <h2 data-i18n="Logs">Logs</h2>
+          <div class="row">
+            <span class="muted grow" data-i18n="Live server log, newest at the bottom.">Live server log, newest at the bottom.</span>
+            <button id="btn-logs-copy" type="button" class="mini" data-i18n="Copy">Copy</button>
+            <button id="btn-logs-clear" type="button" class="mini" data-i18n="Clear view">Clear view</button>
+          </div>
+          <pre class="log logs" id="logs-view"></pre>
+          <div class="banner good" id="logs-message" role="status" aria-live="polite" hidden></div>
+        </section>
+      </div>
+    </div>
+
   </div>
 
-  <section class="card" aria-live="polite">
-    <h2 data-i18n="iPhone">iPhone</h2>
-    <div class="row">
-      <span class="pill" id="phone-pill" data-i18n="Checking…">Checking…</span>
-      <span class="muted grow" id="phone-addr"></span>
-      <button id="btn-check" type="button" data-i18n="Check again">Check again</button>
-    </div>
-    <div class="banner bad" id="phone-error" hidden></div>
-    <div class="row action-row" style="margin-top:10px">
-      <button id="btn-pair-usb" type="button" data-i18n="Pair iPhone over USB">Pair iPhone over USB</button>
-    </div>
-    <label class="check" for="auto-pair-enabled">
-      <input id="auto-pair-enabled" type="checkbox">
-      <span data-i18n="Pair automatically when a new iPhone connects over USB">Pair automatically when a new iPhone connects over USB</span>
-    </label>
-    <details style="margin-top:12px">
-      <summary data-i18n="Connection addresses">Connection addresses</summary>
-      <label for="phone-addresses" data-i18n="Saved iPhone addresses (optional)">Saved iPhone addresses (optional)</label>
-      <textarea id="phone-addresses" rows="2" spellcheck="false" autocapitalize="off" autocomplete="off" placeholder="10.7.0.2:49152"></textarea>
-      <p class="muted" data-i18n="Save up to two IP:port addresses, one per line, such as your home and VPN addresses.">Save up to two IP:port addresses, one per line, such as your home and VPN addresses.</p>
-      <div class="row action-row">
-        <button id="phone-addresses-save" type="button" data-i18n="Save addresses">Save addresses</button>
-      </div>
-      <div class="banner good" id="phone-addresses-message" role="status" aria-live="polite" hidden></div>
-      <div class="banner bad" id="phone-addresses-error" hidden></div>
-    </details>
-  </section>
-
-  <section class="card">
-    <div class="row" style="justify-content:space-between; margin-bottom: 8px;">
-      <h2 data-i18n="Your apps" style="margin:0">Your apps</h2>
-      <div class="quotas-row" id="quotas-row" hidden>
-        <span class="quota-badge" id="quota-apps"></span>
-        <span class="quota-badge" id="quota-appids"></span>
-      </div>
-    </div>
-    <p class="muted" id="apps-empty" hidden></p>
-    <ul class="plain" id="apps"></ul>
-    <div class="row action-row" style="margin-top:14px">
-      <button class="primary" id="btn-due" type="button" data-i18n="Renew expiring apps">Renew expiring apps</button>
-      <button id="btn-all" type="button" data-i18n="Renew all now">Renew all now</button>
-      <button id="btn-preview" type="button" data-i18n="Preview renewals">Preview renewals</button>
-    </div>
-    <p class="muted" id="renew-hint" style="margin:8px 0 0"></p>
-    <div class="nested" id="renew-preview" hidden></div>
-    <div id="app-job-slot">
-      <div id="job" hidden>
-        <div class="banner" id="job-status"></div>
-        <button id="btn-cancel-wait" type="button" data-i18n="Cancel waiting" hidden>Cancel waiting</button>
-        <pre class="log" id="job-log"></pre>
-      </div>
-    </div>
-  </section>
-
-  <section class="card">
-    <h2 data-i18n="Just-in-time (JIT)">Just-in-time (JIT)</h2>
-    <p class="muted" data-i18n="Enable JIT for an app that is already running on the iPhone. A compatible Developer Disk Image must be mounted and Developer Mode enabled.">
-      Enable JIT for an app that is already running on the iPhone. A compatible Developer Disk Image must be mounted and Developer Mode enabled.
-    </p>
-    <div class="row jit-actions">
-      <select id="jit-app-select" aria-label="Running app" disabled>
-        <option value="">Load running apps first</option>
-      </select>
-      <button id="jit-refresh" type="button" data-i18n="Load running apps">Load running apps</button>
-      <button class="primary" id="jit-enable" type="button" data-i18n="Enable JIT" disabled>Enable JIT</button>
-    </div>
-    <p class="muted" id="jit-hint" aria-live="polite"></p>
-    <div class="banner bad" id="jit-error" hidden></div>
-    <div id="jit-job-slot"></div>
-  </section>
-
-  <section class="card">
-    <h2 data-i18n="Automatic renewal">Automatic renewal</h2>
-    <p class="muted" data-i18n="Runs once daily while this server is online. Renews expiring installed apps. If installed-app lookup fails, it falls back to all saved-team profiles. Default is OFF.">Runs once daily while this server is online. Renews expiring installed apps. If installed-app lookup fails, it falls back to all saved-team profiles. Default is OFF.</p>
-    <div class="row">
-      <span class="pill" id="auto-pill" data-i18n="OFF">OFF</span>
-      <span class="muted grow" id="auto-next" data-i18n="Automatic renewal disabled">Automatic renewal disabled</span>
-    </div>
-    <div class="row">
-      <div>
-        <label for="auto-time" data-i18n="Daily time (UTC)">Daily time (UTC)</label>
-        <input type="time" id="auto-time" value="06:00" style="max-width:150px">
-      </div>
-      <div>
-        <label for="auto-days" data-i18n="Renew when days remaining">Renew when days remaining</label>
-        <select id="auto-days">
-          <option value="1" data-i18n="1 day">1 day</option><option value="2" data-i18n="2 days">2 days</option>
-          <option value="3" selected data-i18n="3 days">3 days</option><option value="4" data-i18n="4 days">4 days</option>
-          <option value="5" data-i18n="5 days">5 days</option><option value="6" data-i18n="6 days">6 days</option>
-        </select>
-      </div>
-    </div>
-    <label class="check" for="auto-register-app-ids">
-      <input type="checkbox" id="auto-register-app-ids">
-      <span data-i18n="Auto-register missing App IDs (uses the 10/7-day App ID quota)">Auto-register missing App IDs (uses the 10/7-day App ID quota)</span>
-    </label>
-    <p class="muted" data-i18n="If a scheduled renewal fails: retry after 30 minutes, up to twice more. Send Discord notification only after the final failure (or an unretryable authentication error).">If a scheduled renewal fails: retry after 30 minutes, up to twice more. Send Discord notification only after the final failure (or an unretryable authentication error).</p>
-    <div class="row action-row" style="margin-top:10px">
-      <button class="primary" id="auto-enable" type="button" data-i18n="Enable auto-renew">Enable auto-renew</button>
-      <button id="auto-disable" type="button" hidden data-i18n="Turn off">Turn off</button>
-    </div>
-    <div class="banner bad" id="auto-error" hidden></div>
-    <div class="divider"></div>
-    <div id="anisette">
-    <label for="discord-webhook" data-i18n="Discord failure notifications">Discord failure notifications</label>
-    <div class="row">
-      <span class="pill" id="discord-pill" data-i18n="Not configured">Not configured</span>
-      <span class="muted" data-i18n="Only sent when automatic renewal fails after retries.">Only sent when automatic renewal fails after retries.</span>
-    </div>
-    <input type="password" id="discord-webhook" placeholder="https://discord.com/api/webhooks/..." autocomplete="off">
-    <div class="row action-row" style="margin-top:10px">
-      <button id="discord-save" type="button" data-i18n="Save webhook">Save webhook</button>
-      <button id="discord-clear" type="button" data-i18n="Clear webhook">Clear webhook</button>
-      <button id="discord-test" type="button" data-i18n="Send test notification">Send test notification</button>
-    </div>
-    <div class="banner bad" id="discord-error" hidden></div>
-    <div class="banner" id="discord-test-result" role="status" aria-live="polite" hidden></div>
-    <div class="divider"></div>
-    <h2 data-i18n="Anisette server">Anisette server</h2>
-    <p class="muted" data-i18n="Choose the server used for Apple authentication and AltStore.">Choose the server used for Apple authentication and AltStore.</p>
-    <div class="banner" id="anisette-locked" role="note" hidden>
-      This server is set by the <code>ALTKEEPER_ANISETTE_URL</code> environment variable, so it cannot be
-      changed here. Remove the variable (also <code>ALTREFRESH_ANISETTE_URL</code>) and restart AltKeeper
-      to choose a different server. You can still test the current one.
-    </div>
-    <div class="row">
-      <select id="anisette-server" aria-label="Anisette server">
-        <option value="https://ani3.stikstore.app">ani3.stikstore.app (default)</option>
-        <option value="https://ani.jkcoxson.com">isideload public server</option>
-        <option value="http://127.0.0.1:8788">AltKeeper local server (127.0.0.1:8788)</option>
-        <option value="custom">Custom URL</option>
-      </select>
-    </div>
-    <label for="anisette-custom" data-i18n="Custom anisette URL">Custom anisette URL</label>
-    <input type="url" id="anisette-custom" placeholder="http://192.168.1.50:8788">
-    <div class="row action-row" style="margin-top:10px">
-      <button id="anisette-save" type="button" data-i18n="Save server">Save server</button>
-      <button id="anisette-clear" type="button" data-i18n="Restore default">Restore default</button>
-      <button id="anisette-test" type="button" data-i18n="Test server">Test server</button>
-    </div>
-    <div class="muted" id="anisette-source"></div>
-    <div class="banner bad" id="anisette-error" hidden></div>
-    <div class="banner" id="anisette-test-result" role="status" aria-live="polite" hidden></div>
-    </div>
-  </section>
-
-  <section class="card">
-    <h2 data-i18n="Provisioning profiles on iPhone">Provisioning profiles on iPhone</h2>
-    <p class="muted" data-i18n="Old profiles may remain after renewal. Deleting a profile still needed by an installed app can stop it opening. A verified server-side backup is saved before removal.">Old profiles may remain after renewal. Deleting a profile still needed by an installed app can stop it opening. A verified server-side backup is saved before removal.</p>
-    <p class="muted" id="profiles-empty" hidden></p>
-    <ul class="plain" id="profiles"></ul>
-  </section>
-
-  <section class="card">
-    <h2 data-i18n="Saved profile backups">Saved profile backups</h2>
-    <p class="muted" data-i18n="Restore a backed-up profile by UUID. Restoring does not extend its original expiry date. The backup is retained.">Restore a backed-up profile by UUID. Restoring does not extend its original expiry date. The backup is retained.</p>
-    <p class="muted" id="backups-empty"></p>
-    <ul class="plain" id="backups"></ul>
-  </section>
-
-  <section class="card">
-    <h2 data-i18n="Install an app from this PC">Install an app from this PC</h2>
-    <p class="muted" data-i18n="Choose an IPA. AltKeeper signs it with the configured Apple ID and installs it over Wi-Fi. The Apple ID password must be saved on the server.">Choose an IPA. AltKeeper signs it with the configured Apple ID and installs it over Wi-Fi. The Apple ID password must be saved on the server.</p>
-    <form id="install-form">
-      <label for="ipa-file" data-i18n="IPA file">IPA file</label>
-      <input id="ipa-file" type="file" accept=".ipa,application/octet-stream">
-      <label for="install-display-name" data-i18n="New app name (optional)">New app name (optional)</label>
-      <input id="install-display-name" type="text" maxlength="40" autocomplete="off"
-        placeholder="e.g. YouTube Clone">
-      <label for="install-bundle-id" data-i18n="New Bundle ID (optional)">New Bundle ID (optional)</label>
-      <input id="install-bundle-id" type="text" maxlength="160" autocapitalize="off" spellcheck="false"
-        autocomplete="off" placeholder="e.g. com.example.youtubeclone">
-      <label class="check" for="install-enable-jit">
-        <input id="install-enable-jit" type="checkbox">
-        <span data-i18n="Enable JIT after installation (requires a mounted Developer Disk Image)">Enable JIT after installation (requires a mounted Developer Disk Image)</span>
-      </label>
-      <p class="muted" data-i18n="These settings are for new installations only. Existing apps and automatic renewal are never modified. A new Bundle ID allows a separate copy; the Apple team suffix is added automatically.">These settings are for new installations only. Existing apps and automatic renewal are never modified. A new Bundle ID allows a separate copy; the Apple team suffix is added automatically.</p>
-      <div class="row" style="margin-top:10px">
-        <button class="primary" id="btn-install" type="submit" data-i18n="Sign and install">Sign and install</button>
-        <span class="muted" id="install-hint"></span>
-      </div>
-    </form>
-    <div class="nested" id="extension-choice" hidden>
-      <h3 data-i18n="Confirm new installation">Confirm new installation</h3>
-      <p class="muted" id="install-original" aria-live="polite"></p>
-      <div id="extension-options">
-        <p class="muted" data-i18n="Unchecked extensions are removed before signing. Some apps require extensions to function. All are selected by default.">Unchecked extensions are removed before signing. Some apps require extensions to function. All are selected by default.</p>
-        <div id="extension-list"></div>
-        <p class="muted" id="extension-summary" aria-live="polite"></p>
-        <p class="muted" data-i18n="App ID count is an upper bound; already-registered IDs may be reused. Live Apple quota is not checked here.">App ID count is an upper bound; already-registered IDs may be reused. Live Apple quota is not checked here.</p>
-      </div>
-      <div class="row action-row" style="margin-top:12px">
-        <button type="button" id="ext-all" data-i18n="Select all">Select all</button>
-        <button type="button" id="ext-none" data-i18n="Select none">Select none</button>
-        <button type="button" class="primary" id="ext-confirm" data-i18n="Sign and install selected">Sign and install selected</button>
-      </div>
-    </div>
-    <div class="banner bad" id="install-error" hidden></div>
-    <div id="install-job-slot"></div>
-  </section>
-
-  <section class="card">
-    <h2>Apple ID</h2>
-    <div id="account-info" hidden>
-      <div class="row">
-        <span class="grow"><strong id="acc-id"></strong><br><span class="muted" id="acc-pw"></span></span>
-        <button id="btn-change" type="button" data-i18n="Change account">Change account</button>
-      </div>
-    </div>
-    <form id="login-form" autocomplete="off" hidden>
-      <label for="apple-id" data-i18n="Apple ID (email)">Apple ID (email)</label>
-      <input id="apple-id" type="email" autocomplete="username" inputmode="email" autocapitalize="off" spellcheck="false">
-      <label for="apple-pw" data-i18n="Password">Password</label>
-      <input id="apple-pw" type="password" autocomplete="current-password" autocapitalize="off" spellcheck="false">
-      <label class="check"><input type="checkbox" id="show-pw"> <span data-i18n="Show password">Show password</span></label>
-      <label class="check"><input type="checkbox" id="save-pw" checked>
-        <span><span data-i18n="Save the password on this server for automatic renewals">Save the password on this server for automatic renewals</span>
-        <span class="muted" data-i18n="It is stored as plain text in a private server file.">It is stored as plain text in a private server file.</span></span></label>
-      <button class="primary" id="btn-login" type="submit" data-i18n="Sign in">Sign in</button>
-      <p class="muted" data-i18n="Try only once at a time: repeated failures may cause Apple to block sign-ins temporarily.">Try only once at a time: repeated failures may cause Apple to block sign-ins temporarily.</p>
-    </form>
-    <form id="code-form" autocomplete="off" hidden>
-      <div class="banner good">Apple sent a 6-digit code to your devices.</div>
-      <div class="banner bad" id="code-error" hidden></div>
-      <label for="code" data-i18n="Code">Code</label>
-      <input id="code" class="code" type="text" inputmode="numeric" pattern="[0-9]*" maxlength="6" autocomplete="one-time-code">
-      <div class="row" style="margin-top:10px">
-        <button class="primary" id="btn-code" type="submit" data-i18n="Submit code">Submit code</button>
-        <button id="btn-resend" type="button" data-i18n="Resend code">Resend code</button>
-      </div>
-    </form>
-    <div class="banner" id="login-msg" hidden></div>
-  </section>
-
-  <section class="card hist">
-    <h2 data-i18n="Recent renewals">Recent renewals</h2>
-    <p class="muted" id="hist-empty" data-i18n="Nothing yet. Automatic renewal runs every evening when configured on the server.">Nothing yet. Automatic renewal runs every evening when configured on the server.</p>
-    <ul class="plain" id="hist"></ul>
-  </section>
-
-  <section class="card" id="logs">
-    <h2 data-i18n="Logs">Logs</h2>
-    <div class="row">
-      <span class="muted grow" data-i18n="Live server log, newest at the bottom.">Live server log, newest at the bottom.</span>
-      <button id="btn-logs-copy" type="button" data-i18n="Copy">Copy</button>
-      <button id="btn-logs-clear" type="button" data-i18n="Clear view">Clear view</button>
-    </div>
-    <pre class="log logs" id="logs-view"></pre>
-    <div class="banner good" id="logs-message" role="status" aria-live="polite" hidden></div>
-  </section>
-
-  <footer data-i18n="For use on your home network only.">For use on your home network only.</footer>
+<footer data-i18n="For use on your home network only.">For use on your home network only.</footer>
 </main>
 
 <script>
 "use strict";
+var qrcode=function(){var t=function(t,r){var e=t,n=g[r],o=null,i=0,a=null,u=[],f={},c=function(t,r){o=function(t){for(var r=new Array(t),e=0;e<t;e+=1){r[e]=new Array(t);for(var n=0;n<t;n+=1)r[e][n]=null}return r}(i=4*e+17),l(0,0),l(i-7,0),l(0,i-7),s(),h(),d(t,r),e>=7&&v(t),null==a&&(a=p(e,n,u)),w(a,r)},l=function(t,r){for(var e=-1;e<=7;e+=1)if(!(t+e<=-1||i<=t+e))for(var n=-1;n<=7;n+=1)r+n<=-1||i<=r+n||(o[t+e][r+n]=0<=e&&e<=6&&(0==n||6==n)||0<=n&&n<=6&&(0==e||6==e)||2<=e&&e<=4&&2<=n&&n<=4)},h=function(){for(var t=8;t<i-8;t+=1)null==o[t][6]&&(o[t][6]=t%2==0);for(var r=8;r<i-8;r+=1)null==o[6][r]&&(o[6][r]=r%2==0)},s=function(){for(var t=B.getPatternPosition(e),r=0;r<t.length;r+=1)for(var n=0;n<t.length;n+=1){var i=t[r],a=t[n];if(null==o[i][a])for(var u=-2;u<=2;u+=1)for(var f=-2;f<=2;f+=1)o[i+u][a+f]=-2==u||2==u||-2==f||2==f||0==u&&0==f}},v=function(t){for(var r=B.getBCHTypeNumber(e),n=0;n<18;n+=1){var a=!t&&1==(r>>n&1);o[Math.floor(n/3)][n%3+i-8-3]=a}for(n=0;n<18;n+=1){a=!t&&1==(r>>n&1);o[n%3+i-8-3][Math.floor(n/3)]=a}},d=function(t,r){for(var e=n<<3|r,a=B.getBCHTypeInfo(e),u=0;u<15;u+=1){var f=!t&&1==(a>>u&1);u<6?o[u][8]=f:u<8?o[u+1][8]=f:o[i-15+u][8]=f}for(u=0;u<15;u+=1){f=!t&&1==(a>>u&1);u<8?o[8][i-u-1]=f:u<9?o[8][15-u-1+1]=f:o[8][15-u-1]=f}o[i-8][8]=!t},w=function(t,r){for(var e=-1,n=i-1,a=7,u=0,f=B.getMaskFunction(r),c=i-1;c>0;c-=2)for(6==c&&(c-=1);;){for(var g=0;g<2;g+=1)if(null==o[n][c-g]){var l=!1;u<t.length&&(l=1==(t[u]>>>a&1)),f(n,c-g)&&(l=!l),o[n][c-g]=l,-1==(a-=1)&&(u+=1,a=7)}if((n+=e)<0||i<=n){n-=e,e=-e;break}}},p=function(t,r,e){for(var n=A.getRSBlocks(t,r),o=b(),i=0;i<e.length;i+=1){var a=e[i];o.put(a.getMode(),4),o.put(a.getLength(),B.getLengthInBits(a.getMode(),t)),a.write(o)}var u=0;for(i=0;i<n.length;i+=1)u+=n[i].dataCount;if(o.getLengthInBits()>8*u)throw"code length overflow. ("+o.getLengthInBits()+">"+8*u+")";for(o.getLengthInBits()+4<=8*u&&o.put(0,4);o.getLengthInBits()%8!=0;)o.putBit(!1);for(;!(o.getLengthInBits()>=8*u||(o.put(236,8),o.getLengthInBits()>=8*u));)o.put(17,8);return function(t,r){for(var e=0,n=0,o=0,i=new Array(r.length),a=new Array(r.length),u=0;u<r.length;u+=1){var f=r[u].dataCount,c=r[u].totalCount-f;n=Math.max(n,f),o=Math.max(o,c),i[u]=new Array(f);for(var g=0;g<i[u].length;g+=1)i[u][g]=255&t.getBuffer()[g+e];e+=f;var l=B.getErrorCorrectPolynomial(c),h=k(i[u],l.getLength()-1).mod(l);for(a[u]=new Array(l.getLength()-1),g=0;g<a[u].length;g+=1){var s=g+h.getLength()-a[u].length;a[u][g]=s>=0?h.getAt(s):0}}var v=0;for(g=0;g<r.length;g+=1)v+=r[g].totalCount;var d=new Array(v),w=0;for(g=0;g<n;g+=1)for(u=0;u<r.length;u+=1)g<i[u].length&&(d[w]=i[u][g],w+=1);for(g=0;g<o;g+=1)for(u=0;u<r.length;u+=1)g<a[u].length&&(d[w]=a[u][g],w+=1);return d}(o,n)};f.addData=function(t,r){var e=null;switch(r=r||"Byte"){case"Numeric":e=M(t);break;case"Alphanumeric":e=x(t);break;case"Byte":e=m(t);break;case"Kanji":e=L(t);break;default:throw"mode:"+r}u.push(e),a=null},f.isDark=function(t,r){if(t<0||i<=t||r<0||i<=r)throw t+","+r;return o[t][r]},f.getModuleCount=function(){return i},f.make=function(){if(e<1){for(var t=1;t<40;t++){for(var r=A.getRSBlocks(t,n),o=b(),i=0;i<u.length;i++){var a=u[i];o.put(a.getMode(),4),o.put(a.getLength(),B.getLengthInBits(a.getMode(),t)),a.write(o)}var g=0;for(i=0;i<r.length;i++)g+=r[i].dataCount;if(o.getLengthInBits()<=8*g)break}e=t}c(!1,function(){for(var t=0,r=0,e=0;e<8;e+=1){c(!0,e);var n=B.getLostPoint(f);(0==e||t>n)&&(t=n,r=e)}return r}())},f.createTableTag=function(t,r){t=t||2;var e="";e+='<table style="',e+=" border-width: 0px; border-style: none;",e+=" border-collapse: collapse;",e+=" padding: 0px; margin: "+(r=void 0===r?4*t:r)+"px;",e+='">',e+="<tbody>";for(var n=0;n<f.getModuleCount();n+=1){e+="<tr>";for(var o=0;o<f.getModuleCount();o+=1)e+='<td style="',e+=" border-width: 0px; border-style: none;",e+=" border-collapse: collapse;",e+=" padding: 0px; margin: 0px;",e+=" width: "+t+"px;",e+=" height: "+t+"px;",e+=" background-color: ",e+=f.isDark(n,o)?"#000000":"#ffffff",e+=";",e+='"/>';e+="</tr>"}return e+="</tbody>",e+="</table>"},f.createSvgTag=function(t,r,e,n){var o={};"object"==typeof arguments[0]&&(t=(o=arguments[0]).cellSize,r=o.margin,e=o.alt,n=o.title),t=t||2,r=void 0===r?4*t:r,(e="string"==typeof e?{text:e}:e||{}).text=e.text||null,e.id=e.text?e.id||"qrcode-description":null,(n="string"==typeof n?{text:n}:n||{}).text=n.text||null,n.id=n.text?n.id||"qrcode-title":null;var i,a,u,c,g=f.getModuleCount()*t+2*r,l="";for(c="l"+t+",0 0,"+t+" -"+t+",0 0,-"+t+"z ",l+='<svg version="1.1" xmlns="http://www.w3.org/2000/svg"',l+=o.scalable?"":' width="'+g+'px" height="'+g+'px"',l+=' viewBox="0 0 '+g+" "+g+'" ',l+=' preserveAspectRatio="xMinYMin meet"',l+=n.text||e.text?' role="img" aria-labelledby="'+y([n.id,e.id].join(" ").trim())+'"':"",l+=">",l+=n.text?'<title id="'+y(n.id)+'">'+y(n.text)+"</title>":"",l+=e.text?'<description id="'+y(e.id)+'">'+y(e.text)+"</description>":"",l+='<rect width="100%" height="100%" fill="white" cx="0" cy="0"/>',l+='<path d="',a=0;a<f.getModuleCount();a+=1)for(u=a*t+r,i=0;i<f.getModuleCount();i+=1)f.isDark(a,i)&&(l+="M"+(i*t+r)+","+u+c);return l+='" stroke="transparent" fill="black"/>',l+="</svg>"},f.createDataURL=function(t,r){t=t||2,r=void 0===r?4*t:r;var e=f.getModuleCount()*t+2*r,n=r,o=e-r;return I(e,e,(function(r,e){if(n<=r&&r<o&&n<=e&&e<o){var i=Math.floor((r-n)/t),a=Math.floor((e-n)/t);return f.isDark(a,i)?0:1}return 1}))},f.createImgTag=function(t,r,e){t=t||2,r=void 0===r?4*t:r;var n=f.getModuleCount()*t+2*r,o="";return o+="<img",o+=' src="',o+=f.createDataURL(t,r),o+='"',o+=' width="',o+=n,o+='"',o+=' height="',o+=n,o+='"',e&&(o+=' alt="',o+=y(e),o+='"'),o+="/>"};var y=function(t){for(var r="",e=0;e<t.length;e+=1){var n=t.charAt(e);switch(n){case"<":r+="&lt;";break;case">":r+="&gt;";break;case"&":r+="&amp;";break;case'"':r+="&quot;";break;default:r+=n}}return r};return f.createASCII=function(t,r){if((t=t||1)<2)return function(t){t=void 0===t?2:t;var r,e,n,o,i,a=1*f.getModuleCount()+2*t,u=t,c=a-t,g={"██":"█","█ ":"▀"," █":"▄","  ":" "},l={"██":"▀","█ ":"▀"," █":" ","  ":" "},h="";for(r=0;r<a;r+=2){for(n=Math.floor((r-u)/1),o=Math.floor((r+1-u)/1),e=0;e<a;e+=1)i="█",u<=e&&e<c&&u<=r&&r<c&&f.isDark(n,Math.floor((e-u)/1))&&(i=" "),u<=e&&e<c&&u<=r+1&&r+1<c&&f.isDark(o,Math.floor((e-u)/1))?i+=" ":i+="█",h+=t<1&&r+1>=c?l[i]:g[i];h+="\n"}return a%2&&t>0?h.substring(0,h.length-a-1)+Array(a+1).join("▀"):h.substring(0,h.length-1)}(r);t-=1,r=void 0===r?2*t:r;var e,n,o,i,a=f.getModuleCount()*t+2*r,u=r,c=a-r,g=Array(t+1).join("██"),l=Array(t+1).join("  "),h="",s="";for(e=0;e<a;e+=1){for(o=Math.floor((e-u)/t),s="",n=0;n<a;n+=1)i=1,u<=n&&n<c&&u<=e&&e<c&&f.isDark(o,Math.floor((n-u)/t))&&(i=0),s+=i?g:l;for(o=0;o<t;o+=1)h+=s+"\n"}return h.substring(0,h.length-1)},f.renderTo2dContext=function(t,r){r=r||2;for(var e=f.getModuleCount(),n=0;n<e;n++)for(var o=0;o<e;o++)t.fillStyle=f.isDark(n,o)?"black":"white",t.fillRect(n*r,o*r,r,r)},f};t.stringToBytes=(t.stringToBytesFuncs={default:function(t){for(var r=[],e=0;e<t.length;e+=1){var n=t.charCodeAt(e);r.push(255&n)}return r}}).default,t.createStringToBytes=function(t,r){var e=function(){for(var e=S(t),n=function(){var t=e.read();if(-1==t)throw"eof";return t},o=0,i={};;){var a=e.read();if(-1==a)break;var u=n(),f=n()<<8|n();i[String.fromCharCode(a<<8|u)]=f,o+=1}if(o!=r)throw o+" != "+r;return i}(),n="?".charCodeAt(0);return function(t){for(var r=[],o=0;o<t.length;o+=1){var i=t.charCodeAt(o);if(i<128)r.push(i);else{var a=e[t.charAt(o)];"number"==typeof a?(255&a)==a?r.push(a):(r.push(a>>>8),r.push(255&a)):r.push(n)}}return r}};var r,e,n,o,i,a=1,u=2,f=4,c=8,g={L:1,M:0,Q:3,H:2},l=0,h=1,s=2,v=3,d=4,w=5,p=6,y=7,B=(r=[[],[6,18],[6,22],[6,26],[6,30],[6,34],[6,22,38],[6,24,42],[6,26,46],[6,28,50],[6,30,54],[6,32,58],[6,34,62],[6,26,46,66],[6,26,48,70],[6,26,50,74],[6,30,54,78],[6,30,56,82],[6,30,58,86],[6,34,62,90],[6,28,50,72,94],[6,26,50,74,98],[6,30,54,78,102],[6,28,54,80,106],[6,32,58,84,110],[6,30,58,86,114],[6,34,62,90,118],[6,26,50,74,98,122],[6,30,54,78,102,126],[6,26,52,78,104,130],[6,30,56,82,108,134],[6,34,60,86,112,138],[6,30,58,86,114,142],[6,34,62,90,118,146],[6,30,54,78,102,126,150],[6,24,50,76,102,128,154],[6,28,54,80,106,132,158],[6,32,58,84,110,136,162],[6,26,54,82,110,138,166],[6,30,58,86,114,142,170]],e=1335,n=7973,i=function(t){for(var r=0;0!=t;)r+=1,t>>>=1;return r},(o={}).getBCHTypeInfo=function(t){for(var r=t<<10;i(r)-i(e)>=0;)r^=e<<i(r)-i(e);return 21522^(t<<10|r)},o.getBCHTypeNumber=function(t){for(var r=t<<12;i(r)-i(n)>=0;)r^=n<<i(r)-i(n);return t<<12|r},o.getPatternPosition=function(t){return r[t-1]},o.getMaskFunction=function(t){switch(t){case l:return function(t,r){return(t+r)%2==0};case h:return function(t,r){return t%2==0};case s:return function(t,r){return r%3==0};case v:return function(t,r){return(t+r)%3==0};case d:return function(t,r){return(Math.floor(t/2)+Math.floor(r/3))%2==0};case w:return function(t,r){return t*r%2+t*r%3==0};case p:return function(t,r){return(t*r%2+t*r%3)%2==0};case y:return function(t,r){return(t*r%3+(t+r)%2)%2==0};default:throw"bad maskPattern:"+t}},o.getErrorCorrectPolynomial=function(t){for(var r=k([1],0),e=0;e<t;e+=1)r=r.multiply(k([1,C.gexp(e)],0));return r},o.getLengthInBits=function(t,r){if(1<=r&&r<10)switch(t){case a:return 10;case u:return 9;case f:case c:return 8;default:throw"mode:"+t}else if(r<27)switch(t){case a:return 12;case u:return 11;case f:return 16;case c:return 10;default:throw"mode:"+t}else{if(!(r<41))throw"type:"+r;switch(t){case a:return 14;case u:return 13;case f:return 16;case c:return 12;default:throw"mode:"+t}}},o.getLostPoint=function(t){for(var r=t.getModuleCount(),e=0,n=0;n<r;n+=1)for(var o=0;o<r;o+=1){for(var i=0,a=t.isDark(n,o),u=-1;u<=1;u+=1)if(!(n+u<0||r<=n+u))for(var f=-1;f<=1;f+=1)o+f<0||r<=o+f||0==u&&0==f||a==t.isDark(n+u,o+f)&&(i+=1);i>5&&(e+=3+i-5)}for(n=0;n<r-1;n+=1)for(o=0;o<r-1;o+=1){var c=0;t.isDark(n,o)&&(c+=1),t.isDark(n+1,o)&&(c+=1),t.isDark(n,o+1)&&(c+=1),t.isDark(n+1,o+1)&&(c+=1),0!=c&&4!=c||(e+=3)}for(n=0;n<r;n+=1)for(o=0;o<r-6;o+=1)t.isDark(n,o)&&!t.isDark(n,o+1)&&t.isDark(n,o+2)&&t.isDark(n,o+3)&&t.isDark(n,o+4)&&!t.isDark(n,o+5)&&t.isDark(n,o+6)&&(e+=40);for(o=0;o<r;o+=1)for(n=0;n<r-6;n+=1)t.isDark(n,o)&&!t.isDark(n+1,o)&&t.isDark(n+2,o)&&t.isDark(n+3,o)&&t.isDark(n+4,o)&&!t.isDark(n+5,o)&&t.isDark(n+6,o)&&(e+=40);var g=0;for(o=0;o<r;o+=1)for(n=0;n<r;n+=1)t.isDark(n,o)&&(g+=1);return e+=Math.abs(100*g/r/r-50)/5*10},o),C=function(){for(var t=new Array(256),r=new Array(256),e=0;e<8;e+=1)t[e]=1<<e;for(e=8;e<256;e+=1)t[e]=t[e-4]^t[e-5]^t[e-6]^t[e-8];for(e=0;e<255;e+=1)r[t[e]]=e;var n={glog:function(t){if(t<1)throw"glog("+t+")";return r[t]},gexp:function(r){for(;r<0;)r+=255;for(;r>=256;)r-=255;return t[r]}};return n}();function k(t,r){if(void 0===t.length)throw t.length+"/"+r;var e=function(){for(var e=0;e<t.length&&0==t[e];)e+=1;for(var n=new Array(t.length-e+r),o=0;o<t.length-e;o+=1)n[o]=t[o+e];return n}(),n={getAt:function(t){return e[t]},getLength:function(){return e.length},multiply:function(t){for(var r=new Array(n.getLength()+t.getLength()-1),e=0;e<n.getLength();e+=1)for(var o=0;o<t.getLength();o+=1)r[e+o]^=C.gexp(C.glog(n.getAt(e))+C.glog(t.getAt(o)));return k(r,0)},mod:function(t){if(n.getLength()-t.getLength()<0)return n;for(var r=C.glog(n.getAt(0))-C.glog(t.getAt(0)),e=new Array(n.getLength()),o=0;o<n.getLength();o+=1)e[o]=n.getAt(o);for(o=0;o<t.getLength();o+=1)e[o]^=C.gexp(C.glog(t.getAt(o))+r);return k(e,0).mod(t)}};return n}var A=function(){var t=[[1,26,19],[1,26,16],[1,26,13],[1,26,9],[1,44,34],[1,44,28],[1,44,22],[1,44,16],[1,70,55],[1,70,44],[2,35,17],[2,35,13],[1,100,80],[2,50,32],[2,50,24],[4,25,9],[1,134,108],[2,67,43],[2,33,15,2,34,16],[2,33,11,2,34,12],[2,86,68],[4,43,27],[4,43,19],[4,43,15],[2,98,78],[4,49,31],[2,32,14,4,33,15],[4,39,13,1,40,14],[2,121,97],[2,60,38,2,61,39],[4,40,18,2,41,19],[4,40,14,2,41,15],[2,146,116],[3,58,36,2,59,37],[4,36,16,4,37,17],[4,36,12,4,37,13],[2,86,68,2,87,69],[4,69,43,1,70,44],[6,43,19,2,44,20],[6,43,15,2,44,16],[4,101,81],[1,80,50,4,81,51],[4,50,22,4,51,23],[3,36,12,8,37,13],[2,116,92,2,117,93],[6,58,36,2,59,37],[4,46,20,6,47,21],[7,42,14,4,43,15],[4,133,107],[8,59,37,1,60,38],[8,44,20,4,45,21],[12,33,11,4,34,12],[3,145,115,1,146,116],[4,64,40,5,65,41],[11,36,16,5,37,17],[11,36,12,5,37,13],[5,109,87,1,110,88],[5,65,41,5,66,42],[5,54,24,7,55,25],[11,36,12,7,37,13],[5,122,98,1,123,99],[7,73,45,3,74,46],[15,43,19,2,44,20],[3,45,15,13,46,16],[1,135,107,5,136,108],[10,74,46,1,75,47],[1,50,22,15,51,23],[2,42,14,17,43,15],[5,150,120,1,151,121],[9,69,43,4,70,44],[17,50,22,1,51,23],[2,42,14,19,43,15],[3,141,113,4,142,114],[3,70,44,11,71,45],[17,47,21,4,48,22],[9,39,13,16,40,14],[3,135,107,5,136,108],[3,67,41,13,68,42],[15,54,24,5,55,25],[15,43,15,10,44,16],[4,144,116,4,145,117],[17,68,42],[17,50,22,6,51,23],[19,46,16,6,47,17],[2,139,111,7,140,112],[17,74,46],[7,54,24,16,55,25],[34,37,13],[4,151,121,5,152,122],[4,75,47,14,76,48],[11,54,24,14,55,25],[16,45,15,14,46,16],[6,147,117,4,148,118],[6,73,45,14,74,46],[11,54,24,16,55,25],[30,46,16,2,47,17],[8,132,106,4,133,107],[8,75,47,13,76,48],[7,54,24,22,55,25],[22,45,15,13,46,16],[10,142,114,2,143,115],[19,74,46,4,75,47],[28,50,22,6,51,23],[33,46,16,4,47,17],[8,152,122,4,153,123],[22,73,45,3,74,46],[8,53,23,26,54,24],[12,45,15,28,46,16],[3,147,117,10,148,118],[3,73,45,23,74,46],[4,54,24,31,55,25],[11,45,15,31,46,16],[7,146,116,7,147,117],[21,73,45,7,74,46],[1,53,23,37,54,24],[19,45,15,26,46,16],[5,145,115,10,146,116],[19,75,47,10,76,48],[15,54,24,25,55,25],[23,45,15,25,46,16],[13,145,115,3,146,116],[2,74,46,29,75,47],[42,54,24,1,55,25],[23,45,15,28,46,16],[17,145,115],[10,74,46,23,75,47],[10,54,24,35,55,25],[19,45,15,35,46,16],[17,145,115,1,146,116],[14,74,46,21,75,47],[29,54,24,19,55,25],[11,45,15,46,46,16],[13,145,115,6,146,116],[14,74,46,23,75,47],[44,54,24,7,55,25],[59,46,16,1,47,17],[12,151,121,7,152,122],[12,75,47,26,76,48],[39,54,24,14,55,25],[22,45,15,41,46,16],[6,151,121,14,152,122],[6,75,47,34,76,48],[46,54,24,10,55,25],[2,45,15,64,46,16],[17,152,122,4,153,123],[29,74,46,14,75,47],[49,54,24,10,55,25],[24,45,15,46,46,16],[4,152,122,18,153,123],[13,74,46,32,75,47],[48,54,24,14,55,25],[42,45,15,32,46,16],[20,147,117,4,148,118],[40,75,47,7,76,48],[43,54,24,22,55,25],[10,45,15,67,46,16],[19,148,118,6,149,119],[18,75,47,31,76,48],[34,54,24,34,55,25],[20,45,15,61,46,16]],r=function(t,r){var e={};return e.totalCount=t,e.dataCount=r,e},e={};return e.getRSBlocks=function(e,n){var o=function(r,e){switch(e){case g.L:return t[4*(r-1)+0];case g.M:return t[4*(r-1)+1];case g.Q:return t[4*(r-1)+2];case g.H:return t[4*(r-1)+3];default:return}}(e,n);if(void 0===o)throw"bad rs block @ typeNumber:"+e+"/errorCorrectionLevel:"+n;for(var i=o.length/3,a=[],u=0;u<i;u+=1)for(var f=o[3*u+0],c=o[3*u+1],l=o[3*u+2],h=0;h<f;h+=1)a.push(r(c,l));return a},e}(),b=function(){var t=[],r=0,e={getBuffer:function(){return t},getAt:function(r){var e=Math.floor(r/8);return 1==(t[e]>>>7-r%8&1)},put:function(t,r){for(var n=0;n<r;n+=1)e.putBit(1==(t>>>r-n-1&1))},getLengthInBits:function(){return r},putBit:function(e){var n=Math.floor(r/8);t.length<=n&&t.push(0),e&&(t[n]|=128>>>r%8),r+=1}};return e},M=function(t){var r=a,e=t,n={getMode:function(){return r},getLength:function(t){return e.length},write:function(t){for(var r=e,n=0;n+2<r.length;)t.put(o(r.substring(n,n+3)),10),n+=3;n<r.length&&(r.length-n==1?t.put(o(r.substring(n,n+1)),4):r.length-n==2&&t.put(o(r.substring(n,n+2)),7))}},o=function(t){for(var r=0,e=0;e<t.length;e+=1)r=10*r+i(t.charAt(e));return r},i=function(t){if("0"<=t&&t<="9")return t.charCodeAt(0)-"0".charCodeAt(0);throw"illegal char :"+t};return n},x=function(t){var r=u,e=t,n={getMode:function(){return r},getLength:function(t){return e.length},write:function(t){for(var r=e,n=0;n+1<r.length;)t.put(45*o(r.charAt(n))+o(r.charAt(n+1)),11),n+=2;n<r.length&&t.put(o(r.charAt(n)),6)}},o=function(t){if("0"<=t&&t<="9")return t.charCodeAt(0)-"0".charCodeAt(0);if("A"<=t&&t<="Z")return t.charCodeAt(0)-"A".charCodeAt(0)+10;switch(t){case" ":return 36;case"$":return 37;case"%":return 38;case"*":return 39;case"+":return 40;case"-":return 41;case".":return 42;case"/":return 43;case":":return 44;default:throw"illegal char :"+t}};return n},m=function(r){var e=f,n=t.stringToBytes(r),o={getMode:function(){return e},getLength:function(t){return n.length},write:function(t){for(var r=0;r<n.length;r+=1)t.put(n[r],8)}};return o},L=function(r){var e=c,n=t.stringToBytesFuncs.SJIS;if(!n)throw"sjis not supported.";!function(){var t=n("友");if(2!=t.length||38726!=(t[0]<<8|t[1]))throw"sjis not supported."}();var o=n(r),i={getMode:function(){return e},getLength:function(t){return~~(o.length/2)},write:function(t){for(var r=o,e=0;e+1<r.length;){var n=(255&r[e])<<8|255&r[e+1];if(33088<=n&&n<=40956)n-=33088;else{if(!(57408<=n&&n<=60351))throw"illegal char at "+(e+1)+"/"+n;n-=49472}n=192*(n>>>8&255)+(255&n),t.put(n,13),e+=2}if(e<r.length)throw"illegal char at "+(e+1)}};return i},D=function(){var t=[],r={writeByte:function(r){t.push(255&r)},writeShort:function(t){r.writeByte(t),r.writeByte(t>>>8)},writeBytes:function(t,e,n){e=e||0,n=n||t.length;for(var o=0;o<n;o+=1)r.writeByte(t[o+e])},writeString:function(t){for(var e=0;e<t.length;e+=1)r.writeByte(t.charCodeAt(e))},toByteArray:function(){return t},toString:function(){var r="";r+="[";for(var e=0;e<t.length;e+=1)e>0&&(r+=","),r+=t[e];return r+="]"}};return r},S=function(t){var r=t,e=0,n=0,o=0,i={read:function(){for(;o<8;){if(e>=r.length){if(0==o)return-1;throw"unexpected end of file./"+o}var t=r.charAt(e);if(e+=1,"="==t)return o=0,-1;t.match(/^\s$/)||(n=n<<6|a(t.charCodeAt(0)),o+=6)}var i=n>>>o-8&255;return o-=8,i}},a=function(t){if(65<=t&&t<=90)return t-65;if(97<=t&&t<=122)return t-97+26;if(48<=t&&t<=57)return t-48+52;if(43==t)return 62;if(47==t)return 63;throw"c:"+t};return i},I=function(t,r,e){for(var n=function(t,r){var e=t,n=r,o=new Array(t*r),i={setPixel:function(t,r,n){o[r*e+t]=n},write:function(t){t.writeString("GIF87a"),t.writeShort(e),t.writeShort(n),t.writeByte(128),t.writeByte(0),t.writeByte(0),t.writeByte(0),t.writeByte(0),t.writeByte(0),t.writeByte(255),t.writeByte(255),t.writeByte(255),t.writeString(","),t.writeShort(0),t.writeShort(0),t.writeShort(e),t.writeShort(n),t.writeByte(0);var r=a(2);t.writeByte(2);for(var o=0;r.length-o>255;)t.writeByte(255),t.writeBytes(r,o,255),o+=255;t.writeByte(r.length-o),t.writeBytes(r,o,r.length-o),t.writeByte(0),t.writeString(";")}},a=function(t){for(var r=1<<t,e=1+(1<<t),n=t+1,i=u(),a=0;a<r;a+=1)i.add(String.fromCharCode(a));i.add(String.fromCharCode(r)),i.add(String.fromCharCode(e));var f,c,g,l=D(),h=(f=l,c=0,g=0,{write:function(t,r){if(t>>>r!=0)throw"length over";for(;c+r>=8;)f.writeByte(255&(t<<c|g)),r-=8-c,t>>>=8-c,g=0,c=0;g|=t<<c,c+=r},flush:function(){c>0&&f.writeByte(g)}});h.write(r,n);var s=0,v=String.fromCharCode(o[s]);for(s+=1;s<o.length;){var d=String.fromCharCode(o[s]);s+=1,i.contains(v+d)?v+=d:(h.write(i.indexOf(v),n),i.size()<4095&&(i.size()==1<<n&&(n+=1),i.add(v+d)),v=d)}return h.write(i.indexOf(v),n),h.write(e,n),h.flush(),l.toByteArray()},u=function(){var t={},r=0,e={add:function(n){if(e.contains(n))throw"dup key:"+n;t[n]=r,r+=1},size:function(){return r},indexOf:function(r){return t[r]},contains:function(r){return void 0!==t[r]}};return e};return i}(t,r),o=0;o<r;o+=1)for(var i=0;i<t;i+=1)n.setPixel(i,o,e(i,o));var a=D();n.write(a);for(var u=function(){var t=0,r=0,e=0,n="",o={},i=function(t){n+=String.fromCharCode(a(63&t))},a=function(t){if(t<0);else{if(t<26)return 65+t;if(t<52)return t-26+97;if(t<62)return t-52+48;if(62==t)return 43;if(63==t)return 47}throw"n:"+t};return o.writeByte=function(n){for(t=t<<8|255&n,r+=8,e+=1;r>=6;)i(t>>>r-6),r-=6},o.flush=function(){if(r>0&&(i(t<<6-r),t=0,r=0),e%3!=0)for(var o=3-e%3,a=0;a<o;a+=1)n+="="},o.toString=function(){return n},o}(),f=a.toByteArray(),c=0;c<f.length;c+=1)u.writeByte(f[c]);return u.flush(),"data:image/gif;base64,"+u};return t}();qrcode.stringToBytesFuncs["UTF-8"]=function(t){return function(t){for(var r=[],e=0;e<t.length;e++){var n=t.charCodeAt(e);n<128?r.push(n):n<2048?r.push(192|n>>6,128|63&n):n<55296||n>=57344?r.push(224|n>>12,128|n>>6&63,128|63&n):(e++,n=65536+((1023&n)<<10|1023&t.charCodeAt(e)),r.push(240|n>>18,128|n>>12&63,128|n>>6&63,128|63&n))}return r}(t)},function(t){"function"==typeof define&&define.amd?define([],t):"object"==typeof exports&&(module.exports=t())}((function(){return qrcode}));
+//# sourceMappingURL=/sm/26b4b0d0b1e283d6b3ec9857ac597d7a60c76ac17be1ef4c965f03086de426bb.map
+
+
 const $ = (id) => document.getElementById(id);
 function t(en) { return en; }
+
+function copyText(text) {
+  if (navigator.clipboard && window.isSecureContext) {
+    return navigator.clipboard.writeText(text).catch(() => fallbackCopyText(text));
+  }
+  return Promise.resolve(fallbackCopyText(text));
+}
+function fallbackCopyText(text) {
+  const ta = document.createElement("textarea");
+  ta.value = text;
+  ta.style.position = "fixed";
+  ta.style.opacity = "0";
+  document.body.appendChild(ta);
+  ta.focus();
+  ta.select();
+  try { document.execCommand("copy"); } catch (_) {}
+  document.body.removeChild(ta);
+}
+
+let selectedProfileUuids = new Set();
+let appsViewMode = "list";
+try { appsViewMode = localStorage.getItem("altkeeper_apps_view") || "list"; } catch (_) {}
+
+function cleanBundleId(bundle) {
+  return String(bundle || "").replace(/\.[A-Z0-9]{10}$/, "");
+}
+
+function updateBulkDeleteUI() {
+  const allProfiles = state?.profiles || [];
+  const total = allProfiles.length;
+  const count = selectedProfileUuids.size;
+  const countEl = $("bulk-delete-count");
+  if (countEl) countEl.textContent = count;
+  const btn = $("btn-bulk-delete");
+  if (btn) btn.disabled = count === 0 || state?.busy || state?.phone?.reachable !== true;
+  const cbAll = $("cb-select-all-profiles");
+  if (cbAll) {
+    cbAll.disabled = total === 0 || state?.busy || state?.phone?.reachable !== true;
+    cbAll.checked = total > 0 && count === total;
+    cbAll.indeterminate = count > 0 && count < total;
+  }
+  const btnExp = $("btn-select-expired");
+  if (btnExp) {
+    const expiredCount = allProfiles.filter(p => p.days < 0).length;
+    btnExp.hidden = expiredCount === 0;
+    btnExp.disabled = state?.busy || state?.phone?.reachable !== true;
+    btnExp.textContent = t("Select expired") + " (" + expiredCount + ")";
+  }
+}
 
 let state = null, showForm = false, timer = null, sending = false, uploading = false;
 let pendingInstall = null;
@@ -569,7 +1660,7 @@ async function loadDevices() {
   select.replaceChildren(...deviceDrafts.map(device => {
     const option = document.createElement("option");
     option.value = device.id;
-    option.textContent = device.name;
+    option.textContent = (device.name === "Default iPhone" || device.id === "default") ? "My iPhone" : device.name;
     return option;
   }));
   select.value = selectedDeviceId;
@@ -685,7 +1776,6 @@ function render(s) {
   for (const id of ["anisette-server", "anisette-custom", "anisette-save", "anisette-clear"]) {
     $(id).disabled = !!s.busy || !!anisette.locked;
   }
-  // Testing is read-only, so it stays available while the server is locked by the environment.
   $("anisette-test").disabled = !!s.busy || anisetteTestRunning;
   $("anisette-custom").disabled = !!s.busy || !!anisette.locked || select.value !== "custom";
 
@@ -741,9 +1831,15 @@ function render(s) {
     qRow.hidden = true;
   }
 
+  // Sync view switcher buttons
+  document.querySelectorAll("#apps-view-switcher .view-btn").forEach(btn => {
+    btn.classList.toggle("active", btn.dataset.view === appsViewMode);
+  });
+
   // One app per host bundle. Members are separate signing profiles.
   const canRenew = s.account.present && s.account.password_saved && s.account.team && !s.busy;
   const ul = $("apps");
+  ul.className = "plain view-" + appsViewMode;
   ul.replaceChildren();
   s.apps.forEach((a) => {
     const members = a.members || [{bundle:a.bundle,label:a.label,days:a.days,expires:a.expires}];
@@ -752,13 +1848,14 @@ function render(s) {
     bar.firstChild.style.width = pct + "%";
     const details = div("item-info",
       div("app-name", document.createTextNode(a.label)),
+      div("app-bundle-sub", document.createTextNode(cleanBundleId(a.bundle))),
       div("muted", span(days(a.days), "when"),
         document.createTextNode(" · " + (a.expires || "").slice(0, 10) +
         " · " + profilesText(members.length))));
     const last = (s.app_status || {})[a.bundle];
     if (last) {
       const date = new Date(last.at * 1000).toLocaleString("en-US", {timeZone:"UTC"});
-      details.append(div("muted", document.createTextNode(t("Last profile install: ") +
+      details.append(div("muted app-last-renew", document.createTextNode(t("Last profile install: ") +
         last.status + " · " + date + " UTC (" + last.renewed + "/" + last.total + ")")));
     }
     const renewBtn = document.createElement("button");
@@ -779,8 +1876,15 @@ function render(s) {
       else expandedApps.add(a.bundle);
       render(state);
     };
-    const item = li(a.level,
-      div("item-head", details, renewBtn, expandBtn), bar);
+    let headRow;
+    if (appsViewMode === "grid") {
+      headRow = div("item-head",
+        div("app-card-top", details),
+        div("app-card-actions", renewBtn, expandBtn));
+    } else {
+      headRow = div("item-head", details, renewBtn, expandBtn);
+    }
+    const item = li(a.level, headRow, bar);
     if (expandedApps.has(a.bundle)) {
       const nested = div("nested");
       members.forEach(m => nested.append(div("",
@@ -790,6 +1894,8 @@ function render(s) {
     }
     ul.append(item);
   });
+  const tabCountEl = $("tab-apps-count");
+  if (tabCountEl) tabCountEl.textContent = String((s.apps || []).length);
   const empty = $("apps-empty");
   if (!s.account.present) { empty.textContent = t("Sign in with your Apple ID to see your apps."); empty.hidden = false; }
   else if (p.reachable === false) { empty.textContent = t("Apps cannot be read while the iPhone is unreachable."); empty.hidden = false; }
@@ -834,6 +1940,21 @@ function render(s) {
   $("discord-pill").className = "pill" + (auto.discord_configured ? " ok" : "");
   $("discord-clear").disabled = !auto.discord_configured;
   $("discord-test").disabled = !auto.discord_configured;
+  if ($("telegram-pill")) {
+    $("telegram-pill").textContent = auto.telegram_configured ? t("Configured") : t("Not configured");
+    $("telegram-pill").className = "pill" + (auto.telegram_configured ? " ok" : "");
+    $("telegram-clear").disabled = !auto.telegram_configured;
+    $("telegram-test").disabled = !auto.telegram_configured;
+    if (auto.telegram_configured && auto.telegram_chat_id && !$("telegram-chat-id").value) {
+      $("telegram-chat-id").placeholder = "Chat ID: " + auto.telegram_chat_id;
+    }
+  }
+
+  // Prune any stale UUIDs that are no longer on the iPhone
+  const validProfileUuids = new Set((s.profiles || []).map(p => p.uuid));
+  for (const u of Array.from(selectedProfileUuids)) {
+    if (!validProfileUuids.has(u)) selectedProfileUuids.delete(u);
+  }
 
   // Show provisioning profiles only when expanded, without moving controls when labels wrap.
   const pu = $("profiles");
@@ -846,8 +1967,29 @@ function render(s) {
   });
   grouped.forEach((profiles, root) => {
     const label = (s.apps.find(a => a.bundle === root) || {}).label || root;
+    const selectedInGroup = profiles.filter(p => selectedProfileUuids.has(p.uuid)).length;
+    const expiredInGroup = profiles.filter(p => p.days < 0).length;
+    let subText = profiles.length + " saved-on-phone profiles";
+    if (expiredInGroup > 0) subText += " · " + expiredInGroup + " expired";
+    if (selectedInGroup > 0) subText += " · " + selectedInGroup + " selected";
+
+    const groupCb = document.createElement("input");
+    groupCb.type = "checkbox";
+    groupCb.className = "profile-check";
+    groupCb.disabled = s.busy || s.phone.reachable !== true;
+    groupCb.checked = profiles.length > 0 && selectedInGroup === profiles.length;
+    groupCb.indeterminate = selectedInGroup > 0 && selectedInGroup < profiles.length;
+    groupCb.title = t("Select all profiles for ") + label;
+    groupCb.onchange = () => {
+      profiles.forEach(p => {
+        if (groupCb.checked) selectedProfileUuids.add(p.uuid);
+        else selectedProfileUuids.delete(p.uuid);
+      });
+      render(state);
+    };
+
     const details = div("item-info", div("app-name", document.createTextNode(label)),
-      div("muted", document.createTextNode((profiles.length + " saved-on-phone profiles"))));
+      div("muted", document.createTextNode(subText)));
     const toggle = document.createElement("button");
     toggle.type = "button"; toggle.className = "mini";
     toggle.textContent = expandedProfiles.has(root) ? t("Hide ▲") : t("Show ▼");
@@ -856,7 +1998,7 @@ function render(s) {
       else expandedProfiles.add(root);
       render(state);
     };
-    const item = li("", div("item-head", details, toggle));
+    const item = li("", div("item-head", groupCb, details, toggle));
     if (expandedProfiles.has(root)) {
       const nested = div("nested");
       profiles.forEach(prof => {
@@ -870,10 +2012,20 @@ function render(s) {
         remove.disabled = s.busy || s.phone.reachable !== true;
         remove.onclick = () => {
           if (confirm("Delete profile " + prof.uuid + "? An original verified backup will be saved first. " + "Removing an active profile may prevent the app from opening.")) {
+            selectedProfileUuids.delete(prof.uuid);
             act(() => api("/api/profile/remove", {uuid:prof.uuid}));
           }
         };
-        nested.append(div("item-head", info, remove));
+        const cb = document.createElement("input");
+        cb.type = "checkbox"; cb.className = "profile-check";
+        cb.checked = selectedProfileUuids.has(prof.uuid);
+        cb.disabled = s.busy || s.phone.reachable !== true;
+        cb.onchange = () => {
+          if (cb.checked) selectedProfileUuids.add(prof.uuid);
+          else selectedProfileUuids.delete(prof.uuid);
+          render(state);
+        };
+        nested.append(div("item-head", cb, info, remove));
       });
       item.append(nested);
     }
@@ -882,26 +2034,48 @@ function render(s) {
   const pempty = $("profiles-empty");
   pempty.textContent = t("No provisioning profiles found for this Apple team.");
   pempty.hidden = grouped.size > 0 || s.phone.reachable !== true;
+  const bulkBar = $("bulk-select-bar");
+  if (bulkBar) bulkBar.hidden = grouped.size === 0 || s.phone.reachable !== true;
+  updateBulkDeleteUI();
 
   const backups = $("backups");
   backups.replaceChildren();
-  (s.backups || []).forEach(b => {
+  const backupList = s.backups || [];
+  const clearBackupsBtn = $("btn-clear-backups");
+  if (clearBackupsBtn) {
+    clearBackupsBtn.hidden = backupList.length === 0;
+    clearBackupsBtn.disabled = s.busy;
+  }
+  backupList.forEach(b => {
+    const expInfo = typeof b.days === "number"
+      ? days(b.days) + " · " + t("Expires ") + (b.expires || "").slice(0,10)
+      : t("Expires ") + (b.expires || "").slice(0,10);
     const info = div("item-info",
       div("app-name", document.createTextNode(b.bundle || t("Unknown bundle"))),
-      div("muted", document.createTextNode(t("Profile ") + b.uuid)),
-      div("muted", document.createTextNode(t("Expires ") + b.expires.slice(0,10))));
+      div("muted", document.createTextNode(expInfo)),
+      div("muted", document.createTextNode(t("Profile ") + b.uuid)));
     const restore = document.createElement("button");
     restore.type = "button"; restore.className = "mini";
     restore.textContent = t("Restore");
-    restore.disabled = s.busy;
+    restore.disabled = s.busy || s.phone.reachable !== true;
     restore.onclick = () => {
       if (confirm("Restore profile " + b.uuid + " to the iPhone? This does not renew the expiry.")) {
         act(() => api("/api/profile/restore", {uuid:b.uuid}));
       }
     };
-    backups.append(li("", div("item-head", info, restore)));
+    const delBackup = document.createElement("button");
+    delBackup.type = "button"; delBackup.className = "mini";
+    delBackup.style.color = "var(--urgent)";
+    delBackup.textContent = t("Delete");
+    delBackup.disabled = s.busy;
+    delBackup.onclick = () => {
+      if (confirm("Delete saved backup " + b.uuid + " permanently from the server?")) {
+        act(() => api("/api/profile/backup/remove", {uuid:b.uuid}));
+      }
+    };
+    backups.append(li("", div("item-head", info, restore, delBackup)));
   });
-  $("backups-empty").hidden = (s.backups || []).length > 0;
+  $("backups-empty").hidden = backupList.length > 0;
   $("backups-empty").textContent = t("No saved profile backups for this Apple team.");
 
   const canInstall = s.account.present && s.account.password_saved && s.account.team &&
@@ -954,6 +2128,32 @@ function render(s) {
   $("btn-login").textContent = working ? t("Signing in…") : t("Sign in");
   show("code-form", needs);
   banner("code-error", needs ? s.login.code_error : "", "bad");
+
+  const tfaModal = $("tfa-modal");
+  if (tfaModal) {
+    if (needs) {
+      if (tfaModal.hidden) {
+        tfaModal.hidden = false;
+        setTimeout(() => {
+          const input = $("tfa-modal-code");
+          if (input) { input.focus(); input.select(); }
+        }, 120);
+      }
+      banner("tfa-modal-error", s.login.code_error || "", "bad");
+    } else {
+      tfaModal.hidden = true;
+      const input = $("tfa-modal-code");
+      if (input && input.value) input.value = "";
+    }
+  }
+    if (s.autostart) {
+    const cardAuto = $("card-autostart");
+    if (cardAuto) cardAuto.hidden = !s.autostart.supported;
+    const toggle = $("autostart-toggle");
+    if (toggle && !toggle.matches(":focus")) {
+      toggle.checked = !!s.autostart.enabled;
+    }
+  }
   banner("login-msg", phase === "done" || phase === "failed" ? s.login.message : "",
          phase === "done" ? "good" : "bad");
   if (phase === "done" && showForm) showForm = false;
@@ -1120,7 +2320,9 @@ $("anisette-test").onclick = async () => {
   anisetteTestRunning = true;
   $("anisette-test").disabled = true;
   try {
-    await api("/api/anisette/test", {});
+    const selected = $("anisette-server").value;
+    const url = selected === "custom" ? $("anisette-custom").value.trim() : selected;
+    await api("/api/anisette/test", url ? {url} : {});
     banner("anisette-test-result", t("Anisette server test succeeded."), "good");
   } catch (error) {
     banner("anisette-test-result", error.message, "bad");
@@ -1330,6 +2532,148 @@ $("btn-logs-copy").onclick = async () => {
 };
 $("btn-logs-clear").onclick = () => { $("logs-view").textContent = ""; };
 
+document.querySelectorAll("#apps-view-switcher .view-btn").forEach(btn => {
+  btn.onclick = () => {
+    appsViewMode = btn.dataset.view || "list";
+    try { localStorage.setItem("altkeeper_apps_view", appsViewMode); } catch (_) {}
+    if (state) render(state);
+  };
+});
+
+$("btn-bulk-delete").onclick = () => {
+  const count = selectedProfileUuids.size;
+  if (!count) return;
+  if (confirm(t("Delete ") + count + t(" selected profiles? Verified backups will be saved first."))) {
+    const list = Array.from(selectedProfileUuids);
+    selectedProfileUuids.clear();
+    if (state) render(state);
+    act(() => api("/api/profile/remove", { uuids: list }));
+  }
+};
+
+const cbSelectAll = $("cb-select-all-profiles");
+if (cbSelectAll) {
+  cbSelectAll.onchange = (e) => {
+    const checked = e.target.checked;
+    (state?.profiles || []).forEach(p => {
+      if (checked) selectedProfileUuids.add(p.uuid);
+      else selectedProfileUuids.delete(p.uuid);
+    });
+    if (state) render(state);
+  };
+}
+
+const btnSelectExpired = $("btn-select-expired");
+if (btnSelectExpired) {
+  btnSelectExpired.onclick = () => {
+    selectedProfileUuids.clear();
+    (state?.profiles || []).forEach(p => {
+      if (p.days < 0) selectedProfileUuids.add(p.uuid);
+    });
+    if (state) render(state);
+  };
+}
+
+const btnClearBackups = $("btn-clear-backups");
+if (btnClearBackups) {
+  btnClearBackups.onclick = () => {
+    const uuids = (state?.backups || []).map(b => b.uuid);
+    if (!uuids.length) return;
+    if (confirm("Delete all " + uuids.length + " saved profile backups permanently from the server?")) {
+      act(() => api("/api/profile/backup/remove", { uuids }));
+    }
+  };
+}
+
+$("telegram-save").onclick = () => {
+  const token = $("telegram-token").value.trim();
+  const chatId = $("telegram-chat-id").value.trim();
+  banner("telegram-error", "");
+  if (!token || !chatId) {
+    return banner("telegram-error", t("Enter both the Telegram Bot Token and Chat ID (click 'How to connect?' for help)."), "bad");
+  }
+  act(async () => {
+    await api("/api/telegram", { bot_token: token, chat_id: chatId });
+    $("telegram-token").value = "";
+    banner("telegram-test-result", t("Telegram bot saved. Click 'Send test' to verify delivery."), "good");
+  }, "telegram-error");
+};
+$("telegram-clear").onclick = () => {
+  if (confirm(t("Remove the saved Telegram bot configuration?"))) {
+    act(async () => {
+      await api("/api/telegram", { clear: true });
+      $("telegram-chat-id").value = "";
+      $("telegram-chat-id").placeholder = "Chat ID (e.g. 987654321)";
+      banner("telegram-test-result", "");
+    }, "telegram-error");
+  }
+};
+$("telegram-test").onclick = async () => {
+  banner("telegram-test-result", "");
+  banner("telegram-error", "");
+  $("telegram-test").disabled = true;
+  try {
+    await api("/api/telegram/test", {});
+    banner("telegram-test-result", t("Test notification sent! Check your Telegram chat."), "good");
+  } catch (e) {
+    banner("telegram-test-result", e.message, "bad");
+  } finally {
+    refresh();
+  }
+};
+
+$("btn-discord-guide").onclick = () => { $("discord-guide-modal").hidden = false; };
+$("discord-guide-close").onclick = () => { $("discord-guide-modal").hidden = true; };
+$("discord-guide-modal").onclick = (e) => { if (e.target === $("discord-guide-modal")) $("discord-guide-modal").hidden = true; };
+
+$("btn-tg-guide").onclick = () => { $("tg-guide-modal").hidden = false; };
+$("tg-guide-close").onclick = () => { $("tg-guide-modal").hidden = true; };
+$("tg-guide-modal").onclick = (e) => { if (e.target === $("tg-guide-modal")) $("tg-guide-modal").hidden = true; };
+document.querySelectorAll(".guide-chip[data-copy]").forEach(chip => {
+  chip.onclick = () => {
+    const val = chip.dataset.copy;
+    copyText(val);
+    const orig = chip.textContent;
+    chip.textContent = "✓ Copied " + val;
+    setTimeout(() => { chip.textContent = orig; }, 1600);
+  };
+});
+
+$("btn-phone-connect").onclick = () => {
+  const lanIp = state?.lan_ip || window.location.hostname;
+  const port = window.location.port || "8787";
+  const url = "http://" + lanIp + ":" + port;
+  $("qr-url-input").value = url;
+  const badge = $("qr-net-badge");
+  if (badge) badge.textContent = lanIp + ":" + port;
+  try {
+    const qr = qrcode(0, "M");
+    qr.addData(url);
+    qr.make();
+    const svg = qr.createSvgTag({ cellSize: 6, margin: 4, scalable: true })
+      .replace('fill="black"', 'fill="#015864"');
+    $("qr-svg-container").innerHTML = svg;
+  } catch (err) {
+    $("qr-svg-container").textContent = url;
+  }
+  $("qr-modal").hidden = false;
+};
+
+$("qr-close").onclick = () => { $("qr-modal").hidden = true; };
+$("qr-modal").onclick = (e) => { if (e.target === $("qr-modal")) $("qr-modal").hidden = true; };
+window.addEventListener("keydown", (e) => {
+  if (e.key === "Escape") {
+    if (!$("qr-modal").hidden) $("qr-modal").hidden = true;
+    if (!$("tg-guide-modal").hidden) $("tg-guide-modal").hidden = true;
+    if (!$("discord-guide-modal").hidden) $("discord-guide-modal").hidden = true;
+  }
+});
+$("btn-copy-qr-url").onclick = () => {
+  copyText($("qr-url-input").value);
+  $("btn-copy-qr-url").textContent = t("Copied!");
+  setTimeout(() => { $("btn-copy-qr-url").textContent = t("Copy"); }, 2000);
+};
+
 $("device-add-toggle").onclick = () => {
   $("device-create").hidden = !$("device-create").hidden;
   if (!$("device-create").hidden) $("device-name").focus();
@@ -1419,6 +2763,133 @@ document.addEventListener("visibilitychange", () => {
 if (location.hash === "#logs") $("logs").scrollIntoView();
 if (location.hash === "#anisette") $("anisette").scrollIntoView();
 if (location.hash === "#pairing") $("pairing").scrollIntoView();
+
+// Concept Explainer System (!)
+const CONCEPTS = {
+  "local-server": {
+    tag: "BACKGROUND SERVICE",
+    title: "How Local Wi-Fi Auto-Renewal Works",
+    lead: "AltKeeper runs silently on this PC to renew your sideloaded apps over home Wi-Fi with zero cables required after initial setup.",
+    body: "<ul><li><strong>Local Discovery:</strong> Your iPhone broadcasts itself over Bonjour/mDNS on LAN port 49152.</li><li><strong>Silent Resigning:</strong> When apps near the 7-day cutoff (e.g. 3 days remaining), AltKeeper requests fresh certificates from Apple using your saved Apple ID.</li><li><strong>Wireless Push:</strong> The new provisioning profile is installed directly onto your iPhone over Wi-Fi without needing to replug a USB cable.</li></ul>",
+    takeaway: "As long as this PC is awake on the same home Wi-Fi as your iPhone, your apps will stay active indefinitely."
+  },
+  "quotas": {
+    tag: "APPLE DEVELOPER RULES",
+    title: "Apple ID Quotas & 7-Day Expirations",
+    lead: "Free Apple Developer accounts have hard limits enforced by Apple on non-paid individual IDs.",
+    body: "<ul><li><strong>3 Active Apps:</strong> iOS permits a maximum of 3 sideloaded apps active on your device simultaneously.</li><li><strong>10 App IDs per 7 Days:</strong> Every unique app bundle identifier (plus every app extension) consumes 1 of your 10 weekly App ID registrations.</li><li><strong>7-Day Expiry:</strong> Certificates expire after 7 days (168 hours). AltKeeper renews them automatically before they stop launching.</li></ul>",
+    takeaway: "AltKeeper tracks your used quotas and renews expiring apps before you hit Apple's deadlines."
+  },
+  "profiles": {
+    tag: "SECURITY CERTIFICATES",
+    title: "Provisioning Profiles vs Installed Apps",
+    lead: "A provisioning profile is an Apple cryptographic permit that authorizes your iPhone to run a sideloaded app.",
+    body: "<ul><li><strong>Profile Clutter:</strong> Every time an app is renewed or re-signed, iOS receives a new profile UUID. Old expired profiles remain stored on the phone.</li><li><strong>Safe Cleanup:</strong> Deleting expired profiles frees up internal storage. However, deleting an <em>active</em> profile will prevent that app from opening!</li><li><strong>Verified Backups:</strong> AltKeeper automatically saves a verified backup on this PC before deleting any profile from iOS, so you can restore it anytime with one click.</li></ul>",
+    takeaway: "Click 'Select expired' to safely select and remove leftover profiles without affecting active apps."
+  },
+  "jit": {
+    tag: "PERFORMANCE DEBUGGER",
+    title: "Just-In-Time (JIT) Compilation",
+    lead: "JIT allows apps to generate and execute machine code dynamically at native processor speeds.",
+    body: "<ul><li><strong>Why iOS Restricts It:</strong> Apple blocks arbitrary executable memory allocation on consumer iOS devices to prevent exploits.</li><li><strong>Emulators Need JIT:</strong> Emulators like Dolphin (GameCube/Wii), UTM (Virtual Machines), PojavLauncher (Minecraft Java), and Flycast run up to 10x faster with JIT enabled.</li><li><strong>How AltKeeper Enables It:</strong> By mounting a Developer Disk Image and attaching a debug session over Wi-Fi, AltKeeper grants JIT permissions to the running app.</li></ul>",
+    takeaway: "Launch your emulator on your iPhone first, click 'Load running apps', select it, and click 'Enable JIT'."
+  },
+  "anisette": {
+    tag: "AUTHENTICATION",
+    title: "Anisette Authentication Server",
+    lead: "Anisette provides the device-specific hardware headers Apple requires whenever signing into an Apple ID.",
+    body: "<ul><li><strong>What is Anisette?</strong> Apple's auth servers check for cryptographic tokens (<code>X-Apple-I-MD</code> and <code>X-Apple-I-MD-M</code>) normally generated by macOS or official iCloud DLLs.</li><li><strong>Why It Matters:</strong> Without valid Anisette headers, Apple's login API returns error <code>-20101</code> or blocks authentication.</li><li><strong>Default Server:</strong> AltKeeper connects to <code>ani3.stikstore.app</code> by default, maintained 24/7 for reliability and 2FA support.</li></ul>",
+    takeaway: "Keep the default server unless it experiences downtime or you run a private local server."
+  },
+  "pairing": {
+    tag: "DEVICE PAIRING",
+    title: "USB Pairing & Trust Record",
+    lead: "To protect your iPhone against unauthorized wireless access, iOS requires a one-time cryptographic handshake over USB.",
+    body: "<ul><li><strong>Pair Once:</strong> Plugging your iPhone into this PC once and clicking 'Pair iPhone over USB' saves a trusted pairing record (<code>rp-pairing.plist</code>).</li><li><strong>Untethered Freedom:</strong> Once paired, you can unplug the USB cable. All future renewals, installs, and status checks occur over your home Wi-Fi.</li><li><strong>Auto-Pair:</strong> Enable 'Pair automatically' to pair new devices automatically when plugged in via USB.</li></ul>",
+    takeaway: "USB is only required once for the initial trust handshake; everything else happens over Wi-Fi."
+  },
+  "extensions": {
+    tag: "IPA INSTALLATION",
+    title: "App Extensions & Bundle Identifiers",
+    lead: "Many iOS apps bundle auxiliary extensions that provide widgets, notification actions, or Apple Watch support.",
+    body: "<ul><li><strong>Quota Impact:</strong> Apple counts each app extension as an independent App ID against your 10-per-week free developer limit.</li><li><strong>Customization:</strong> AltKeeper lets you inspect extensions (e.g. <code>WidgetKitExtension</code>) and uncheck unnecessary ones before signing.</li><li><strong>Custom Bundle ID:</strong> Entering a custom Bundle ID lets you install multiple duplicate copies of the same app side-by-side.</li></ul>",
+    takeaway: "If you are running low on App ID quotas, uncheck non-essential extensions before installing."
+  },
+  "appleid": {
+    tag: "SECURITY & PRIVACY",
+    title: "Apple ID & Signing Security",
+    lead: "AltKeeper communicates directly with Apple Developer servers to generate your 7-day app certificates.",
+    body: "<ul><li><strong>Direct & Private:</strong> Credentials are sent strictly between this PC and official Apple authentication servers (<code>gsa.apple.com</code>), never to third-party cloud servers.</li><li><strong>Password Storage:</strong> If 'Save password' is checked, your credentials are saved locally in a private server file so scheduled renewals run silently in the background.</li><li><strong>Burner Accounts:</strong> You can use your main Apple ID or a dedicated secondary free Apple ID specifically for sideloading.</li></ul>",
+    takeaway: "Your Apple ID credentials stay private on your PC and are used only for generating signing certificates."
+  }
+};
+
+document.querySelectorAll(".concept-btn").forEach(btn => {
+  btn.onclick = (e) => {
+    e.preventDefault();
+    e.stopPropagation();
+    const concept = CONCEPTS[btn.dataset.concept];
+    if (!concept) return;
+    $("concept-tag").textContent = concept.tag;
+    $("concept-title").textContent = concept.title;
+    $("concept-lead").textContent = concept.lead;
+    $("concept-body").innerHTML = concept.body;
+    $("concept-takeaway").innerHTML = "<strong>Key takeaway:</strong> " + concept.takeaway;
+    $("concept-modal").hidden = false;
+  };
+});
+$("concept-close").onclick = () => { $("concept-modal").hidden = true; };
+$("concept-ok-btn").onclick = () => { $("concept-modal").hidden = true; };
+$("concept-modal").onclick = (e) => { if (e.target === $("concept-modal")) $("concept-modal").hidden = true; };
+window.addEventListener("keydown", (e) => {
+  if (e.key === "Escape" && !$("concept-modal").hidden) {
+    $("concept-modal").hidden = true;
+  }
+});
+
+// Category Filtering System
+function setCategory(cat) {
+  const valid = ["all", "apps", "tools", "settings", "logs"].includes(cat) ? cat : "all";
+  document.querySelectorAll(".category-tab").forEach(tab => {
+    const active = tab.dataset.tab === valid;
+    tab.classList.toggle("active", active);
+    tab.setAttribute("aria-selected", active ? "true" : "false");
+  });
+  const container = $("dashboard-categories");
+  if (container) container.dataset.filter = valid;
+}
+
+document.querySelectorAll(".category-tab").forEach(tab => {
+  tab.onclick = () => setCategory(tab.dataset.tab);
+});
+
+if (location.hash === "#logs") setCategory("logs");
+else if (location.hash === "#anisette") setCategory("settings");
+else setCategory("apps");
+
+
+
+const autoToggle = $("autostart-toggle");
+if (autoToggle) {
+  autoToggle.onchange = async () => {
+    const enabled = autoToggle.checked;
+    autoToggle.disabled = true;
+    $("autostart-error").hidden = true;
+    try {
+      const res = await api("/api/autostart", { enabled });
+      if (res && res.error) {
+        banner("autostart-error", res.error, "bad");
+        autoToggle.checked = !enabled;
+      }
+    } catch (err) {
+      banner("autostart-error", err.message || "Failed to toggle autostart", "bad");
+      autoToggle.checked = !enabled;
+    } finally {
+      autoToggle.disabled = false;
+    }
+  };
+}
+
 </script>
 </body>
 </html>

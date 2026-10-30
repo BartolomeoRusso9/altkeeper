@@ -136,6 +136,159 @@ impl Engine {
     }
 }
 
+fn host_arch_dir() -> Result<&'static str, String> {
+    match std::env::consts::ARCH {
+        "x86_64" => Ok("x86_64"),
+        "x86" => Ok("x86"),
+        "aarch64" => Ok("arm64-v8a"),
+        "arm" => Ok("armeabi-v7a"),
+        other => Err(format!("Unsupported host architecture: {other}")),
+    }
+}
+
+fn has_native_libs(libraries: &Path) -> bool {
+    let Ok(arch) = host_arch_dir() else {
+        return false;
+    };
+    let native_dir = libraries.join("lib").join(arch);
+    native_dir.join("libstoreservicescore.so").is_file()
+        && native_dir.join("libCoreADI.so").is_file()
+}
+
+#[cfg(any(windows, target_os = "macos"))]
+fn download_native_libs(libraries: &Path) -> Result<(), String> {
+    use std::io::Read as _;
+    let arch = host_arch_dir()?;
+    let url = "https://apps.mzstatic.com/content/android-apple-music-apk/applemusic.apk";
+    let client = reqwest::blocking::Client::builder()
+        .timeout(Duration::from_secs(60))
+        .build()
+        .map_err(|e| e.to_string())?;
+
+    let tail = client
+        .get(url)
+        .header("Range", "bytes=-65536")
+        .send()
+        .and_then(|r| r.error_for_status())
+        .and_then(|r| r.bytes())
+        .map_err(|e| format!("Failed to fetch APK tail: {e}"))?;
+
+    let eocd_pos = tail
+        .windows(4)
+        .rposition(|w| w == b"PK")
+        .ok_or("EOCD signature not found in APK")?;
+    if eocd_pos + 20 > tail.len() {
+        return Err("Truncated EOCD record".into());
+    }
+    let cd_size = u32::from_le_bytes(tail[eocd_pos + 12..eocd_pos + 16].try_into().unwrap()) as usize;
+    let cd_offset = u32::from_le_bytes(tail[eocd_pos + 16..eocd_pos + 20].try_into().unwrap()) as usize;
+
+    let cd = client
+        .get(url)
+        .header("Range", format!("bytes={}-{}", cd_offset, cd_offset + cd_size - 1))
+        .send()
+        .and_then(|r| r.error_for_status())
+        .and_then(|r| r.bytes())
+        .map_err(|e| format!("Failed to fetch APK central directory: {e}"))?;
+
+    let targets = [
+        format!("lib/{arch}/libstoreservicescore.so"),
+        format!("lib/{arch}/libCoreADI.so"),
+    ];
+    let native_dir = libraries.join("lib").join(arch);
+    std::fs::create_dir_all(&native_dir).map_err(|e| e.to_string())?;
+
+    let mut pos = 0usize;
+    let mut found = 0usize;
+    while pos + 46 <= cd.len() && &cd[pos..pos + 4] == b"PK" {
+        let comp_size = u32::from_le_bytes(cd[pos + 20..pos + 24].try_into().unwrap()) as usize;
+        let fname_len = u16::from_le_bytes(cd[pos + 28..pos + 30].try_into().unwrap()) as usize;
+        let extra_len = u16::from_le_bytes(cd[pos + 30..pos + 32].try_into().unwrap()) as usize;
+        let comment_len = u16::from_le_bytes(cd[pos + 32..pos + 34].try_into().unwrap()) as usize;
+        let local_offset = u32::from_le_bytes(cd[pos + 42..pos + 46].try_into().unwrap()) as usize;
+        let entry_len = 46 + fname_len + extra_len + comment_len;
+        if pos + entry_len > cd.len() {
+            break;
+        }
+        let fname = String::from_utf8_lossy(&cd[pos + 46..pos + 46 + fname_len]).to_string();
+        if targets.contains(&fname) {
+            let chunk = client
+                .get(url)
+                .header(
+                    "Range",
+                    format!("bytes={}-{}", local_offset, local_offset + 30 + 512 + comp_size),
+                )
+                .send()
+                .and_then(|r| r.error_for_status())
+                .and_then(|r| r.bytes())
+                .map_err(|e| format!("Failed to fetch {fname}: {e}"))?;
+            if chunk.len() < 30 {
+                return Err(format!("Truncated local header for {fname}"));
+            }
+            let lh_fname = u16::from_le_bytes(chunk[26..28].try_into().unwrap()) as usize;
+            let lh_extra = u16::from_le_bytes(chunk[28..30].try_into().unwrap()) as usize;
+            let local_record_len = 30 + lh_fname + lh_extra + comp_size;
+            if chunk.len() < local_record_len {
+                return Err(format!("Incomplete compressed data for {fname}"));
+            }
+            let mut mini_zip = Vec::with_capacity(local_record_len + entry_len + 22);
+            mini_zip.extend_from_slice(&chunk[..local_record_len]);
+            let mut cd_entry = cd[pos..pos + entry_len].to_vec();
+            cd_entry[42..46].copy_from_slice(&0u32.to_le_bytes());
+            mini_zip.extend_from_slice(&cd_entry);
+            mini_zip.extend_from_slice(b"PK      ");
+            mini_zip.extend_from_slice(&(entry_len as u32).to_le_bytes());
+            mini_zip.extend_from_slice(&(local_record_len as u32).to_le_bytes());
+            mini_zip.extend_from_slice(b"  ");
+
+            let mut archive = zip::ZipArchive::new(std::io::Cursor::new(mini_zip))
+                .map_err(|e| format!("ZIP parse error for {fname}: {e}"))?;
+            let mut zf = archive.by_index(0).map_err(|e| e.to_string())?;
+            let mut raw = Vec::new();
+            zf.read_to_end(&mut raw).map_err(|e| e.to_string())?;
+            let file_name = Path::new(&fname).file_name().ok_or("Invalid library filename")?;
+            std::fs::write(native_dir.join(file_name), &raw).map_err(|e| e.to_string())?;
+            found += 1;
+        }
+        pos += entry_len;
+    }
+    if found == 2 {
+        Ok(())
+    } else {
+        Err("Could not locate both native Anisette libraries in APK".into())
+    }
+}
+
+pub async fn serve_default(data_dir: PathBuf) {
+    let bind: std::net::SocketAddr = "127.0.0.1:8788".parse().unwrap();
+    let mut libraries = data_dir.join("anisette-libraries");
+    if !has_native_libs(&libraries) {
+        if let Ok(exe) = std::env::current_exe() {
+            for ancestor in exe.ancestors().skip(1).take(3) {
+                let candidate = ancestor.join("anisette-libraries");
+                if has_native_libs(&candidate) {
+                    libraries = candidate;
+                    break;
+                }
+            }
+        }
+    }
+    #[cfg(any(windows, target_os = "macos"))]
+    if !has_native_libs(&libraries) {
+        let libs_clone = libraries.clone();
+        crate::log::line("[anisette-local] Downloading native Anisette libraries (~2 MB)...");
+        if let Ok(Err(e)) = tokio::task::spawn_blocking(move || download_native_libs(&libs_clone)).await {
+            crate::log::line(&format!("[anisette-local] Auto-download skipped: {e}"));
+        }
+    }
+    if !has_native_libs(&libraries) {
+        return;
+    }
+    if let Err(error) = serve(bind, libraries, data_dir).await {
+        crate::log::line(&format!("[anisette-local] {error}"));
+    }
+}
+
 pub async fn serve(
     bind: std::net::SocketAddr,
     libraries: PathBuf,
