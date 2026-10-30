@@ -253,7 +253,7 @@ pub fn launch_agent(name: &str, exe: &Path, dir: &Path) -> String {
          <!DOCTYPE plist PUBLIC \"-//Apple//DTD PLIST 1.0//EN\" \"http://www.apple.com/DTDs/PropertyList-1.0.dtd\">\n\
          <plist version=\"1.0\">\n<dict>\n\
          \x20 <key>Label</key>\n  <string>{}</string>\n\
-         \x20 <key>ProgramArguments</key>\n  <array>\n{}{}{}{}  </array>\n\
+         \x20 <key>ProgramArguments</key>\n  <array>\n{}{}{}{}{}  </array>\n\
          \x20 <key>RunAtLoad</key>\n  <true/>\n\
          \x20 <key>ProcessType</key>\n  <string>Interactive</string>\n\
          </dict>\n</plist>\n",
@@ -1041,7 +1041,7 @@ mod tests {
                 .as_array()
                 .unwrap()
                 .len(),
-            4
+            5
         );
     }
 
