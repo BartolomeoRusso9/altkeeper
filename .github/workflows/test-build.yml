@@ -1,5 +1,8 @@
 name: test-build
-on: workflow_dispatch
+on:
+  workflow_dispatch:
+  push:
+    branches: ['0.5.6']
 jobs:
   windows:
     runs-on: windows-latest
@@ -11,5 +14,5 @@ jobs:
       - run: cargo build --release --locked
       - uses: actions/upload-artifact@v7
         with:
-          name: 0.5.6
+          name: altkeeper-test-windows
           path: target/release/altkeeper.exe
