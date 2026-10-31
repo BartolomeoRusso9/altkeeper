@@ -368,6 +368,15 @@
     box-shadow: 0 6px 16px var(--accent-glow);
   }
   button.primary:active:not(:disabled) { transform: translateY(0); }
+  button.danger {
+    border-color: rgba(220, 53, 69, 0.45);
+    color: #ff6b7a;
+    background: rgba(220, 53, 69, 0.08);
+  }
+  button.danger:hover:not(:disabled) {
+    background: rgba(220, 53, 69, 0.18);
+    border-color: #ff6b7a;
+  }
   button:disabled { opacity: .45; cursor: not-allowed; box-shadow: none; }
 
   label { display: block; font-weight: 600; margin: 10px 0 4px; font-size: .90rem; }
@@ -1357,9 +1366,10 @@
           <section class="card">
             <h2>Apple ID <button type="button" class="concept-btn" data-concept="appleid" title="Explain Apple ID signing and security">!</button></h2>
             <div id="account-info" hidden>
-              <div class="row">
+              <div class="row" style="gap: 8px;">
                 <span class="grow"><strong id="acc-id"></strong><br><span class="muted" id="acc-pw"></span></span>
                 <button id="btn-change" type="button" data-i18n="Change account">Change account</button>
+                <button id="btn-logout" type="button" class="danger" data-i18n="Sign out">Sign out</button>
               </div>
             </div>
             <form id="login-form" autocomplete="off" hidden>
@@ -2139,9 +2149,10 @@ function render(s) {
           if (input) { input.focus(); input.select(); }
         }, 120);
       }
-      banner("tfa-modal-error", s.login.code_error || "", "bad");
+      banner("tfa-modal-error", clientTfaError || s.login.code_error || "", "bad");
     } else {
       tfaModal.hidden = true;
+      clientTfaError = null;
       const input = $("tfa-modal-code");
       if (input && input.value) input.value = "";
     }
@@ -2154,8 +2165,9 @@ function render(s) {
       toggle.checked = !!s.autostart.enabled;
     }
   }
-  banner("login-msg", phase === "done" || phase === "failed" ? s.login.message : "",
-         phase === "done" ? "good" : "bad");
+  const lMsg = clientLoginMsg ? clientLoginMsg.text : (phase === "done" || phase === "failed" ? s.login.message : "");
+  const lKind = clientLoginMsg ? clientLoginMsg.kind : (phase === "done" ? "good" : "bad");
+  banner("login-msg", lMsg, lKind);
   if (phase === "done" && showForm) showForm = false;
 
   // Storico
@@ -2458,11 +2470,108 @@ $("install-form").onsubmit = async (ev) => {
     refresh();
   }
 };
-$("btn-change").onclick = () => { showForm = true; if (state) render(state); $("apple-id").focus(); };
+let clientLoginMsg = null;
+let clientTfaError = null;
+
+$("btn-change").onclick = () => {
+  clientLoginMsg = null;
+  showForm = true;
+  if (state) render(state);
+  $("apple-id").focus();
+};
+
+let logoutSending = false;
+$("btn-logout").onclick = async () => {
+  if (logoutSending) return;
+  if (!confirm(t("Are you sure you want to sign out?"))) return;
+  logoutSending = true;
+  $("btn-logout").disabled = true;
+  clientLoginMsg = null;
+  try {
+    await api("/api/logout", {});
+    showForm = false;
+  } catch (e) {
+    clientLoginMsg = { text: e.message, kind: "bad" };
+    banner("login-msg", e.message, "bad");
+  } finally {
+    logoutSending = false;
+    $("btn-logout").disabled = false;
+  }
+  refresh();
+};
+
+let tfaSending = false;
+const tfaModalForm = $("tfa-modal-form");
+if (tfaModalForm) {
+  tfaModalForm.onsubmit = async (ev) => {
+    ev.preventDefault();
+    if (tfaSending) return;
+    const input = $("tfa-modal-code");
+    const code = input ? input.value.trim() : "";
+    if (!code) return;
+    tfaSending = true;
+    clientTfaError = null;
+    const btnSubmit = $("btn-tfa-modal-submit");
+    const btnResend = $("btn-tfa-modal-resend");
+    if (btnSubmit) btnSubmit.disabled = true;
+    if (btnResend) btnResend.disabled = true;
+    try {
+      await api("/api/login/code", { code });
+      if (input && input.value.trim() === code) input.value = "";
+    } catch (e) {
+      clientTfaError = e.message;
+      banner("tfa-modal-error", e.message, "bad");
+    } finally {
+      tfaSending = false;
+      if (btnSubmit) btnSubmit.disabled = false;
+      if (btnResend) btnResend.disabled = false;
+    }
+    refresh();
+  };
+}
+
+const btnTfaModalResend = $("btn-tfa-modal-resend");
+if (btnTfaModalResend) {
+  btnTfaModalResend.onclick = async () => {
+    if (tfaSending) return;
+    tfaSending = true;
+    clientTfaError = null;
+    const btnSubmit = $("btn-tfa-modal-submit");
+    const btnResend = $("btn-tfa-modal-resend");
+    if (btnSubmit) btnSubmit.disabled = true;
+    if (btnResend) btnResend.disabled = true;
+    try {
+      await api("/api/login/resend", {});
+    } catch (e) {
+      clientTfaError = e.message;
+      banner("tfa-modal-error", e.message, "bad");
+    } finally {
+      tfaSending = false;
+      if (btnSubmit) btnSubmit.disabled = false;
+      if (btnResend) btnResend.disabled = false;
+    }
+    refresh();
+  };
+}
+
+const tfaInput = $("tfa-modal-code");
+if (tfaInput) {
+  tfaInput.oninput = () => {
+    if (clientTfaError) {
+      clientTfaError = null;
+      banner("tfa-modal-error", "");
+    }
+    const val = tfaInput.value.trim();
+    if (val.length === 6 && /^\d{6}$/.test(val) && tfaModalForm) {
+      tfaModalForm.requestSubmit();
+    }
+  };
+}
 $("show-pw").onchange = (e) => { $("apple-pw").type = e.target.checked ? "text" : "password"; };
 
 $("login-form").onsubmit = async (ev) => {
   ev.preventDefault();
+  clientLoginMsg = null;
   sending = true; $("btn-login").disabled = true;
   try {
     await api("/api/login", {
@@ -2470,7 +2579,10 @@ $("login-form").onsubmit = async (ev) => {
       save_password: $("save-pw").checked,
     });
     $("apple-pw").value = "";
-  } catch (e) { banner("login-msg", e.message, "bad"); }
+  } catch (e) {
+    clientLoginMsg = { text: e.message, kind: "bad" };
+    banner("login-msg", e.message, "bad");
+  }
   sending = false;
   refresh();
 };

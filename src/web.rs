@@ -747,6 +747,7 @@ fn profile_router(app: Arc<App>) -> Router {
         .route("/api/login", post(login))
         .route("/api/login/code", post(login_code))
         .route("/api/login/resend", post(login_resend))
+        .route("/api/logout", post(logout))
         .with_state(app.clone())
 }
 
@@ -2433,7 +2434,7 @@ async fn login(
     State(app): State<Arc<App>>,
     Json(req): Json<LoginReq>,
 ) -> (StatusCode, Json<Value>) {
-    let id = req.apple_id.trim().to_string();
+    let id = req.apple_id.trim().to_lowercase();
     if id.is_empty() || id.len() > 200 || req.password.is_empty() || req.password.len() > 200 {
         return json_err(StatusCode::BAD_REQUEST, "Enter your Apple ID and password.");
     }
@@ -2477,6 +2478,37 @@ async fn login_resend(State(app): State<Arc<App>>) -> (StatusCode, Json<Value>) 
     } else {
         json_err(StatusCode::CONFLICT, "Apple is not waiting for a code.")
     }
+}
+
+/// `POST /api/logout`: turns automatic renewal off and removes the saved Apple ID account.
+/// Runs under the busy guard, so it cannot overlap a login, install or renewal.
+async fn logout(State(app): State<Arc<App>>) -> (StatusCode, Json<Value>) {
+    let Some(_guard) = try_busy(&app) else {
+        return json_err(StatusCode::CONFLICT, BUSY_MSG);
+    };
+    // Disable and persist the schedule first: if saving fails the account stays signed in and
+    // the user sees the error, instead of the schedule coming back after a restart.
+    let mut current_cfg = load_auto_renew(&app.dir);
+    if current_cfg.enabled {
+        current_cfg.enabled = false;
+        if let Err(e) = save_auto_renew(&app.dir, &current_cfg) {
+            return json_err(StatusCode::INTERNAL_SERVER_ERROR, &e);
+        }
+        *app.auto_renew.lock().unwrap_or_else(|e| e.into_inner()) = current_cfg;
+    }
+    // account.json is about to disappear, so the next login can no longer migrate the signing
+    // key from the old spelling of the Apple ID: do it now.
+    if let Some(acc) = apple::read_account(&app.dir) {
+        apple::migrate_signing_key(&app.dir, &acc.apple_id, &acc.apple_id.trim().to_lowercase());
+    }
+    if let Err(e) = apple::remove_account(&app.dir) {
+        return json_err(StatusCode::INTERNAL_SERVER_ERROR, &e);
+    }
+    app.lock().login = LoginView {
+        phase: "done",
+        message: "Signed out successfully.".into(),
+    };
+    json_ok()
 }
 
 // ---------------------------------------------------------------------------------------------

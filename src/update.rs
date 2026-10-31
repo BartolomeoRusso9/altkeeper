@@ -9,8 +9,9 @@ use std::time::Duration;
 use serde_json::Value;
 
 const LATEST: &str = "https://api.github.com/repos/BartolomeoRusso9/altkeeper/releases/latest";
-pub const EXE_ASSET: &str = "altkeeper.exe";
-pub const SHA_ASSET: &str = "altkeeper.exe.sha256";
+/// Windows executable asset: `AltKeeper-v<version>-Windows-x64.exe`, with a matching `.sha256`.
+const EXE_PREFIX: &str = "AltKeeper-";
+const EXE_SUFFIX: &str = "-Windows-x64.exe";
 
 #[derive(Debug, Clone, PartialEq)]
 pub struct Release {
@@ -40,15 +41,21 @@ pub fn newer(current: &str, latest_tag: &str) -> bool {
 }
 
 pub fn parse_release(v: &Value) -> Option<Release> {
+    let assets = v["assets"].as_array()?;
     let asset = |name: &str| {
-        v["assets"].as_array()?.iter().find(|a| a["name"] == name)?["browser_download_url"]
+        assets.iter().find(|a| a["name"] == name)?["browser_download_url"]
             .as_str()
             .map(String::from)
     };
+    let exe_name = assets.iter().find_map(|a| {
+        a["name"]
+            .as_str()
+            .filter(|n| n.starts_with(EXE_PREFIX) && n.ends_with(EXE_SUFFIX))
+    })?;
     Some(Release {
         tag: v["tag_name"].as_str()?.to_string(),
-        exe_url: asset(EXE_ASSET)?,
-        sha_url: asset(SHA_ASSET)?,
+        exe_url: asset(exe_name)?,
+        sha_url: asset(&format!("{exe_name}.sha256"))?,
         page: v["html_url"].as_str()?.to_string(),
     })
 }
@@ -231,14 +238,16 @@ mod tests {
             "tag_name": "v0.2.0-plus.2",
             "html_url": "https://github.com/BartolomeoRusso9/altkeeper/releases/tag/v0.2.0-plus.2",
             "assets": [
-                { "name": "altkeeper.exe", "browser_download_url": "https://x/altkeeper.exe" },
-                { "name": "altkeeper.exe.sha256", "browser_download_url": "https://x/altkeeper.exe.sha256" },
+                { "name": "AltKeeper-v0.2.0-plus.2-Windows-x64.zip", "browser_download_url": "https://x/a.zip" },
+                { "name": "AltKeeper-v0.2.0-plus.2-Windows-x64.zip.sha256", "browser_download_url": "https://x/a.zip.sha256" },
+                { "name": "AltKeeper-v0.2.0-plus.2-Windows-x64.exe", "browser_download_url": "https://x/a.exe" },
+                { "name": "AltKeeper-v0.2.0-plus.2-Windows-x64.exe.sha256", "browser_download_url": "https://x/a.exe.sha256" },
             ],
         });
         let r = parse_release(&v).unwrap();
         assert_eq!(r.tag, "v0.2.0-plus.2");
-        assert_eq!(r.exe_url, "https://x/altkeeper.exe");
-        assert_eq!(r.sha_url, "https://x/altkeeper.exe.sha256");
+        assert_eq!(r.exe_url, "https://x/a.exe");
+        assert_eq!(r.sha_url, "https://x/a.exe.sha256");
 
         let mut missing = v.clone();
         missing["assets"].as_array_mut().unwrap().pop();

@@ -81,9 +81,55 @@ pub fn load_account(dir: &Path) -> Result<Account, String> {
 }
 
 pub fn save_account(dir: &Path, acc: &Account) -> Result<(), String> {
+    if let Some(existing) = read_account(dir) {
+        migrate_signing_key(dir, &existing.apple_id, &acc.apple_id);
+    }
     let path = dir.join(ACCOUNT_FILE);
     let data = serde_json::to_vec_pretty(acc).map_err(dbg)?;
     crate::fsperm::write_private(&path, &data).map_err(dbg)
+}
+
+/// Copies the stored signing key from the old Apple ID's folder to the new one's, so a changed
+/// spelling (for example the lowercase normalization) keeps using the same certificate instead of
+/// generating a new key. The old key is left in place; nothing happens if the new one exists.
+pub fn migrate_signing_key(dir: &Path, old_email: &str, new_email: &str) {
+    if old_email == new_email {
+        return;
+    }
+    use sha2::{Digest, Sha256};
+    let old_hash = hex::encode(Sha256::digest(old_email.as_bytes()));
+    let new_hash = hex::encode(Sha256::digest(new_email.as_bytes()));
+    if old_hash == new_hash {
+        return;
+    }
+    let sideload_dir = dir.join(STATE_DIR).join("sideload");
+    let old_key = sideload_dir.join(&old_hash).join("key");
+    let new_key_dir = sideload_dir.join(&new_hash);
+    let new_key = new_key_dir.join("key");
+    if old_key.exists() && !new_key.exists() {
+        let copied = std::fs::create_dir_all(&new_key_dir)
+            .and_then(|_| std::fs::copy(&old_key, &new_key).map(|_| ()));
+        if let Err(e) = copied {
+            crate::log::err(&format!(
+                "[signing-key] could not copy the key to the normalized Apple ID: {e}"
+            ));
+            return;
+        }
+        let _ = crate::fsperm::restrict_dir(&new_key_dir);
+        let _ = crate::fsperm::restrict_file(&new_key);
+    }
+}
+
+/// Deletes the saved `account.json`. A missing file counts as success. The signing key under
+/// `state/sideload` is kept on purpose: signing in again with the same Apple ID then reuses the
+/// existing certificate instead of creating a new one (free accounts have a certificate limit).
+pub fn remove_account(dir: &Path) -> Result<(), String> {
+    let path = dir.join(ACCOUNT_FILE);
+    match std::fs::remove_file(&path) {
+        Ok(()) => Ok(()),
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(()),
+        Err(e) => Err(format!("Cannot remove account: {e}")),
+    }
 }
 
 /// Legge l'account salvato senza pretendere la password (serve a mostrarne lo stato).
@@ -450,6 +496,27 @@ mod tests {
     }
 
     #[test]
+    fn migrates_signing_key_when_normalizing_account() {
+        let dir = tempfile::tempdir().unwrap();
+        use sha2::{Digest, Sha256};
+        let old_email = "User@Example.Com";
+        let new_email = "user@example.com";
+        let old_hash = hex::encode(Sha256::digest(old_email.as_bytes()));
+        let new_hash = hex::encode(Sha256::digest(new_email.as_bytes()));
+
+        let sideload_dir = dir.path().join(STATE_DIR).join("sideload");
+        let old_key_dir = sideload_dir.join(&old_hash);
+        std::fs::create_dir_all(&old_key_dir).unwrap();
+        std::fs::write(old_key_dir.join("key"), b"mock-rsa-private-key").unwrap();
+
+        super::migrate_signing_key(dir.path(), old_email, new_email);
+
+        let new_key = sideload_dir.join(&new_hash).join("key");
+        assert!(new_key.exists());
+        assert_eq!(std::fs::read(new_key).unwrap(), b"mock-rsa-private-key");
+    }
+
+    #[test]
     fn existing_app_id_is_present_even_without_quota() {
         let ids = vec![app_id("com.example.app")];
         assert_eq!(
@@ -654,7 +721,8 @@ pub async fn open_session_web(
         }
     };
 
-    let mut account = AppleAccount::builder(apple_id)
+    let clean_apple_id = apple_id.trim().to_lowercase();
+    let mut account = AppleAccount::builder(&clean_apple_id)
         .anisette_provider(provider)
         .login(password, get_2fa_code)
         .await
@@ -780,7 +848,8 @@ pub async fn open_session(
         }
     };
 
-    let mut account = AppleAccount::builder(apple_id)
+    let clean_apple_id = apple_id.trim().to_lowercase();
+    let mut account = AppleAccount::builder(&clean_apple_id)
         .anisette_provider(provider)
         .login(password, get_2fa_code)
         .await

@@ -35,9 +35,8 @@ Microsoft Visual C++ build tools if building from source; alternatively download
 executable from [Releases](https://github.com/BartolomeoRusso9/altkeeper/releases). The manually
 downloadable package is `AltKeeper-v<version>-Windows-x64.zip`; it contains `AltKeeper.exe`, the
 guides, and examples. A standalone binary is also available as
-`AltKeeper-v<version>-Windows-x64.exe`; both downloads have matching `.sha256` files. The release
-also includes `altkeeper.exe` and `altkeeper.exe.sha256` for the in-app updater; those legacy asset
-names are intentionally fixed.
+`AltKeeper-v<version>-Windows-x64.exe`; both downloads have matching `.sha256` files. The in-app
+updater downloads that standalone `.exe` and its `.sha256` file, so keep that naming.
 
 From PowerShell, pairing and starting the services look like this:
 

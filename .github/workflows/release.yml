@@ -2,7 +2,6 @@
 #
 # - Windows: `AltKeeper-<tag>-Windows-x64.zip` contiene `AltKeeper.exe`, guide ed esempi;
 #   è disponibile anche il binario singolo `AltKeeper-<tag>-Windows-x64.exe`.
-#   L'updater usa inoltre `altkeeper.exe` + `altkeeper.exe.sha256`: non rinominare questi asset.
 # - Linux e macOS CLI: archivi con nome prodotto, versione, sistema e architettura, per esempio
 #   `AltKeeper-vX.Y.Z-Linux-x64.tar.gz` o `AltKeeper-vX.Y.Z-macOS-Apple-Silicon-CLI.tar.gz`.
 # - macOS GUI: `AltKeeper-vX.Y.Z-macOS-Apple-Silicon-App.zip` (o `macOS-Intel-App`) contiene
@@ -84,7 +83,6 @@ jobs:
         if: matrix.name == 'windows'
         run: |
           mkdir dist
-          cp target/release/altkeeper.exe dist/altkeeper.exe
           cp target/release/altkeeper.exe "dist/AltKeeper-${TAG}-Windows-x64.exe"
           pkg="AltKeeper-${TAG}-Windows-x64"
           mkdir -p "dist/$pkg"
@@ -95,8 +93,7 @@ jobs:
           cp -r docs/en docs/it "dist/$pkg/docs/"
           powershell -NoProfile -Command "Compress-Archive -Path 'dist/$pkg/*' -DestinationPath 'dist/$pkg.zip' -Force"
           cd dist
-          hash=$(sha256sum altkeeper.exe | cut -d' ' -f1)
-          printf '%s  altkeeper.exe' "$hash" > altkeeper.exe.sha256
+          hash=$(sha256sum "AltKeeper-${TAG}-Windows-x64.exe" | cut -d' ' -f1)
           printf '%s  AltKeeper-%s-Windows-x64.exe' "$hash" "$TAG" \
             > "AltKeeper-${TAG}-Windows-x64.exe.sha256"
           sha256sum "$pkg.zip" > "$pkg.zip.sha256"
