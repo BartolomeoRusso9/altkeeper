@@ -843,6 +843,20 @@
     }
     .cat-grid.apps-layout {
       grid-template-columns: minmax(0, 1.12fr) minmax(0, 0.88fr);
+      align-items: stretch;
+    }
+    /* Apps tab: the job log grows down to the bottom of the right-hand column. */
+    .cat-grid.apps-layout > .cat-stack:first-child > .card {
+      flex: 1 1 auto; display: flex; flex-direction: column;
+    }
+    .cat-grid.apps-layout #app-job-slot,
+    .cat-grid.apps-layout #job {
+      flex: 1 1 auto; display: flex; flex-direction: column; min-height: 0;
+    }
+    .cat-grid.apps-layout #job > button { align-self: flex-start; }
+    .cat-grid.apps-layout #job-log {
+      flex: 1 1 0; min-height: 160px; max-height: none;
+      contain: size; /* its text must not make the row taller than the right column */
     }
   }
   .cat-stack {
