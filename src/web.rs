@@ -2481,10 +2481,22 @@ async fn login_resend(State(app): State<Arc<App>>) -> (StatusCode, Json<Value>) 
 }
 
 async fn logout(State(app): State<Arc<App>>) -> (StatusCode, Json<Value>) {
+    let Some(_guard) = try_busy(&app) else {
+        return json_err(StatusCode::CONFLICT, BUSY_MSG);
+    };
     if let Err(e) = apple::remove_account(&app.dir) {
         return json_err(StatusCode::INTERNAL_SERVER_ERROR, &e);
     }
-    app.lock().login = LoginView::default();
+    let mut current_cfg = load_auto_renew(&app.dir);
+    if current_cfg.enabled {
+        current_cfg.enabled = false;
+        let _ = save_auto_renew(&app.dir, &current_cfg);
+        *app.auto_renew.lock().unwrap() = current_cfg;
+    }
+    app.lock().login = LoginView {
+        phase: "done",
+        message: "Signed out successfully.".into(),
+    };
     json_ok()
 }
 

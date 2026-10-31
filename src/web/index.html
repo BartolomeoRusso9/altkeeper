@@ -2469,30 +2469,47 @@ $("install-form").onsubmit = async (ev) => {
   }
 };
 $("btn-change").onclick = () => { showForm = true; if (state) render(state); $("apple-id").focus(); };
+let logoutSending = false;
 $("btn-logout").onclick = async () => {
+  if (logoutSending) return;
   if (!confirm(t("Are you sure you want to sign out?"))) return;
+  logoutSending = true;
+  $("btn-logout").disabled = true;
   try {
     await api("/api/logout", {});
     showForm = false;
-    banner("login-msg", t("Signed out successfully."), "good");
   } catch (e) {
     banner("login-msg", e.message, "bad");
+  } finally {
+    logoutSending = false;
+    $("btn-logout").disabled = false;
   }
   refresh();
 };
 
+let tfaSending = false;
 const tfaModalForm = $("tfa-modal-form");
 if (tfaModalForm) {
   tfaModalForm.onsubmit = async (ev) => {
     ev.preventDefault();
+    if (tfaSending) return;
     const input = $("tfa-modal-code");
     const code = input ? input.value.trim() : "";
     if (!code) return;
+    tfaSending = true;
+    const btnSubmit = $("btn-tfa-modal-submit");
+    const btnResend = $("btn-tfa-modal-resend");
+    if (btnSubmit) btnSubmit.disabled = true;
+    if (btnResend) btnResend.disabled = true;
     try {
       await api("/api/login/code", { code });
-      if (input) input.value = "";
+      if (input && input.value.trim() === code) input.value = "";
     } catch (e) {
       banner("tfa-modal-error", e.message, "bad");
+    } finally {
+      tfaSending = false;
+      if (btnSubmit) btnSubmit.disabled = false;
+      if (btnResend) btnResend.disabled = false;
     }
     refresh();
   };
