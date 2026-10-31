@@ -2152,6 +2152,7 @@ function render(s) {
       banner("tfa-modal-error", clientTfaError || s.login.code_error || "", "bad");
     } else {
       tfaModal.hidden = true;
+      clientTfaError = null;
       const input = $("tfa-modal-code");
       if (input && input.value) input.value = "";
     }
@@ -2532,6 +2533,8 @@ if (tfaModalForm) {
 const btnTfaModalResend = $("btn-tfa-modal-resend");
 if (btnTfaModalResend) {
   btnTfaModalResend.onclick = async () => {
+    if (tfaSending) return;
+    tfaSending = true;
     clientTfaError = null;
     const btnSubmit = $("btn-tfa-modal-submit");
     const btnResend = $("btn-tfa-modal-resend");
@@ -2543,6 +2546,7 @@ if (btnTfaModalResend) {
       clientTfaError = e.message;
       banner("tfa-modal-error", e.message, "bad");
     } finally {
+      tfaSending = false;
       if (btnSubmit) btnSubmit.disabled = false;
       if (btnResend) btnResend.disabled = false;
     }
