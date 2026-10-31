@@ -23,7 +23,7 @@ for (const snippet of [
   'data-i18n="Send test notification"',
   'data-i18n="Sign and install"',
   'data-i18n="Discord failure notifications"',
-  'data-i18n="Pair iPhone over USB"',
+  'data-i18n="Pair device over USB"',
   'data-i18n="Connection addresses"',
   'data-i18n="Save addresses"',
   'data-i18n="Anisette server"',

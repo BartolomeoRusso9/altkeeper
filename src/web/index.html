@@ -1104,7 +1104,7 @@
   <div id="pairing">
     <div class="banner bad" id="no-pairing" hidden>
       <span data-i18n="iPhone pairing is missing">iPhone pairing is missing</span> (<code>rp-pairing.plist</code>). <span data-i18n="Pair it over USB.">Pair it over USB.</span>
-      <button id="btn-pair-usb-banner" type="button" data-i18n="Pair iPhone over USB">Pair iPhone over USB</button>
+      <button id="btn-pair-usb-banner" type="button" data-i18n="Pair device over USB">Pair device over USB</button>
     </div>
   </div>
 
@@ -1223,7 +1223,7 @@
             </div>
             <div class="banner bad" id="phone-error" hidden></div>
             <div class="row action-row" style="margin-top:10px">
-              <button id="btn-pair-usb" type="button" data-i18n="Pair iPhone over USB">Pair iPhone over USB</button>
+              <button id="btn-pair-usb" type="button" data-i18n="Pair device over USB">Pair device over USB</button>
             </div>
             <label class="check" for="auto-pair-enabled">
               <input id="auto-pair-enabled" type="checkbox">
@@ -2917,7 +2917,7 @@ const CONCEPTS = {
     tag: "DEVICE PAIRING",
     title: "USB Pairing & Trust Record",
     lead: "To protect your iPhone against unauthorized wireless access, iOS requires a one-time cryptographic handshake over USB.",
-    body: "<ul><li><strong>Pair Once:</strong> Plugging your iPhone into this PC once and clicking 'Pair iPhone over USB' saves a trusted pairing record (<code>rp-pairing.plist</code>).</li><li><strong>Untethered Freedom:</strong> Once paired, you can unplug the USB cable. All future renewals, installs, and status checks occur over your home Wi-Fi.</li><li><strong>Auto-Pair:</strong> Enable 'Pair automatically' to pair new devices automatically when plugged in via USB.</li></ul>",
+    body: "<ul><li><strong>Pair Once:</strong> Plugging your iPhone into this PC once and clicking 'Pair device over USB' saves a trusted pairing record (<code>rp-pairing.plist</code>).</li><li><strong>Untethered Freedom:</strong> Once paired, you can unplug the USB cable. All future renewals, installs, and status checks occur over your home Wi-Fi.</li><li><strong>Auto-Pair:</strong> Enable 'Pair automatically' to pair new devices automatically when plugged in via USB.</li></ul>",
     takeaway: "USB is only required once for the initial trust handshake; everything else happens over Wi-Fi."
   },
   "extensions": {

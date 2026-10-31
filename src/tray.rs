@@ -664,7 +664,7 @@ pub fn run(bind: SocketAddr, dir: &Path, minimized: bool, start: impl FnOnce(Eve
     let logs = MenuItem::new("Show logs", true, None);
     let autostart =
         CheckMenuItem::new(AUTOSTART_LABEL, true, autostart_enabled_as(RUN_VALUE), None);
-    let pair_usb = MenuItem::new("Pair iPhone over USB", true, None);
+    let pair_usb = MenuItem::new("Pair device over USB", true, None);
     let anisette_choice = crate::apple::anisette_choice(dir);
     let anisette_locked = crate::env::var("ANISETTE_URL").is_some()
         || anisette_choice.as_ref().is_ok_and(|choice| choice.locked);
