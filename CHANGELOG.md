@@ -2,6 +2,11 @@
 
 ## Unreleased
 
+### Changed
+- Releases no longer publish the legacy `altkeeper.exe` and `altkeeper.exe.sha256` assets. The
+  in-app updater now uses `AltKeeper-v<version>-Windows-x64.exe` and its `.sha256` file. Builds that
+  still look for the legacy names cannot self-update to this release and need a manual download.
+
 ### Added
 - Automatic renewal can optionally register missing App IDs before downloading their profiles.
   The setting is off by default and the dashboard warns that registrations use the free Apple ID's

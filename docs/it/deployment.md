@@ -29,8 +29,8 @@ di build Microsoft Visual C++; altrimenti scarica l'eseguibile Windows dalle
 [release](https://github.com/BartolomeoRusso9/altkeeper/releases). Il pacchetto Windows da scaricare
 è `AltKeeper-v<versione>-Windows-x64.zip`: contiene `AltKeeper.exe`, le guide e gli esempi. È
 disponibile anche il binario singolo `AltKeeper-v<versione>-Windows-x64.exe`; entrambi hanno il
-relativo file `.sha256`. La release contiene inoltre `altkeeper.exe` e `altkeeper.exe.sha256` per
-l'aggiornamento integrato: questi nomi legacy restano fissi.
+relativo file `.sha256`. L'aggiornamento integrato scarica quel binario singolo e il suo file
+`.sha256`, quindi questo schema di nomi va mantenuto.
 
 Da PowerShell, pairing e avvio dei servizi:
 
