@@ -240,6 +240,7 @@ async fn cmd_login(apple_id: Option<String>) -> Result<(), String> {
         "uso: altkeeper login <apple-id>",
         "usage: altkeeper login <apple-id>"
     ))?;
+    let apple_id = apple_id.trim().to_lowercase();
     let password = rpassword::prompt_password(crate::tr!(
         format!("Password di {apple_id}: "),
         format!("Password for {apple_id}: ")

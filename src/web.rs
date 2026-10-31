@@ -747,6 +747,7 @@ fn profile_router(app: Arc<App>) -> Router {
         .route("/api/login", post(login))
         .route("/api/login/code", post(login_code))
         .route("/api/login/resend", post(login_resend))
+        .route("/api/logout", post(logout))
         .with_state(app.clone())
 }
 
@@ -2433,7 +2434,7 @@ async fn login(
     State(app): State<Arc<App>>,
     Json(req): Json<LoginReq>,
 ) -> (StatusCode, Json<Value>) {
-    let id = req.apple_id.trim().to_string();
+    let id = req.apple_id.trim().to_lowercase();
     if id.is_empty() || id.len() > 200 || req.password.is_empty() || req.password.len() > 200 {
         return json_err(StatusCode::BAD_REQUEST, "Enter your Apple ID and password.");
     }
@@ -2477,6 +2478,14 @@ async fn login_resend(State(app): State<Arc<App>>) -> (StatusCode, Json<Value>) 
     } else {
         json_err(StatusCode::CONFLICT, "Apple is not waiting for a code.")
     }
+}
+
+async fn logout(State(app): State<Arc<App>>) -> (StatusCode, Json<Value>) {
+    if let Err(e) = apple::remove_account(&app.dir) {
+        return json_err(StatusCode::INTERNAL_SERVER_ERROR, &e);
+    }
+    app.lock().login = LoginView::default();
+    json_ok()
 }
 
 // ---------------------------------------------------------------------------------------------

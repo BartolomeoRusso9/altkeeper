@@ -86,6 +86,15 @@ pub fn save_account(dir: &Path, acc: &Account) -> Result<(), String> {
     crate::fsperm::write_private(&path, &data).map_err(dbg)
 }
 
+pub fn remove_account(dir: &Path) -> Result<(), String> {
+    let path = dir.join(ACCOUNT_FILE);
+    match std::fs::remove_file(&path) {
+        Ok(()) => Ok(()),
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(()),
+        Err(e) => Err(format!("Cannot remove account: {e}")),
+    }
+}
+
 /// Legge l'account salvato senza pretendere la password (serve a mostrarne lo stato).
 pub fn read_account(dir: &Path) -> Option<Account> {
     let raw = std::fs::read_to_string(dir.join(ACCOUNT_FILE)).ok()?;
@@ -654,7 +663,8 @@ pub async fn open_session_web(
         }
     };
 
-    let mut account = AppleAccount::builder(apple_id)
+    let clean_apple_id = apple_id.trim().to_lowercase();
+    let mut account = AppleAccount::builder(&clean_apple_id)
         .anisette_provider(provider)
         .login(password, get_2fa_code)
         .await
@@ -780,7 +790,8 @@ pub async fn open_session(
         }
     };
 
-    let mut account = AppleAccount::builder(apple_id)
+    let clean_apple_id = apple_id.trim().to_lowercase();
+    let mut account = AppleAccount::builder(&clean_apple_id)
         .anisette_provider(provider)
         .login(password, get_2fa_code)
         .await
