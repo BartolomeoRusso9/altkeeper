@@ -2149,7 +2149,7 @@ function render(s) {
           if (input) { input.focus(); input.select(); }
         }, 120);
       }
-      banner("tfa-modal-error", s.login.code_error || "", "bad");
+      banner("tfa-modal-error", clientTfaError || s.login.code_error || "", "bad");
     } else {
       tfaModal.hidden = true;
       const input = $("tfa-modal-code");
@@ -2164,8 +2164,9 @@ function render(s) {
       toggle.checked = !!s.autostart.enabled;
     }
   }
-  banner("login-msg", phase === "done" || phase === "failed" ? s.login.message : "",
-         phase === "done" ? "good" : "bad");
+  const lMsg = clientLoginMsg ? clientLoginMsg.text : (phase === "done" || phase === "failed" ? s.login.message : "");
+  const lKind = clientLoginMsg ? clientLoginMsg.kind : (phase === "done" ? "good" : "bad");
+  banner("login-msg", lMsg, lKind);
   if (phase === "done" && showForm) showForm = false;
 
   // Storico
@@ -2468,17 +2469,28 @@ $("install-form").onsubmit = async (ev) => {
     refresh();
   }
 };
-$("btn-change").onclick = () => { showForm = true; if (state) render(state); $("apple-id").focus(); };
+let clientLoginMsg = null;
+let clientTfaError = null;
+
+$("btn-change").onclick = () => {
+  clientLoginMsg = null;
+  showForm = true;
+  if (state) render(state);
+  $("apple-id").focus();
+};
+
 let logoutSending = false;
 $("btn-logout").onclick = async () => {
   if (logoutSending) return;
   if (!confirm(t("Are you sure you want to sign out?"))) return;
   logoutSending = true;
   $("btn-logout").disabled = true;
+  clientLoginMsg = null;
   try {
     await api("/api/logout", {});
     showForm = false;
   } catch (e) {
+    clientLoginMsg = { text: e.message, kind: "bad" };
     banner("login-msg", e.message, "bad");
   } finally {
     logoutSending = false;
@@ -2497,6 +2509,7 @@ if (tfaModalForm) {
     const code = input ? input.value.trim() : "";
     if (!code) return;
     tfaSending = true;
+    clientTfaError = null;
     const btnSubmit = $("btn-tfa-modal-submit");
     const btnResend = $("btn-tfa-modal-resend");
     if (btnSubmit) btnSubmit.disabled = true;
@@ -2505,6 +2518,7 @@ if (tfaModalForm) {
       await api("/api/login/code", { code });
       if (input && input.value.trim() === code) input.value = "";
     } catch (e) {
+      clientTfaError = e.message;
       banner("tfa-modal-error", e.message, "bad");
     } finally {
       tfaSending = false;
@@ -2517,12 +2531,32 @@ if (tfaModalForm) {
 
 const btnTfaModalResend = $("btn-tfa-modal-resend");
 if (btnTfaModalResend) {
-  btnTfaModalResend.onclick = () => act(() => api("/api/login/resend", {}), "tfa-modal-error");
+  btnTfaModalResend.onclick = async () => {
+    clientTfaError = null;
+    const btnSubmit = $("btn-tfa-modal-submit");
+    const btnResend = $("btn-tfa-modal-resend");
+    if (btnSubmit) btnSubmit.disabled = true;
+    if (btnResend) btnResend.disabled = true;
+    try {
+      await api("/api/login/resend", {});
+    } catch (e) {
+      clientTfaError = e.message;
+      banner("tfa-modal-error", e.message, "bad");
+    } finally {
+      if (btnSubmit) btnSubmit.disabled = false;
+      if (btnResend) btnResend.disabled = false;
+    }
+    refresh();
+  };
 }
 
 const tfaInput = $("tfa-modal-code");
 if (tfaInput) {
   tfaInput.oninput = () => {
+    if (clientTfaError) {
+      clientTfaError = null;
+      banner("tfa-modal-error", "");
+    }
     const val = tfaInput.value.trim();
     if (val.length === 6 && /^\d{6}$/.test(val) && tfaModalForm) {
       tfaModalForm.requestSubmit();
@@ -2533,6 +2567,7 @@ $("show-pw").onchange = (e) => { $("apple-pw").type = e.target.checked ? "text" 
 
 $("login-form").onsubmit = async (ev) => {
   ev.preventDefault();
+  clientLoginMsg = null;
   sending = true; $("btn-login").disabled = true;
   try {
     await api("/api/login", {
@@ -2540,7 +2575,10 @@ $("login-form").onsubmit = async (ev) => {
       save_password: $("save-pw").checked,
     });
     $("apple-pw").value = "";
-  } catch (e) { banner("login-msg", e.message, "bad"); }
+  } catch (e) {
+    clientLoginMsg = { text: e.message, kind: "bad" };
+    banner("login-msg", e.message, "bad");
+  }
   sending = false;
   refresh();
 };

@@ -81,9 +81,35 @@ pub fn load_account(dir: &Path) -> Result<Account, String> {
 }
 
 pub fn save_account(dir: &Path, acc: &Account) -> Result<(), String> {
+    if let Some(existing) = read_account(dir) {
+        migrate_signing_key(dir, &existing.apple_id, &acc.apple_id);
+    }
     let path = dir.join(ACCOUNT_FILE);
     let data = serde_json::to_vec_pretty(acc).map_err(dbg)?;
     crate::fsperm::write_private(&path, &data).map_err(dbg)
+}
+
+pub fn migrate_signing_key(dir: &Path, old_email: &str, new_email: &str) {
+    if old_email == new_email {
+        return;
+    }
+    use sha2::{Digest, Sha256};
+    let old_hash = hex::encode(Sha256::digest(old_email.as_bytes()));
+    let new_hash = hex::encode(Sha256::digest(new_email.as_bytes()));
+    if old_hash == new_hash {
+        return;
+    }
+    let sideload_dir = dir.join(STATE_DIR).join("sideload");
+    let old_key = sideload_dir.join(&old_hash).join("key");
+    let new_key_dir = sideload_dir.join(&new_hash);
+    let new_key = new_key_dir.join("key");
+    if old_key.exists() && !new_key.exists() {
+        if std::fs::create_dir_all(&new_key_dir).is_ok() {
+            let _ = std::fs::copy(&old_key, &new_key);
+            let _ = crate::fsperm::restrict_dir(&new_key_dir);
+            let _ = crate::fsperm::restrict_file(&new_key);
+        }
+    }
 }
 
 pub fn remove_account(dir: &Path) -> Result<(), String> {
@@ -456,6 +482,27 @@ mod tests {
             features: plist::Dictionary::new(),
             expiration_date: None,
         }
+    }
+
+    #[test]
+    fn migrates_signing_key_when_normalizing_account() {
+        let dir = tempfile::tempdir().unwrap();
+        use sha2::{Digest, Sha256};
+        let old_email = "User@Example.Com";
+        let new_email = "user@example.com";
+        let old_hash = hex::encode(Sha256::digest(old_email.as_bytes()));
+        let new_hash = hex::encode(Sha256::digest(new_email.as_bytes()));
+
+        let sideload_dir = dir.path().join(STATE_DIR).join("sideload");
+        let old_key_dir = sideload_dir.join(&old_hash);
+        std::fs::create_dir_all(&old_key_dir).unwrap();
+        std::fs::write(old_key_dir.join("key"), b"mock-rsa-private-key").unwrap();
+
+        super::migrate_signing_key(dir.path(), old_email, new_email);
+
+        let new_key = sideload_dir.join(&new_hash).join("key");
+        assert!(new_key.exists());
+        assert_eq!(std::fs::read(new_key).unwrap(), b"mock-rsa-private-key");
     }
 
     #[test]
