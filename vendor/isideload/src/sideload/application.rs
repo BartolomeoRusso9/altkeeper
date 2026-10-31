@@ -588,10 +588,14 @@ impl Application {
             }
 
             if let Some(device_udid) = device_udid {
-                self.bundle.app_info.insert(
-                    "ALTDeviceId".to_string(),
-                    plist::Value::String(device_udid.to_string()),
-                );
+                // AltStore looks the device ID up as `ALTDeviceID`; the lowercase-d
+                // spelling is kept for compatibility with what was written before.
+                for key in ["ALTDeviceID", "ALTDeviceId"] {
+                    self.bundle.app_info.insert(
+                        key.to_string(),
+                        plist::Value::String(device_udid.to_string()),
+                    );
+                }
             } else {
                 warn!(
                     "Device UDID is required for AltStore remote AltServer setup, but was not provided"

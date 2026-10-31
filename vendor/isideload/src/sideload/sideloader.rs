@@ -115,7 +115,17 @@ impl<C: MaxCertsCallback> Sideloader<C> {
 
         let main_bundle_id = app.main_bundle_id()?;
         let main_app_name = app.main_app_name()?;
-        let main_app_id_str = format!("{}.{}", main_bundle_id, team.team_id);
+        // AltStore resigns itself with the legacy `com.<team>.<id>` format for the app
+        // and always computes its extensions' IDs that way, but reuses the ID the app was
+        // installed with for the host. Installing AltStore with the `<id>.<team>` format
+        // made the host and the widget disagree on every refresh (iOS rejects the widget
+        // for not matching the parent prefix), so AltStore uses the legacy format here.
+        let is_altstore = matches!(special, Some(SpecialApp::AltStore));
+        let main_app_id_str = if is_altstore {
+            format!("com.{}.{}", team.team_id, main_bundle_id)
+        } else {
+            format!("{}.{}", main_bundle_id, team.team_id)
+        };
         // The official AltServer records the original bundle ID in Info.plist;
         // AltStore reads it back when it refreshes itself. Must be written
         // before update_bundle_id changes CFBundleIdentifier.
@@ -146,10 +156,15 @@ impl<C: MaxCertsCallback> Sideloader<C> {
         }
         .clone();
 
+        // The AltStore app group keeps the `<id>.<team>` form (the one AltStore derives
+        // by itself and that existing installations already use), independent of the
+        // bundle ID format above.
         let group_identifier = format!(
             "group.{}",
             if Some(SpecialApp::SideStoreLc) == special {
                 format!("com.SideStore.SideStore.{}", team.team_id)
+            } else if is_altstore {
+                format!("{}.{}", main_bundle_id, team.team_id)
             } else {
                 main_app_id_str.clone()
             }

@@ -1052,7 +1052,8 @@ pub async fn sign_ipa(
             false,
             None::<fn(f32) -> std::future::Ready<()>>,
             None,
-            None,
+            // AltStore reads its own device ID from Info.plist when it refreshes itself.
+            Some(udid),
             selected_extensions,
             display_name,
             custom_bundle_id,

@@ -25,6 +25,17 @@
 - Automatic renewal can ask for the Apple 2FA code through the web page.
 
 ### Fixed
+- AltStore is now installed with the legacy bundle ID format `com.<team>.<id>` (host and extensions),
+  the one AltStore itself uses when it refreshes itself. With the previous `<id>.<team>` format the
+  host kept its ID but AltStore recomputed the widget as `com.<team>.<id>.AltWidget`, so iOS rejected
+  the refresh ("does not match required prefix"). It also stops AltKeeper from creating a second
+  AltStore next to one installed by the official AltServer. **Existing AltStore installs made by
+  AltKeeper keep the old ID: delete AltStore and install it again to switch.** The new install
+  registers new App IDs (2 for AltStore + widget; free accounts allow 10 per 7 days) and the old
+  ones keep counting until they expire.
+- The AltStore install now writes the device ID (`ALTDeviceID`, plus the previous `ALTDeviceId`)
+  into Info.plist; AltStore needs it to refresh itself.
+- Renewal groups the widget of a legacy-format AltStore (`com.<team>.<id>.AltWidget`) under its host.
 - Sign-in no longer fails when Apple rejects the SMS 2FA request with HTTP 403 and an empty
   body: the vendored isideload now logs a warning (without the response payload) and falls
   back to trusted-device 2FA (push + 6-digit code). Other errors are still propagated.
