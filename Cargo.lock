@@ -75,7 +75,7 @@ dependencies = [
 
 [[package]]
 name = "altkeeper"
-version = "0.5.5"
+version = "0.5.6"
 dependencies = [
  "axum",
  "base64 0.21.7",
