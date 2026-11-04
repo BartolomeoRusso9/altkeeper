@@ -1168,6 +1168,7 @@ async fn state(State(app): State<Arc<App>>) -> Json<Value> {
                 "source": choice.source,
                 "locked": choice.locked,
                 "default": choice.url == apple::DEFAULT_ANISETTE_URL,
+                "local": local_anisette_view(),
             }),
             Err(error) => json!({ "error": error }),
         },
@@ -1511,10 +1512,35 @@ async fn test_anisette(
     };
     match apple::test_anisette_url(&app.dir, req.url.as_deref()).await {
         Ok(_) => json_ok(),
-        Err(error) => json_err(
-            StatusCode::BAD_GATEWAY,
-            &format!("Anisette server test failed: {error}"),
-        ),
+        Err(error) => {
+            // Se si prova il server locale e non è partito, il motivo vero è nel suo stato,
+            // non nell'errore di connessione.
+            let local_reason = (req.url.as_deref() == Some(apple::LOCAL_ANISETTE_URL))
+                .then(local_anisette_view)
+                .and_then(|v| v["detail"].as_str().map(String::from));
+            let msg = match local_reason {
+                Some(reason) => format!("The AltKeeper local Anisette server is not running: {reason}"),
+                None => format!("Anisette server test failed: {error}"),
+            };
+            json_err(StatusCode::BAD_GATEWAY, &msg)
+        }
+    }
+}
+
+/// Stato del server Anisette locale (127.0.0.1:8788) per la pagina.
+fn local_anisette_view() -> Value {
+    #[cfg(any(target_os = "linux", target_os = "macos", windows))]
+    {
+        use crate::anisette_server::{local_status, LocalStatus};
+        match local_status() {
+            LocalStatus::Starting => json!({ "state": "starting" }),
+            LocalStatus::Running => json!({ "state": "running" }),
+            LocalStatus::Unavailable(detail) => json!({ "state": "unavailable", "detail": detail }),
+        }
+    }
+    #[cfg(not(any(target_os = "linux", target_os = "macos", windows)))]
+    {
+        json!({ "state": "unavailable", "detail": "not available on this operating system" })
     }
 }
 

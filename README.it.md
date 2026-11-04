@@ -29,8 +29,8 @@ Preferisci l'inglese? Apri il [README in inglese](README.md) o le [guide in ingl
 - **Rinnovo indipendente:** rinnova i profili dalla CLI, dalla pagina web o con una pianificazione
   facoltativa.
 - **Profili dispositivo:** pairing, account, impostazioni e rinnovi restano separati per ogni iPhone.
-- **Anisette V3 locale:** server facoltativo per Linux, macOS e Windows; le librerie native vanno
-  fornite dall'operatore.
+- **Anisette V3 locale:** server su `127.0.0.1:8788` per Linux (anche Docker), macOS e Windows; le
+  librerie native si scaricano da sole se mancano.
 - **JIT:** disponibile tramite pagina web e API HTTP per client compatibili. Servono Modalità
   sviluppatore e un'immagine Developer Disk Image compatibile già montata.
 

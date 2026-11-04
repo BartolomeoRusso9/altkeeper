@@ -2,6 +2,14 @@
 
 ## Unreleased
 
+### Fixed
+- **Local Anisette server on Linux / Docker.** It never started there: the native libraries were
+  downloaded automatically only on Windows and macOS, and when they were missing the server gave up
+  without a word, so "AltKeeper local server" failed with "error sending request". The libraries
+  are now downloaded on Linux too, every reason the server does not start is logged
+  (`[anisette-local] Local server not started: ...`), and the dashboard marks the option as
+  *not running* / *starting* with the reason, also in the result of **Test server**.
+
 ### Changed
 - Releases no longer publish the legacy `altkeeper.exe` and `altkeeper.exe.sha256` assets. The
   in-app updater now uses `AltKeeper-v<version>-Windows-x64.exe` and its `.sha256` file. Builds that

@@ -1526,7 +1526,7 @@
                 <select id="anisette-server" aria-label="Anisette server">
                   <option value="https://ani3.stikstore.app">ani3.stikstore.app (default)</option>
                   <option value="https://ani.jkcoxson.com">isideload public server</option>
-                  <option value="http://127.0.0.1:8788">AltKeeper local server (127.0.0.1:8788)</option>
+                  <option value="http://127.0.0.1:8788" id="anisette-local-option">AltKeeper local server (127.0.0.1:8788)</option>
                   <option value="custom">Custom URL</option>
                 </select>
               </div>
@@ -1538,6 +1538,7 @@
                 <button id="anisette-test" type="button" data-i18n="Test server">Test server</button>
               </div>
               <div class="muted" id="anisette-source" style="margin-top:8px;"></div>
+              <div class="banner bad" id="anisette-local-note" role="note" hidden></div>
               <div class="banner bad" id="anisette-error" hidden></div>
               <div class="banner" id="anisette-test-result" role="status" aria-live="polite" hidden></div>
             </div>
@@ -1802,6 +1803,7 @@ function render(s) {
   }
   $("anisette-test").disabled = !!s.busy || anisetteTestRunning;
   $("anisette-custom").disabled = !!s.busy || !!anisette.locked || select.value !== "custom";
+  renderLocalAnisette();
 
   // iPhone
   const pill = $("phone-pill"), p = s.phone;
@@ -2304,11 +2306,24 @@ $("auto-pair-enabled").onchange = () => {
   act(() => api("/api/auto-pair", {enabled}));
 };
 
+// Il server locale (127.0.0.1:8788) può non essere partito, per esempio in Docker senza le
+// librerie Anisette: lo si dice accanto alla voce invece di lasciarlo scoprire dal test.
+function renderLocalAnisette() {
+  const local = state?.anisette?.local || {};
+  const suffix = local.state === "running" ? "" : local.state === "starting" ? " (starting...)" : " (not running)";
+  $("anisette-local-option").textContent = t("AltKeeper local server (127.0.0.1:8788)") + suffix;
+  const selected = $("anisette-server").value === "http://127.0.0.1:8788";
+  banner("anisette-local-note", selected && local.state === "unavailable"
+    ? t("The AltKeeper local Anisette server is not running: ") + (local.detail || "unknown reason")
+    : "", "bad");
+}
+
 $("anisette-server").onchange = () => {
   anisetteDraftDirty = true;
   anisetteSavePending = false;
   anisettePendingUrl = null;
   $("anisette-custom").disabled = $("anisette-server").value !== "custom" || !!state?.anisette?.locked;
+  renderLocalAnisette();
 };
 $("anisette-custom").oninput = () => {
   anisetteDraftDirty = true;

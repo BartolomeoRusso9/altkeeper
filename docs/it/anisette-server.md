@@ -1,11 +1,15 @@
 # Server Anisette V3 locale
 
-AltKeeper può ospitare facoltativamente un servizio Anisette V3. Non si avvia da solo ed è
+AltKeeper ospita un servizio Anisette V3 su `127.0.0.1:8788` ogni volta che gira la pagina web
+(`serve`, anche in Docker, e l'icona di Windows/macOS). Si usa solo se lo selezioni, ed è
 indipendente da AltServer e dalla pagina web.
 
 ## Fornisci le librerie native
 
-L'operatore deve fornire entrambe le librerie native: AltKeeper non le scarica e non le include.
+Il servizio richiede due librerie native. Se mancano, AltKeeper le scarica una volta (circa 4 MB,
+con richieste HTTP a intervalli) dal pacchetto Android di Apple Music su `apps.mzstatic.com`, su
+Linux (anche Docker), macOS e Windows. Le salva qui, dove puoi anche metterle tu (per esempio su un
+server senza accesso a Internet):
 
 ```text
 <cartella-dati>/anisette-libraries/lib/<architettura>/libstoreservicescore.so
@@ -39,8 +43,14 @@ Su Windows usa l'eseguibile nativo da PowerShell. `--anisette-libs` è facoltati
 percorso predefinito. In Docker su Linux, monta le librerie in sola lettura in
 `/data/anisette-libraries` e aggiungi `--anisette-bind 192.168.1.20:8788` al comando `serve`.
 
-Seleziona **AltKeeper local server** nelle impostazioni Anisette della pagina web quando vuoi che
-AltKeeper usi questo server. Un altro client sulla LAN può usare `http://192.168.1.20:8788`.
+Con `--anisette-bind` il servizio ascolta solo su quell'indirizzo. **AltKeeper local server**
+(`127.0.0.1:8788`) nella pagina funziona solo se ascolta sulla porta 8788 di `127.0.0.1` o
+`0.0.0.0`; altrimenti scegli **Custom URL** e inserisci `http://192.168.1.20:8788`. Un altro client
+sulla LAN può usare lo stesso URL.
+
+La pagina indica accanto ad **AltKeeper local server** se il server locale è attivo; se non lo è
+ne mostra il motivo (per esempio librerie non scaricabili), e lo stesso motivo finisce in
+`altkeeper.log` come `[anisette-local] Local server not started: ...`.
 
 ## Scegli quale server Anisette usa AltKeeper
 
