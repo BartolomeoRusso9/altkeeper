@@ -1,11 +1,15 @@
 # Local Anisette V3 server
 
-AltKeeper can optionally host an Anisette V3 service. It is not started by default. This is
+AltKeeper hosts an Anisette V3 service on `127.0.0.1:8788` whenever the web dashboard runs
+(`serve`, including Docker, and the Windows/macOS tray). It is only used if you select it, and it is
 separate from AltServer and the web dashboard.
 
 ## Provide the native libraries
 
-The operator must supply both native libraries; AltKeeper does not download or bundle them:
+The service needs two native libraries. When they are missing, AltKeeper downloads them once
+(about 4 MB, by HTTP range requests) from Apple's Android Apple Music package on
+`apps.mzstatic.com`, on Linux (Docker included), macOS and Windows. They are saved here, where you
+can also put them yourself (for example on a server without Internet access):
 
 ```text
 <data-directory>/anisette-libraries/lib/<architecture>/libstoreservicescore.so
@@ -39,8 +43,14 @@ On Windows, use the native executable and PowerShell syntax. `--anisette-libs` i
 using the default directory. For Docker on Linux, mount the libraries read-only at
 `/data/anisette-libraries` and add `--anisette-bind 192.168.1.20:8788` to the `serve` command.
 
-Select **AltKeeper local server** in the dashboard's Anisette settings when AltKeeper should use
-this server. Another client on the LAN can use `http://192.168.1.20:8788`.
+With `--anisette-bind` the service listens only on that address. **AltKeeper local server**
+(`127.0.0.1:8788`) in the dashboard works only when it listens on port 8788 of `127.0.0.1` or
+`0.0.0.0`; otherwise choose **Custom URL** and enter `http://192.168.1.20:8788`. Another client on
+the LAN can use the same URL.
+
+The dashboard shows whether the local server is running next to **AltKeeper local server**; when
+it is not, it shows why (for example, the libraries could not be downloaded), and the same reason
+is written to `altkeeper.log` as `[anisette-local] Local server not started: ...`.
 
 ## Choose which Anisette server AltKeeper uses
 

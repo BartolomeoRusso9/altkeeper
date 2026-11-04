@@ -843,6 +843,20 @@
     }
     .cat-grid.apps-layout {
       grid-template-columns: minmax(0, 1.12fr) minmax(0, 0.88fr);
+      align-items: stretch;
+    }
+    /* Apps tab: the job log grows down to the bottom of the right-hand column. */
+    .cat-grid.apps-layout > .cat-stack:first-child > .card {
+      flex: 1 1 auto; display: flex; flex-direction: column;
+    }
+    .cat-grid.apps-layout #app-job-slot,
+    .cat-grid.apps-layout #job {
+      flex: 1 1 auto; display: flex; flex-direction: column; min-height: 0;
+    }
+    .cat-grid.apps-layout #job > button { align-self: flex-start; }
+    .cat-grid.apps-layout #job-log {
+      flex: 1 1 0; min-height: 160px; max-height: none;
+      contain: size; /* its text must not make the row taller than the right column */
     }
   }
   .cat-stack {
@@ -1104,7 +1118,7 @@
   <div id="pairing">
     <div class="banner bad" id="no-pairing" hidden>
       <span data-i18n="iPhone pairing is missing">iPhone pairing is missing</span> (<code>rp-pairing.plist</code>). <span data-i18n="Pair it over USB.">Pair it over USB.</span>
-      <button id="btn-pair-usb-banner" type="button" data-i18n="Pair iPhone over USB">Pair iPhone over USB</button>
+      <button id="btn-pair-usb-banner" type="button" data-i18n="Pair device over USB">Pair device over USB</button>
     </div>
   </div>
 
@@ -1223,7 +1237,7 @@
             </div>
             <div class="banner bad" id="phone-error" hidden></div>
             <div class="row action-row" style="margin-top:10px">
-              <button id="btn-pair-usb" type="button" data-i18n="Pair iPhone over USB">Pair iPhone over USB</button>
+              <button id="btn-pair-usb" type="button" data-i18n="Pair device over USB">Pair device over USB</button>
             </div>
             <label class="check" for="auto-pair-enabled">
               <input id="auto-pair-enabled" type="checkbox">
@@ -1512,7 +1526,7 @@
                 <select id="anisette-server" aria-label="Anisette server">
                   <option value="https://ani3.stikstore.app">ani3.stikstore.app (default)</option>
                   <option value="https://ani.jkcoxson.com">isideload public server</option>
-                  <option value="http://127.0.0.1:8788">AltKeeper local server (127.0.0.1:8788)</option>
+                  <option value="http://127.0.0.1:8788" id="anisette-local-option">AltKeeper local server (127.0.0.1:8788)</option>
                   <option value="custom">Custom URL</option>
                 </select>
               </div>
@@ -1524,6 +1538,7 @@
                 <button id="anisette-test" type="button" data-i18n="Test server">Test server</button>
               </div>
               <div class="muted" id="anisette-source" style="margin-top:8px;"></div>
+              <div class="banner bad" id="anisette-local-note" role="note" hidden></div>
               <div class="banner bad" id="anisette-error" hidden></div>
               <div class="banner" id="anisette-test-result" role="status" aria-live="polite" hidden></div>
             </div>
@@ -1788,6 +1803,7 @@ function render(s) {
   }
   $("anisette-test").disabled = !!s.busy || anisetteTestRunning;
   $("anisette-custom").disabled = !!s.busy || !!anisette.locked || select.value !== "custom";
+  renderLocalAnisette();
 
   // iPhone
   const pill = $("phone-pill"), p = s.phone;
@@ -2290,11 +2306,24 @@ $("auto-pair-enabled").onchange = () => {
   act(() => api("/api/auto-pair", {enabled}));
 };
 
+// Il server locale (127.0.0.1:8788) può non essere partito, per esempio in Docker senza le
+// librerie Anisette: lo si dice accanto alla voce invece di lasciarlo scoprire dal test.
+function renderLocalAnisette() {
+  const local = state?.anisette?.local || {};
+  const suffix = local.state === "running" ? "" : local.state === "starting" ? " (starting...)" : " (not running)";
+  $("anisette-local-option").textContent = t("AltKeeper local server (127.0.0.1:8788)") + suffix;
+  const selected = $("anisette-server").value === "http://127.0.0.1:8788";
+  banner("anisette-local-note", selected && local.state === "unavailable"
+    ? t("The AltKeeper local Anisette server is not running: ") + (local.detail || "unknown reason")
+    : "", "bad");
+}
+
 $("anisette-server").onchange = () => {
   anisetteDraftDirty = true;
   anisetteSavePending = false;
   anisettePendingUrl = null;
   $("anisette-custom").disabled = $("anisette-server").value !== "custom" || !!state?.anisette?.locked;
+  renderLocalAnisette();
 };
 $("anisette-custom").oninput = () => {
   anisetteDraftDirty = true;
@@ -2917,7 +2946,7 @@ const CONCEPTS = {
     tag: "DEVICE PAIRING",
     title: "USB Pairing & Trust Record",
     lead: "To protect your iPhone against unauthorized wireless access, iOS requires a one-time cryptographic handshake over USB.",
-    body: "<ul><li><strong>Pair Once:</strong> Plugging your iPhone into this PC once and clicking 'Pair iPhone over USB' saves a trusted pairing record (<code>rp-pairing.plist</code>).</li><li><strong>Untethered Freedom:</strong> Once paired, you can unplug the USB cable. All future renewals, installs, and status checks occur over your home Wi-Fi.</li><li><strong>Auto-Pair:</strong> Enable 'Pair automatically' to pair new devices automatically when plugged in via USB.</li></ul>",
+    body: "<ul><li><strong>Pair Once:</strong> Plugging your iPhone into this PC once and clicking 'Pair device over USB' saves a trusted pairing record (<code>rp-pairing.plist</code>).</li><li><strong>Untethered Freedom:</strong> Once paired, you can unplug the USB cable. All future renewals, installs, and status checks occur over your home Wi-Fi.</li><li><strong>Auto-Pair:</strong> Enable 'Pair automatically' to pair new devices automatically when plugged in via USB.</li></ul>",
     takeaway: "USB is only required once for the initial trust handshake; everything else happens over Wi-Fi."
   },
   "extensions": {

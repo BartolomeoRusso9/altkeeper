@@ -2,6 +2,14 @@
 
 ## Unreleased
 
+### Fixed
+- **Local Anisette server on Linux / Docker.** It never started there: the native libraries were
+  downloaded automatically only on Windows and macOS, and when they were missing the server gave up
+  without a word, so "AltKeeper local server" failed with "error sending request". The libraries
+  are now downloaded on Linux too, every reason the server does not start is logged
+  (`[anisette-local] Local server not started: ...`), and the dashboard marks the option as
+  *not running* / *starting* with the reason, also in the result of **Test server**.
+
 ### Changed
 - Releases no longer publish the legacy `altkeeper.exe` and `altkeeper.exe.sha256` assets. The
   in-app updater now uses `AltKeeper-v<version>-Windows-x64.exe` and its `.sha256` file. Builds that
@@ -25,6 +33,19 @@
 - Automatic renewal can ask for the Apple 2FA code through the web page.
 
 ### Fixed
+- AltStore is now installed with the legacy bundle ID format `com.<team>.<id>` (host and extensions),
+  the one AltStore itself uses when it refreshes itself. With the previous `<id>.<team>` format the
+  host kept its ID but AltStore recomputed the widget as `com.<team>.<id>.AltWidget`, so iOS rejected
+  the refresh ("does not match required prefix"). When AltKeeper and the official AltServer sign
+  with the same Apple team, AltStore now gets the same ID as the official install, so AltKeeper no
+  longer adds a second AltStore next to it; with a different team the IDs differ (the team ID is
+  part of them) and iOS keeps both apps. **Existing AltStore installs made by
+  AltKeeper keep the old ID: delete AltStore and install it again to switch.** The new install
+  registers new App IDs (2 for AltStore + widget; free accounts allow 10 per 7 days) and the old
+  ones keep counting until they expire.
+- The AltStore install now writes the device ID (`ALTDeviceID`, plus the previous `ALTDeviceId`)
+  into Info.plist; AltStore needs it to refresh itself.
+- Renewal groups the widget of a legacy-format AltStore (`com.<team>.<id>.AltWidget`) under its host.
 - Sign-in no longer fails when Apple rejects the SMS 2FA request with HTTP 403 and an empty
   body: the vendored isideload now logs a warning (without the response payload) and falls
   back to trusted-device 2FA (push + 6-digit code). Other errors are still propagated.

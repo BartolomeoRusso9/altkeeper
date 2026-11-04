@@ -52,14 +52,54 @@ fn extension_of(bundle: &str, parent: &str, team: &str) -> bool {
     let Some(suffix) = child_id.strip_prefix(parent_id).and_then(|s| s.strip_prefix('.')) else {
         return false;
     };
+    // AltStore's legacy format puts the team *before* the original ID
+    // (`com.<TEAM>.com.rileytestut.AltStore`) and its extensions are direct children of
+    // the host (`com.<TEAM>.com.rileytestut.AltStore.AltWidget`), with no team marker
+    // between the host and the extension name. A suffix alone does not make an
+    // extension, so this branch also needs AltStore's own shape: the leading marker is
+    // the team these profiles belong to (AltStore registers host and extensions under
+    // one team) and the extension name is a single segment (`AltWidget`). Anything
+    // else under a legacy host goes through the team-marker rule below like any app.
+    if has_leading_team_marker(parent_id, team)
+        && leading_marker_is(parent_id, team)
+        && is_legacy_extension_name(suffix)
+    {
+        return true;
+    }
     let Some((marker, extension_name)) = suffix.split_once('.') else {
         return false;
     };
-    !extension_name.is_empty() && (
-        marker == team ||
-        (marker.len() == 10 &&
-            marker.bytes().all(|b| b.is_ascii_uppercase() || b.is_ascii_digit()))
-    )
+    !extension_name.is_empty() && is_team_marker(marker, team)
+}
+
+fn is_team_marker(marker: &str, team: &str) -> bool {
+    marker == team
+        || (marker.len() == 10
+            && marker.bytes().all(|b| b.is_ascii_uppercase() || b.is_ascii_digit()))
+}
+
+/// `com.<TEAM>.<something>`: the legacy AltStore host format.
+fn has_leading_team_marker(id: &str, team: &str) -> bool {
+    id.strip_prefix("com.")
+        .and_then(|rest| rest.split_once('.'))
+        .is_some_and(|(marker, rest)| !rest.is_empty() && is_team_marker(marker, team))
+}
+
+/// `AltWidget`: one non-empty segment of letters, digits, `-` or `_`.
+fn is_legacy_extension_name(suffix: &str) -> bool {
+    !suffix.is_empty()
+        && suffix
+            .bytes()
+            .all(|b| b.is_ascii_alphanumeric() || b == b'-' || b == b'_')
+}
+
+/// The legacy host `com.<TEAM>.…` was signed by exactly `team`.
+fn leading_marker_is(id: &str, team: &str) -> bool {
+    !team.is_empty()
+        && id
+            .strip_prefix("com.")
+            .and_then(|rest| rest.split_once('.'))
+            .is_some_and(|(marker, _)| marker == team)
 }
 
 /// Resolve an extension to an *existing* host bundle: the longest valid
@@ -452,5 +492,42 @@ mod tests {
     #[test]
     fn senza_profili_non_c_e_niente() {
         assert!(latest_by_bundle(&[]).is_empty());
+    }
+
+    #[test]
+    fn legacy_altstore_widget_groups_under_legacy_host() {
+        let team = "Y86XTM47HS";
+        let bundles = [
+            "com.Y86XTM47HS.com.rileytestut.AltStore",
+            "com.Y86XTM47HS.com.rileytestut.AltStore.AltWidget",
+            "com.Y86XTM47HS.com.example.App",
+        ];
+        assert_eq!(group_root(bundles[1], &bundles, team), bundles[0]);
+        assert_eq!(group_root(bundles[0], &bundles, team), bundles[0]);
+        assert_eq!(group_root(bundles[2], &bundles, team), bundles[2]);
+    }
+
+    #[test]
+    fn a_suffix_alone_does_not_make_a_legacy_extension() {
+        let team = "Y86XTM47HS";
+        let bundles = [
+            "com.Y86XTM47HS.com.example.app",
+            // independent apps whose original IDs extend com.example.app
+            "com.Y86XTM47HS.com.example.app.pro.lite",
+            "com.Y86XTM47HS.com.example.app.Share.Extension",
+            // legacy host signed by another team: not this profile set's AltStore shape
+            "com.OTHERTEAM1.com.example.other",
+            "com.OTHERTEAM1.com.example.other.Widget",
+        ];
+        for bundle in &bundles[1..3] {
+            assert_eq!(group_root(bundle, &bundles, team), *bundle);
+        }
+        assert_eq!(group_root(bundles[4], &bundles, team), bundles[4]);
+    }
+
+    #[test]
+    fn legacy_rule_needs_a_team_marker() {
+        let bundles = ["com.example.App", "com.example.App.Widget"];
+        assert_eq!(group_root(bundles[1], &bundles, "Y86XTM47HS"), bundles[1]);
     }
 }

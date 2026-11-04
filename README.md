@@ -28,8 +28,8 @@ Prefer Italian? Start at [README in italiano](README.it.md) or browse the [Itali
 - **AltServer mode:** AltStore Classic can refresh and install apps through AltKeeper.
 - **Independent renewal:** renew profiles from the CLI, dashboard, or an optional schedule.
 - **Device profiles:** keep pairing, account, settings, and renewal state separate for each iPhone.
-- **Local Anisette V3:** an optional server for Linux, macOS, and Windows; native libraries must be
-  supplied by the operator.
+- **Local Anisette V3:** a server on `127.0.0.1:8788` for Linux (Docker included), macOS, and
+  Windows; its native libraries are downloaded automatically when missing.
 - **JIT:** dashboard actions and an HTTP API are available to compatible clients. Developer Mode
   and a compatible mounted Developer Disk Image are required.
 

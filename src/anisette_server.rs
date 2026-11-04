@@ -155,7 +155,6 @@ fn has_native_libs(libraries: &Path) -> bool {
         && native_dir.join("libCoreADI.so").is_file()
 }
 
-#[cfg(any(windows, target_os = "macos"))]
 fn download_native_libs(libraries: &Path) -> Result<(), String> {
     use std::io::Read as _;
     let arch = host_arch_dir()?;
@@ -259,6 +258,32 @@ fn download_native_libs(libraries: &Path) -> Result<(), String> {
     }
 }
 
+/// Stato del server Anisette locale su 127.0.0.1:8788, mostrato dalla pagina web: chi sceglie
+/// "AltKeeper local server" deve sapere se c'è davvero qualcosa in ascolto, e se no perché.
+#[derive(Clone, Debug, PartialEq)]
+pub enum LocalStatus {
+    Starting,
+    Running,
+    Unavailable(String),
+}
+
+static LOCAL_STATUS: std::sync::Mutex<LocalStatus> = std::sync::Mutex::new(LocalStatus::Starting);
+
+fn set_local_status(status: LocalStatus) {
+    *LOCAL_STATUS.lock().unwrap_or_else(|e| e.into_inner()) = status;
+}
+
+pub fn local_status() -> LocalStatus {
+    LOCAL_STATUS.lock().unwrap_or_else(|e| e.into_inner()).clone()
+}
+
+/// Il server locale non parte: lo si scrive nel log (altrimenti non se ne accorge nessuno) e
+/// lo si mostra nella pagina.
+fn local_unavailable(reason: String) {
+    crate::log::line(&format!("[anisette-local] Local server not started: {reason}"));
+    set_local_status(LocalStatus::Unavailable(reason));
+}
+
 pub async fn serve_default(data_dir: PathBuf) {
     let bind: std::net::SocketAddr = "127.0.0.1:8788".parse().unwrap();
     let mut libraries = data_dir.join("anisette-libraries");
@@ -273,19 +298,28 @@ pub async fn serve_default(data_dir: PathBuf) {
             }
         }
     }
-    #[cfg(any(windows, target_os = "macos"))]
+    let mut download_error = None;
     if !has_native_libs(&libraries) {
         let libs_clone = libraries.clone();
-        crate::log::line("[anisette-local] Downloading native Anisette libraries (~2 MB)...");
-        if let Ok(Err(e)) = tokio::task::spawn_blocking(move || download_native_libs(&libs_clone)).await {
-            crate::log::line(&format!("[anisette-local] Auto-download skipped: {e}"));
-        }
+        crate::log::line("[anisette-local] Downloading native Anisette libraries (~4 MB)...");
+        download_error = match tokio::task::spawn_blocking(move || download_native_libs(&libs_clone)).await {
+            Ok(result) => result.err(),
+            Err(e) => Some(e.to_string()),
+        };
     }
     if !has_native_libs(&libraries) {
-        return;
+        let arch = host_arch_dir().unwrap_or("<arch>");
+        let place = libraries.join("lib").join(arch);
+        return local_unavailable(match download_error {
+            Some(e) => format!(
+                "the native Anisette libraries could not be downloaded ({e}). Put libstoreservicescore.so and libCoreADI.so in {}",
+                place.display()
+            ),
+            None => format!("libstoreservicescore.so and libCoreADI.so are missing from {}", place.display()),
+        });
     }
     if let Err(error) = serve(bind, libraries, data_dir).await {
-        crate::log::line(&format!("[anisette-local] {error}"));
+        local_unavailable(error);
     }
 }
 
@@ -294,6 +328,9 @@ pub async fn serve(
     libraries: PathBuf,
     data_dir: PathBuf,
 ) -> Result<(), String> {
+    // Risponde anche a http://127.0.0.1:8788 (la voce "AltKeeper local server") se ascolta lì
+    // o su tutte le interfacce, sulla porta 8788.
+    let local = bind.port() == 8788 && (bind.ip().is_loopback() || bind.ip().is_unspecified());
     let engine = Arc::new(Engine::new(libraries, &data_dir)?);
     let router = Router::new()
         .route("/v3/client_info", get(client_info))
@@ -306,6 +343,13 @@ pub async fn serve(
     let listener = tokio::net::TcpListener::bind(bind)
         .await
         .map_err(|error| format!("Cannot listen for local Anisette on {bind}: {error}"))?;
+    set_local_status(if local {
+        LocalStatus::Running
+    } else {
+        LocalStatus::Unavailable(format!(
+            "the local server listens on {bind}: use http://{bind} as a custom URL"
+        ))
+    });
     crate::log::line(&format!(
         "[anisette-local] V3 server listening at http://{bind}. This protocol has no authentication or TLS; restrict network access."
     ));
