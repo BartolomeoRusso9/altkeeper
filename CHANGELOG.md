@@ -28,8 +28,10 @@
 - AltStore is now installed with the legacy bundle ID format `com.<team>.<id>` (host and extensions),
   the one AltStore itself uses when it refreshes itself. With the previous `<id>.<team>` format the
   host kept its ID but AltStore recomputed the widget as `com.<team>.<id>.AltWidget`, so iOS rejected
-  the refresh ("does not match required prefix"). It also stops AltKeeper from creating a second
-  AltStore next to one installed by the official AltServer. **Existing AltStore installs made by
+  the refresh ("does not match required prefix"). When AltKeeper and the official AltServer sign
+  with the same Apple team, AltStore now gets the same ID as the official install, so AltKeeper no
+  longer adds a second AltStore next to it; with a different team the IDs differ (the team ID is
+  part of them) and iOS keeps both apps. **Existing AltStore installs made by
   AltKeeper keep the old ID: delete AltStore and install it again to switch.** The new install
   registers new App IDs (2 for AltStore + widget; free accounts allow 10 per 7 days) and the old
   ones keep counting until they expire.

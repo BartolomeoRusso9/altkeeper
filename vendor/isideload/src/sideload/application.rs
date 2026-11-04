@@ -179,6 +179,20 @@ fn localized_name_bytes(original: &[u8], name: &str) -> Result<Vec<u8>, Report> 
 }
 
 /// Accept a conservative reverse-DNS identifier, without the signer-added team suffix.
+pub const ALTSTORE_BUNDLE_ID: &str = "com.rileytestut.AltStore";
+
+/// `Some("com.rileytestut.AltStore")` for AltStore's own ID and for the legacy signed
+/// form `com.<TEAM>.com.rileytestut.AltStore` (what an IPA exported from an installed
+/// AltStore carries); `None` for anything else.
+fn altstore_original_id(bundle_id: &str) -> Option<&'static str> {
+    if bundle_id == ALTSTORE_BUNDLE_ID {
+        return Some(ALTSTORE_BUNDLE_ID);
+    }
+    let (team, rest) = bundle_id.strip_prefix("com.")?.split_once('.')?;
+    let is_team = !team.is_empty() && team.bytes().all(|b| b.is_ascii_alphanumeric());
+    (is_team && rest == ALTSTORE_BUNDLE_ID).then_some(ALTSTORE_BUNDLE_ID)
+}
+
 pub fn valid_custom_bundle_id(id: &str) -> bool {
     if id.len() > 160 || id.len() < 3 || !id.contains('.') { return false; }
     id.split('.').all(|part| {
@@ -344,8 +358,10 @@ impl Application {
 
     pub fn get_special_app(&self) -> Option<SpecialApp> {
         let bundle_id = self.bundle.bundle_identifier().unwrap_or("");
+        if altstore_original_id(bundle_id).is_some() {
+            return Some(SpecialApp::AltStore);
+        }
         let special_app = match bundle_id {
-            "com.rileytestut.AltStore" => Some(SpecialApp::AltStore),
             "com.SideStore.SideStore" => Some(SpecialApp::SideStore),
             "app.stik.store" => Some(SpecialApp::StikStore),
             _ => None,
@@ -379,6 +395,18 @@ impl Application {
             .to_string();
 
         Ok(str)
+    }
+
+    /// The bundle ID the app had before any signing: `com.rileytestut.AltStore` for an
+    /// AltStore IPA that was already signed (`com.<TEAM>.com.rileytestut.AltStore`), the
+    /// current `CFBundleIdentifier` otherwise. App IDs, the app group and
+    /// `ALTBundleIdentifier` are derived from this one, while extensions still carry the
+    /// signed ID as their prefix (see `update_bundle_id`).
+    pub fn original_bundle_id(&self) -> Result<String, Report> {
+        let current = self.main_bundle_id()?;
+        Ok(altstore_original_id(&current)
+            .map(str::to_string)
+            .unwrap_or(current))
     }
 
     pub fn main_app_name(&self) -> Result<String, Report> {
@@ -624,6 +652,35 @@ impl std::fmt::Display for SpecialApp {
             SpecialApp::LiveContainer => write!(f, "LiveContainer"),
             SpecialApp::AltStore => write!(f, "AltStore"),
             SpecialApp::StikStore => write!(f, "StikStore"),
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{ALTSTORE_BUNDLE_ID, altstore_original_id};
+
+    #[test]
+    fn altstore_is_recognised_unsigned_and_already_signed() {
+        assert_eq!(altstore_original_id(ALTSTORE_BUNDLE_ID), Some(ALTSTORE_BUNDLE_ID));
+        assert_eq!(
+            altstore_original_id("com.Y86XTM47HS.com.rileytestut.AltStore"),
+            Some(ALTSTORE_BUNDLE_ID)
+        );
+    }
+
+    #[test]
+    fn lookalikes_are_not_altstore() {
+        for id in [
+            "com.rileytestut.AltStore.Y86XTM47HS",
+            "com.Y86XTM47HS.com.rileytestut.AltStore.AltWidget",
+            "com..com.rileytestut.AltStore",
+            "com.a.b.com.rileytestut.AltStore",
+            "org.Y86XTM47HS.com.rileytestut.AltStore",
+            "com.SideStore.SideStore",
+            "",
+        ] {
+            assert_eq!(altstore_original_id(id), None, "{id}");
         }
     }
 }

@@ -113,7 +113,13 @@ impl<C: MaxCertsCallback> Sideloader<C> {
         }
         app.apply_install_identity(display_name, custom_bundle_id)?;
 
-        let main_bundle_id = app.main_bundle_id()?;
+        // `signed_bundle_id` is what CFBundleIdentifier says now, and the prefix the
+        // extensions carry, so it is what `update_bundle_id` replaces. `main_bundle_id`
+        // is the ID before any signing: an already-signed AltStore IPA
+        // (`com.<TEAM>.com.rileytestut.AltStore`) maps back to `com.rileytestut.AltStore`,
+        // so it gets the same app ID, group and ALTBundleIdentifier as a fresh one.
+        let signed_bundle_id = app.main_bundle_id()?;
+        let main_bundle_id = app.original_bundle_id()?;
         let main_app_name = app.main_app_name()?;
         // AltStore resigns itself with the legacy `com.<team>.<id>` format for the app
         // and always computes its extensions' IDs that way, but reuses the ID the app was
@@ -135,7 +141,7 @@ impl<C: MaxCertsCallback> Sideloader<C> {
                 plist::Value::String(main_bundle_id.clone()),
             );
         }
-        app.update_bundle_id(&main_bundle_id, &main_app_id_str)?;
+        app.update_bundle_id(&signed_bundle_id, &main_app_id_str)?;
         let mut app_ids = app
             .register_app_ids(
                 /*&self.extensions_behavior, */ &mut self.dev_session,
