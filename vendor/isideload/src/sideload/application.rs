@@ -658,7 +658,7 @@ impl std::fmt::Display for SpecialApp {
 
 #[cfg(test)]
 mod tests {
-    use super::{ALTSTORE_BUNDLE_ID, altstore_original_id};
+    use super::{ALTSTORE_BUNDLE_ID, Application, altstore_original_id};
 
     #[test]
     fn altstore_is_recognised_unsigned_and_already_signed() {
@@ -667,6 +667,25 @@ mod tests {
             altstore_original_id("com.Y86XTM47HS.com.rileytestut.AltStore"),
             Some(ALTSTORE_BUNDLE_ID)
         );
+    }
+
+    #[test]
+    fn original_bundle_id_strips_the_legacy_team_prefix() {
+        let dir = std::env::temp_dir()
+            .join(format!("isideload-original-id-{}", std::process::id()))
+            .join("AltStore.app");
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        let mut info = plist::Dictionary::new();
+        info.insert(
+            "CFBundleIdentifier".into(),
+            "com.Y86XTM47HS.com.rileytestut.AltStore".into(),
+        );
+        plist::to_file_xml(dir.join("Info.plist"), &info).unwrap();
+
+        let app = Application::new(dir.clone()).unwrap();
+        assert_eq!(app.original_bundle_id().unwrap(), "com.rileytestut.AltStore");
+        let _ = std::fs::remove_dir_all(dir.parent().unwrap());
     }
 
     #[test]
