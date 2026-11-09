@@ -19,6 +19,19 @@ accesso; condividi solo le righe specifiche `[gs #...]` dopo aver verificato che
 privati. Non attivare `RUST_LOG=debug` nei log da condividere: i log di basso livello possono
 contenere le chiavi di pairing.
 
+### Errore Apple `-80045` durante un aggiornamento con AltStore Classic
+
+Se nel log di AltKeeper compare `AnisetteDataResponse` e l'iPhone mostra poi l'errore `-80045`,
+il telefono ha ricevuto i dati di autenticazione da AltKeeper. Apple può rifiutare i dati
+generati da un server Anisette che usa le librerie ADI di Android.
+Vedi [Dadoum/anisette-v3-server#61][dadoum-80045].
+
+Scegli un server Anisette v3 compatibile. Se AltServer gira come servizio, imposta
+`ALTKEEPER_ANISETTE_URL=https://mac-ani.jkcoxson.com` nell'ambiente del servizio e riavvia
+AltKeeper. Il server jkcoxson è nell'elenco di AltStore e questa impostazione è stata verificata
+con un aggiornamento via Wi-Fi da AltStore Classic 2.3.2, usando AltKeeper 0.5.6 su Raspberry Pi 5.
+Dopo il cambio di server Apple potrebbe chiedere di nuovo la verifica. [Elenco dei server AltStore][providers]
+
 ## Proteggi la cartella dati
 
 Considera segreti questi file e cartelle:
@@ -41,3 +54,6 @@ vulnerabilità in privato, segui [SECURITY.md](../../SECURITY.md).
 - **Listener Anisette:** non ha autenticazione né TLS e il PIN web non lo protegge. Associalo solo
   a interfacce fidate.
 - Evita l'inoltro di porte pubbliche. Usa una VPN privata e regole firewall sull'host.
+
+[dadoum-80045]: https://github.com/Dadoum/anisette-v3-server/issues/61
+[providers]: https://cdn.altstore.io/file/altstore/altstore/remote-altservers.json
