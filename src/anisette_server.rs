@@ -506,6 +506,8 @@ enum SessionStep {
     Identifier,
     Start,
     End,
+    /// Provisioning succeeded; the engine is no longer in use by this session.
+    Done,
 }
 
 async fn receive_provisioning_message<S: Stream + Unpin>(
@@ -525,8 +527,12 @@ async fn receive_provisioning_message<S: Stream + Unpin>(
 
 async fn handle_provisioning(mut socket: WebSocket, engine: Arc<Engine>) {
     let session_deadline = Instant::now() + SESSION_MAX_DURATION;
-    let _serial = match engine.serial.try_lock() {
-        Ok(guard) => guard,
+    // Held while this session drives the native engine, and released as soon as
+    // provisioning succeeds: the client sends `/v3/get_headers` right after
+    // `ProvisioningSuccess`, often before its WebSocket Close frame reaches us,
+    // and that request would otherwise find the engine "busy" (503).
+    let mut serial = match engine.serial.try_lock() {
+        Ok(guard) => Some(guard),
         Err(_) => {
             let _ = send_ws(
                 &mut socket,
@@ -732,6 +738,7 @@ async fn handle_provisioning(mut socket: WebSocket, engine: Arc<Engine>) {
                         match std::fs::read(provider.provisioning_dir.0.join("adi.pb")) {
                             Ok(adi_pb) => {
                                 session = 0;
+                                step = SessionStep::Done;
                                 json!({
                                     "result": "ProvisioningSuccess",
                                     "adi_pb": BASE64.encode(adi_pb),
@@ -751,10 +758,22 @@ async fn handle_provisioning(mut socket: WebSocket, engine: Arc<Engine>) {
                             }
                         }
                     }
+                    SessionStep::Done => {
+                        send_ws_error(
+                            &mut socket,
+                            "EndProvisioningError",
+                            "Provisioning has already finished.".into(),
+                        )
+                        .await;
+                        break;
+                    }
                 };
 
                 if send_ws(&mut socket, outcome).await.is_err() {
                     break;
+                }
+                if matches!(step, SessionStep::Done) {
+                    drop(serial.take());
                 }
             }
             Message::Ping(payload) => {
