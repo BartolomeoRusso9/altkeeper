@@ -189,6 +189,10 @@ pub fn anisette_url(value: Option<&str>) -> Result<Option<String>, String> {
                 || parsed.host_str().is_none()
                 || !parsed.username().is_empty()
                 || parsed.password().is_some()
+                // Endpoint paths are appended to this base URL: a query or fragment would
+                // swallow them and every Anisette request would hit the wrong resource.
+                || parsed.query().is_some()
+                || parsed.fragment().is_some()
             {
                 return Err(crate::tr!(
                     "URL anisette non valido: usa un URL http:// o https:// completo",
@@ -622,6 +626,9 @@ mod tests {
         assert!(anisette_url(Some("ftp://x")).is_err());
         assert!(anisette_url(Some("https://")).is_err());
         assert!(anisette_url(Some("https://user:password@ani.example.org")).is_err());
+        assert!(anisette_url(Some("https://ani.example.org?token=x")).is_err());
+        assert!(anisette_url(Some("https://ani.example.org/#v3")).is_err());
+        assert!(anisette_url(Some("https://ani.example.org/?")).is_err());
     }
 
     #[test]
