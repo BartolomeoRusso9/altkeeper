@@ -1205,5 +1205,27 @@ mod tests {
     fn other_statuses_still_bail() {
         assert!(AppleAccount::classify_sms_send_response(500, "", 1).is_err());
         assert!(AppleAccount::classify_sms_send_response(400, "", 1).is_err());
+        assert!(AppleAccount::classify_sms_send_response(403, "Forbidden", 1).is_err());
+        assert!(AppleAccount::classify_sms_send_response(403, "{}", 1).is_err());
+    }
+
+    #[test]
+    fn successful_sms_requests_still_succeed() {
+        for status in [200, 201, 204] {
+            assert!(matches!(AppleAccount::classify_sms_send_response(status, "", 1), Ok(SmsSendOutcome::Sent)));
+        }
+    }
+
+    #[test]
+    fn matching_active_sms_challenge_is_preserved() {
+        let body = serde_json::json!({
+            "mode": "sms", "type": "verification", "authenticationType": "hsa2",
+            "trustedPhoneNumber": {"id": 1, "numberWithDialCode": "+1", "lastTwoDigits": "01", "pushMode": "sms"}, "trustedPhoneNumbers": [{"id": 1, "numberWithDialCode": "+1", "lastTwoDigits": "01", "pushMode": "sms"}],
+            "securityCode": {"length": 6, "tooManyCodesSent": false,
+                "tooManyCodesValidated": false, "securityCodeLocked": false,
+                "securityCodeCooldown": false}
+        }).to_string();
+        assert!(matches!(AppleAccount::classify_sms_send_response(412, &body, 1), Ok(SmsSendOutcome::ActiveChallenge)));
+        assert!(AppleAccount::classify_sms_send_response(412, &body, 2).is_err());
     }
 }

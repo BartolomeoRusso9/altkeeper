@@ -196,6 +196,15 @@ pub fn anisette_url(value: Option<&str>) -> Result<Option<String>, String> {
                 )
                 .into());
             }
+            // Endpoint paths are appended to this base URL: a query or fragment would
+            // swallow them and every Anisette request would hit the wrong resource.
+            if parsed.query().is_some() || parsed.fragment().is_some() {
+                return Err(crate::tr!(
+                    "URL anisette non valido: togli la parte dopo ? o # (query e frammenti non sono ammessi)",
+                    "Invalid anisette URL: remove the part after ? or # (queries and fragments are not allowed)"
+                )
+                .into());
+            }
             Ok(Some(parsed.to_string().trim_end_matches('/').to_string()))
         }
     }
@@ -212,14 +221,27 @@ pub fn anisette_choice(dir: &Path) -> Result<AnisetteChoice, String> {
     }
     let path = dir.join(STATE_DIR).join(ANISETTE_URL_FILE);
     match std::fs::read_to_string(path) {
-        Ok(value) => {
-            let url = anisette_url(Some(&value))?.ok_or("Saved anisette URL is empty.")?;
-            Ok(AnisetteChoice {
+        Ok(value) => match anisette_url(Some(&value)) {
+            Ok(Some(url)) => Ok(AnisetteChoice {
                 url,
                 source: "file",
                 locked: false,
-            })
-        }
+            }),
+            Ok(None) => Err("Saved anisette URL is empty.".into()),
+            // A URL saved by an older version that is now rejected (for example one with a
+            // query, which never reached the V3 endpoints) must not block renewals: use the
+            // default server until a valid one is saved again.
+            Err(error) => {
+                crate::log::line(&format!(
+                    "[anisette] ignoring the saved server ({error}); using the default"
+                ));
+                Ok(AnisetteChoice {
+                    url: DEFAULT_ANISETTE_URL.into(),
+                    source: "default",
+                    locked: false,
+                })
+            }
+        },
         Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(AnisetteChoice {
             url: DEFAULT_ANISETTE_URL.into(),
             source: "default",
@@ -476,7 +498,7 @@ async fn anisette_for_altstore_once(dir: &Path) -> Result<serde_json::Value, Str
 #[cfg(test)]
 mod tests {
     use super::{
-        anisette_choice, anisette_url, app_id_action, is_max_certs_error, iso8601_utc,
+        anisette_choice, anisette_url, app_id_action, ANISETTE_URL_FILE, is_max_certs_error, iso8601_utc,
         max_certs_behavior, needs_reprovision, parse_2fa_input, save_anisette_choice, AppIdAction,
         DEFAULT_ANISETTE_URL, ISIDELOAD_ANISETTE_URL, STATE_DIR,
     };
@@ -622,6 +644,9 @@ mod tests {
         assert!(anisette_url(Some("ftp://x")).is_err());
         assert!(anisette_url(Some("https://")).is_err());
         assert!(anisette_url(Some("https://user:password@ani.example.org")).is_err());
+        assert!(anisette_url(Some("https://ani.example.org?token=x")).is_err());
+        assert!(anisette_url(Some("https://ani.example.org/#v3")).is_err());
+        assert!(anisette_url(Some("https://ani.example.org/?")).is_err());
     }
 
     #[test]
@@ -644,6 +669,26 @@ mod tests {
         let reset = save_anisette_choice(dir.path(), None).unwrap();
         assert_eq!(reset.url, DEFAULT_ANISETTE_URL);
         assert_eq!(reset.source, "default");
+    }
+
+    #[test]
+    fn a_saved_url_rejected_by_newer_rules_falls_back_to_the_default() {
+        if crate::env::var("ANISETTE_URL").is_some() {
+            return;
+        }
+        let dir = tempfile::tempdir().unwrap();
+        std::fs::create_dir_all(dir.path().join(STATE_DIR)).unwrap();
+        std::fs::write(
+            dir.path().join(STATE_DIR).join(ANISETTE_URL_FILE),
+            "https://ani.example.org/?token=x",
+        )
+        .unwrap();
+        let choice = anisette_choice(dir.path()).unwrap();
+        assert_eq!(choice.url, DEFAULT_ANISETTE_URL);
+        assert_eq!(choice.source, "default");
+        assert!(anisette_url(Some("https://ani.example.org/?token=x"))
+            .unwrap_err()
+            .contains('?'));
     }
 
     #[test]

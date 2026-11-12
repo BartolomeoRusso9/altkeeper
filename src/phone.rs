@@ -342,18 +342,7 @@ impl PhoneLink {
         let misagent = match self {
             Self::Rsd { misagent, .. } | Self::Legacy { misagent, .. } => misagent,
         };
-        misagent.install(profile).await.map_err(|error| {
-            let retryable = matches!(
-                &error,
-                idevice::IdeviceError::Socket(io)
-                    if io.kind() == std::io::ErrorKind::TimedOut
-            );
-            if retryable {
-                crate::renewal_wait::AttemptError::Retryable(dbg(error))
-            } else {
-                crate::renewal_wait::AttemptError::Fatal(dbg(error))
-            }
-        })
+        misagent.install(profile).await.map_err(renewal_install_error)
     }
 
     pub async fn remove_profile(&mut self, uuid: &str) -> Result<(), String> {
@@ -966,6 +955,20 @@ pub async fn reconnect(via: Via, pairing_path: &str) -> Result<PhoneLink, String
     .await
 }
 
+/// Only a socket-level timeout may mean "iPhone locked or asleep": the renewal then waits
+/// and verifies instead of failing. Explicit rejections from iOS stay fatal.
+fn renewal_install_error(error: idevice::IdeviceError) -> crate::renewal_wait::AttemptError {
+    let retryable = matches!(
+        &error,
+        idevice::IdeviceError::Socket(io) if io.kind() == std::io::ErrorKind::TimedOut
+    );
+    if retryable {
+        crate::renewal_wait::AttemptError::Retryable(dbg(error))
+    } else {
+        crate::renewal_wait::AttemptError::Fatal(dbg(error))
+    }
+}
+
 pub async fn probe_profile(
     via: Via,
     pairing_path: &str,
@@ -1552,5 +1555,52 @@ mod tests {
         std::fs::write(&p, "  10.0.0.5:49152 \n").unwrap();
         assert_eq!(read_last_addr(&p), Some("10.0.0.5:49152".parse().unwrap()));
         let _ = std::fs::remove_file(&p);
+    }
+
+    #[test]
+    fn only_typed_install_socket_timeouts_are_recoverable() {
+        use crate::renewal_wait::AttemptError;
+        use std::io::{Error, ErrorKind};
+        let retry = |e| matches!(renewal_install_error(e), AttemptError::Retryable(_));
+        assert!(retry(idevice::IdeviceError::Socket(Error::from(ErrorKind::TimedOut))));
+        assert!(!retry(idevice::IdeviceError::Socket(Error::from(ErrorKind::PermissionDenied))));
+        assert!(!retry(idevice::IdeviceError::MisagentFailure));
+        assert!(!retry(idevice::IdeviceError::UnexpectedResponse("TimedOut".into())));
+    }
+
+    #[tokio::test]
+    async fn offline_endpoint_is_a_connection_failure_not_an_unlock_wait() {
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let address = listener.local_addr().unwrap();
+        drop(listener);
+        let result = probe_profile(Via::Wifi(address), "unused-pairing.plist", "UUID", "TEAM").await;
+        assert!(matches!(result, crate::renewal_wait::Probe::Disconnected(_)));
+    }
+
+    #[test]
+    fn saved_addresses_round_trip_and_invalid_input_keeps_the_old_file() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join(SAVED_ADDRS_FILE);
+        assert!(saved_addresses_in(dir.path()).unwrap().is_empty());
+        let saved = save_addresses_in(
+            dir.path(),
+            &[" 10.7.0.2:49152 ".into(), "[fd00::2]:49152".into()],
+        )
+        .unwrap();
+        assert_eq!(saved_addresses_in(dir.path()).unwrap(), saved);
+        let before = std::fs::read(&path).unwrap();
+        for invalid in ["10.7.0.2/24", "255.255.255.255:49152", "[::]:49152", "[ff02::1]:49152"] {
+            assert!(save_addresses_in(dir.path(), &[invalid.into()]).is_err(), "{invalid}");
+            assert_eq!(std::fs::read(&path).unwrap(), before);
+        }
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt as _;
+            assert_eq!(std::fs::metadata(&path).unwrap().permissions().mode() & 0o777, 0o600);
+        }
+        save_addresses_in(dir.path(), &[]).unwrap();
+        assert!(saved_addresses_in(dir.path()).unwrap().is_empty());
+        std::fs::write(&path, b"broken JSON").unwrap();
+        assert!(saved_addresses_in(dir.path()).is_err());
     }
 }
