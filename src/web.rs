@@ -3479,6 +3479,73 @@ mod tests {
         assert!(mine(&v).is_empty());
     }
 
+    fn idle_test_app(dir: &std::path::Path) -> Arc<App> {
+        Arc::new(App {
+            dir: dir.to_path_buf(),
+            device_id: "default".into(),
+            device_name: "Default iPhone".into(),
+            phone: None,
+            busy: AtomicBool::new(false),
+            inner: Mutex::new(Inner::default()),
+            tfa: Arc::new(apple::TfaChannel::default()),
+            auto_renew: Mutex::new(AutoRenewConfig::default()),
+            pending_ipa: Mutex::new(None),
+            renewal_wait: crate::renewal_wait::Control::default(),
+        })
+    }
+
+    #[tokio::test]
+    async fn stale_or_zero_pid_is_rejected_before_connecting_to_the_phone() {
+        let dir = tempfile::tempdir().unwrap();
+        let app = idle_test_app(dir.path());
+        for pid in [0, 42] {
+            let (status, _) = enable_jit(State(app.clone()), Json(EnableJitReq { pid })).await;
+            assert_eq!(status, StatusCode::BAD_REQUEST);
+            assert!(!app.busy.load(Ordering::SeqCst));
+        }
+        for input in [r#"{"pid":-1}"#, r#"{"pid":4294967296}"#, r#"{"pid":42,"force":true}"#] {
+            assert!(serde_json::from_str::<EnableJitReq>(input).is_err(), "{input}");
+        }
+    }
+
+    #[tokio::test]
+    async fn invalid_address_request_is_rejected_before_writing_any_settings() {
+        let dir = tempfile::tempdir().unwrap();
+        let app = idle_test_app(dir.path());
+        let (status, _) = update_phone_addresses(
+            State(app),
+            Json(PhoneAddressesReq { addresses: vec!["10.7.0.2/24".into()] }),
+        )
+        .await;
+        assert_eq!(status, StatusCode::BAD_REQUEST);
+        assert!(!dir.path().join("state").exists());
+        assert!(serde_json::from_str::<PhoneAddressesReq>("{}").is_err());
+        assert!(serde_json::from_str::<PhoneAddressesReq>(
+            r#"{"addresses":[],"unexpected":true}"#
+        )
+        .is_err());
+    }
+
+    #[test]
+    fn missing_app_id_registration_is_opt_in_and_backward_compatible() {
+        let old: AutoRenewConfig =
+            serde_json::from_str(r#"{"enabled":true,"time":"06:30","min_days":3}"#).unwrap();
+        assert!(!old.auto_register_app_ids);
+        let enabled: AutoRenewConfig = serde_json::from_str(
+            r#"{"enabled":true,"time":"06:30","auto_register_app_ids":true}"#,
+        )
+        .unwrap();
+        assert!(enabled.auto_register_app_ids);
+        let old_req: AutoRenewReq =
+            serde_json::from_str(r#"{"enabled":true,"time":"06:30","min_days":3}"#).unwrap();
+        assert_eq!(old_req.auto_register_app_ids, None);
+        let new_req: AutoRenewReq = serde_json::from_str(
+            r#"{"enabled":true,"time":"06:30","auto_register_app_ids":true}"#,
+        )
+        .unwrap();
+        assert_eq!(new_req.auto_register_app_ids, Some(true));
+    }
+
     #[tokio::test(start_paused = true)]
     async fn waiting_auto_renewal_is_visible_and_cancelable_from_state_api() {
         let app = Arc::new(App {

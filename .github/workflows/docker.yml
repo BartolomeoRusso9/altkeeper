@@ -33,6 +33,8 @@ jobs:
       - uses: dtolnay/rust-toolchain@stable
       - uses: Swatinem/rust-cache@v2
       - run: cargo test --locked
+      # The root test run does not include the vendored isideload unit tests.
+      - run: cargo test --locked -p isideload --lib
       - name: Check English CLI help
         run: |
           ALTKEEPER_LANG=en cargo run --locked -- --help | grep '^usage: altkeeper'
@@ -51,6 +53,8 @@ jobs:
       - uses: dtolnay/rust-toolchain@stable
       - uses: Swatinem/rust-cache@v2
       - run: cargo test --locked
+      # The root test run does not include the vendored isideload unit tests.
+      - run: cargo test --locked -p isideload --lib
       - name: Check English CLI help
         shell: pwsh
         run: |
