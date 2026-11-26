@@ -1061,6 +1061,7 @@ pub async fn sign_ipa(
     selected_extensions: Option<&[String]>,
     display_name: Option<&str>,
     custom_bundle_id: Option<&str>,
+    revoke_existing_certificates: bool,
 ) -> Result<SignedApp, String> {
     let filename = ipa
         .file_name()
@@ -1083,12 +1084,15 @@ pub async fn sign_ipa(
             )
         })?;
 
+    let revoke_cert_setting = if revoke_existing_certificates {
+        Some("1".to_string())
+    } else {
+        crate::env::var("REVOKE_CERTS")
+    };
     let mut sideloader = SideloaderBuilder::new(sess, account.apple_id.clone())
         .storage(Box::new(FsStorage::new(storage_path)))
         .machine_name("AltKeeper".into())
-        .max_certs_behavior(max_certs_behavior(
-            crate::env::var("REVOKE_CERTS").as_deref(),
-        ))
+        .max_certs_behavior(max_certs_behavior(revoke_cert_setting.as_deref()))
         .build();
     let signed = sideloader
         .sign_app::<_, std::future::Ready<()>>(
@@ -1109,8 +1113,8 @@ pub async fn sign_ipa(
             let detail = format!("{e:?}");
             if is_max_certs_error(&detail) {
                 crate::tr!(
-                    "firma dell'app non riuscita: l'Apple ID ha già un certificato (AltStore/SideStore). Per sostituirlo imposta ALTKEEPER_REVOKE_CERTS=1 e riprova; le altre app vanno poi rinnovate con un Refresh.".to_string(),
-                    "App signing failed: this Apple ID already has a certificate (AltStore/SideStore). To replace it, set ALTKEEPER_REVOKE_CERTS=1 and retry; other apps will then need refreshing.".to_string()
+                    "firma dell'app non riuscita: l'Apple ID ha già un certificato (AltStore/SideStore). Seleziona l'opzione per sostituire un certificato Apple esistente e riprova; in alternativa imposta ALTKEEPER_REVOKE_CERTS=1. Le altre app andranno rinnovate con un Refresh.".to_string(),
+                    "App signing failed: this Apple ID already has a certificate (AltStore/SideStore). Select “Replace an existing Apple development certificate if needed” and retry, or set ALTKEEPER_REVOKE_CERTS=1. Other apps will then need refreshing.".to_string()
                 )
             } else {
                 // Keep the complete report; its first line may only be a

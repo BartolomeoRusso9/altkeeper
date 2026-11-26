@@ -180,7 +180,9 @@ fn server_id() -> Result<String, String> {
 }
 
 fn hostname() -> String {
-    std::process::Command::new("hostname")
+    let mut command = std::process::Command::new("hostname");
+    crate::process::suppress_console(&mut command);
+    command
         .output()
         .ok()
         .filter(|o| o.status.success())

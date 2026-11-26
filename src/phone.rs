@@ -31,7 +31,7 @@ use idevice::{
 };
 use tokio::net::TcpStream;
 
-pub const HOST_NAME: &str = "casa2";
+pub const HOST_NAME: &str = "AltKeeper";
 
 /// `Display` of an isideload `Report` can be empty (the user saw "Installation failed:" with
 /// nothing after it). Fall back to the Debug chain so the real reason reaches the log.

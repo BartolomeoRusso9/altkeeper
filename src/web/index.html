@@ -1316,6 +1316,11 @@
               <input id="install-enable-jit" type="checkbox">
               <span data-i18n="Enable JIT after installation (requires a mounted Developer Disk Image)">Enable JIT after installation (requires a mounted Developer Disk Image)</span>
             </label>
+            <label class="check" for="install-revoke-certs">
+              <input id="install-revoke-certs" type="checkbox">
+              <span data-i18n="Replace an existing Apple development certificate if needed">Replace an existing Apple development certificate if needed</span>
+            </label>
+            <p class="muted" data-i18n="Only use this if signing fails because your Apple ID already has a certificate (for example, from AltStore or SideStore). Revoking it may make those apps stop working until you refresh them.">Only use this if signing fails because your Apple ID already has a certificate (for example, from AltStore or SideStore). Revoking it may make those apps stop working until you refresh them.</p>
             <p class="muted" data-i18n="These settings are for new installations only. Existing apps and automatic renewal are never modified. A new Bundle ID allows a separate copy; the Apple team suffix is added automatically.">These settings are for new installations only. Existing apps and automatic renewal are never modified. A new Bundle ID allows a separate copy; the Apple team suffix is added automatically.</p>
             <div class="row" style="margin-top:10px">
               <button class="primary" id="btn-install" type="submit" data-i18n="Sign and install">Sign and install</button>
@@ -2108,6 +2113,7 @@ function render(s) {
                      p.reachable === true && !s.busy;
   $("btn-install").disabled = !canInstall || uploading || !!pendingInstall;
   $("btn-install").textContent = uploading ? t("Analyzing IPA…") : t("Sign and install");
+  $("install-revoke-certs").disabled = uploading || !!pendingInstall;
   show("extension-choice", !!pendingInstall);
   $("ext-confirm").disabled = !canInstall || uploading;
   $("install-hint").textContent = installHint(s);
@@ -2451,6 +2457,7 @@ $("ext-confirm").onclick = async () => {
     $("install-display-name").value = "";
     $("install-bundle-id").value = "";
     $("install-enable-jit").checked = false;
+    $("install-revoke-certs").checked = false;
     banner("install-error", "");
   } catch(e) {
     banner("install-error", e.message, "bad");
@@ -2468,6 +2475,9 @@ $("install-form").onsubmit = async (ev) => {
   ev.preventDefault();
   const file = $("ipa-file").files[0];
   if (!file) { banner("install-error", t("Choose an IPA file first."), "bad"); return; }
+  const revokeExistingCertificates = $("install-revoke-certs").checked;
+  if (revokeExistingCertificates
+      && !confirm(t("Revoking the existing certificate can stop AltStore/SideStore apps from working until you refresh them. Continue?"))) return;
   uploading = true;
   if (state) render(state);
   try {
@@ -2476,7 +2486,8 @@ $("install-form").onsubmit = async (ev) => {
     const customize = !!($("install-display-name").value.trim() || $("install-bundle-id").value.trim());
     const enableJit = $("install-enable-jit").checked;
     const r = await fetch("/api/install/inspect?customize=" + String(customize)
-      + "&enable_jit=" + String(enableJit), {
+      + "&enable_jit=" + String(enableJit)
+      + "&revoke_existing_certificates=" + String(revokeExistingCertificates), {
       method: "POST",
       headers: { "X-Requested-With": "altkeeper", ...deviceHeaders() },
       body: form,
@@ -2490,6 +2501,7 @@ $("install-form").onsubmit = async (ev) => {
       $("install-display-name").value = "";
       $("install-bundle-id").value = "";
       $("install-enable-jit").checked = false;
+      $("install-revoke-certs").checked = false;
     }
     $("install-error").hidden = true;
   } catch (e) {
