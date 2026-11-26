@@ -74,7 +74,9 @@ fn windows_acl(path: &Path, dir: bool) {
     };
     // (OI)(CI): i file creati dentro la cartella ereditano lo stesso permesso.
     let grant = format!("{who}:{}", if dir { "(OI)(CI)F" } else { "F" });
-    let _ = Command::new("icacls")
+    let mut command = Command::new("icacls");
+    crate::process::suppress_console(&mut command);
+    let _ = command
         .arg(path)
         .args(["/inheritance:r", "/grant:r"])
         .arg(grant)

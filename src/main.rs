@@ -37,6 +37,7 @@ mod install_archive;
 mod log;
 mod phone;
 mod profile;
+mod process;
 mod renewal_wait;
 mod terminal;
 #[cfg(any(windows, target_os = "macos"))]
@@ -1046,7 +1047,9 @@ async fn run() -> Result<(), String> {
                 // La versione nuova non parte: si rimette quella vecchia e si riavvia quella.
                 if replacing.is_some() && update::rollback(&exe) {
                     log::err("[update] the new version did not start, going back to the old one");
-                    let _ = std::process::Command::new(&exe)
+                    let mut command = std::process::Command::new(&exe);
+                    process::suppress_console(&mut command);
+                    let _ = command
                         .arg("tray")
                         .arg("--dir")
                         .arg(&dir)

@@ -412,7 +412,9 @@ fn send_discord_message(dir: &Path, message: &str) -> Result<(), String> {
     }
     // Pass the sensitive webhook URL via stdin (curl config), not process arguments.
     let body = json!({ "content": message }).to_string();
-    let mut child = std::process::Command::new("curl")
+    let mut command = std::process::Command::new("curl");
+    crate::process::suppress_console(&mut command);
+    let mut child = command
         .args([
             "--fail",
             "--silent",
@@ -506,7 +508,9 @@ fn send_telegram_message(dir: &Path, message: &str) -> Result<(), String> {
         "chat_id": cfg.chat_id,
         "text": message,
     }).to_string();
-    let mut child = std::process::Command::new("curl")
+    let mut command = std::process::Command::new("curl");
+    crate::process::suppress_console(&mut command);
+    let mut child = command
         .args([
             "--fail", "--silent", "--show-error", "--max-time", "12",
             "--request", "POST", "--header", "Content-Type: application/json",
@@ -2051,6 +2055,7 @@ struct PendingIpa {
     source_bundle_id: String,
     token: String,
     created_at: u64,
+    revoke_existing_certificates: bool,
 }
 
 impl Drop for UploadedIpa {
@@ -2226,7 +2231,7 @@ async fn install(
         };
     }
     spawn_job(guard, move |app| {
-        run_install(app, uploaded, None, None, false)
+        run_install(app, uploaded, None, None, false, false)
     });
     json_ok()
 }
@@ -2271,6 +2276,10 @@ async fn inspect_install(
     let enable_jit = uri
         .query()
         .is_some_and(|q| q.split('&').any(|part| part == "enable_jit=true"));
+    let revoke_existing_certificates = uri.query().is_some_and(|q| {
+        q.split('&')
+            .any(|part| part == "revoke_existing_certificates=true")
+    });
     if manifest.extensions.is_empty() && !customize {
         app.lock().job = JobView {
             kind: "install".into(),
@@ -2279,7 +2288,14 @@ async fn inspect_install(
             ok: None,
         };
         spawn_job(guard, move |app| {
-            run_install(app, uploaded, None, None, enable_jit)
+            run_install(
+                app,
+                uploaded,
+                None,
+                None,
+                enable_jit,
+                revoke_existing_certificates,
+            )
         });
         return (StatusCode::OK, Json(json!({ "installing": true })));
     }
@@ -2312,6 +2328,7 @@ async fn inspect_install(
         source_bundle_id: manifest.bundle_id.clone(),
         token: token.clone(),
         created_at: now(),
+        revoke_existing_certificates,
     });
     (
         StatusCode::OK,
@@ -2439,6 +2456,7 @@ async fn confirm_install(
             Some(req.keep_extensions),
             identity,
             req.enable_jit,
+            prepared.revoke_existing_certificates,
         )
     });
     json_ok()
@@ -2789,6 +2807,7 @@ async fn run_install(
     selected_extensions: Option<Vec<String>>,
     identity: Option<NewInstallIdentity>,
     enable_jit: bool,
+    revoke_existing_certificates: bool,
 ) {
     let result = install_ipa(
         &app,
@@ -2796,6 +2815,7 @@ async fn run_install(
         selected_extensions.as_deref(),
         identity.as_ref(),
         enable_jit,
+        revoke_existing_certificates,
     )
     .await;
     let ok = match result {
@@ -2837,6 +2857,7 @@ async fn install_ipa(
     selected_extensions: Option<&[String]>,
     identity: Option<&NewInstallIdentity>,
     enable_jit: bool,
+    revoke_existing_certificates: bool,
 ) -> Result<Option<String>, String> {
     let account = apple::load_account(&app.dir)?;
     let mut session = apple::open_session_web(
@@ -2891,6 +2912,7 @@ async fn install_ipa(
         selected_extensions,
         identity.and_then(|i| i.display_name.as_deref()),
         identity.and_then(|i| i.bundle_id.as_deref()),
+        revoke_existing_certificates,
     )
     .await?;
 
@@ -3367,6 +3389,7 @@ fn local_time() -> String {
         c.arg("+%F %T");
         c
     };
+    crate::process::suppress_console(&mut cmd);
     cmd.output()
         .ok()
         .filter(|o| o.status.success())

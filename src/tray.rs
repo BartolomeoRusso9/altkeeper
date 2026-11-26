@@ -417,7 +417,9 @@ pub fn open_in_browser(url: &str) {
 
 #[cfg(windows)]
 pub fn open_in_browser(url: &str) {
-    let _ = std::process::Command::new("cmd").args(["/C", "start", "", url]).spawn();
+    let mut command = std::process::Command::new("cmd");
+    crate::process::suppress_console(&mut command);
+    let _ = command.args(["/C", "start", "", url]).spawn();
 }
 
 #[cfg(not(any(target_os = "macos", windows)))]
@@ -887,7 +889,9 @@ pub fn run(bind: SocketAddr, dir: &Path, minimized: bool, start: impl FnOnce(Eve
             Event::UserEvent(UserEvent::Restart) => {
                 crate::log::line("[update] restarting with the new version");
                 crate::altserver::stop();
-                let spawned = std::process::Command::new(&exe)
+                let mut command = std::process::Command::new(&exe);
+                crate::process::suppress_console(&mut command);
+                let spawned = command
                     .arg("tray")
                     .arg("--dir")
                     .arg(&dir)
